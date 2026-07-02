@@ -45,10 +45,12 @@
 @theme {
   --font-sukhumvit: "Sukhumvit Set", "Sarabun", system-ui, -apple-system, "Segoe UI", Roboto,
     sans-serif;
+  --font-nunito: "Nunito", "Sukhumvit Set", system-ui, sans-serif;
 }
 
 body {
   margin: 0;
+  background: #f6f4f1;
   font-family: "Sukhumvit Set", "Sarabun", system-ui, -apple-system, "Segoe UI", Roboto,
     sans-serif;
 }
