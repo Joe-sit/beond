@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Plus } from "lucide-react";
 import AllocationStaircase from "./AllocationStaircase";
+import PinchZoom from "./PinchZoom";
+import TicketPlusIcon from "./icons/TicketPlusIcon";
 import AddBondModal from "./AddBondModal";
 import { allocationUpdatedAt } from "../data/mockData";
 import { useAllocation } from "../hooks/usePortfolio";
+import { SECTOR_ICON, SECTOR_ICON_FALLBACK } from "../data/sectorIcons";
 
 function formatTHB(value: number): string {
   return new Intl.NumberFormat("th-TH").format(value);
@@ -27,7 +29,7 @@ export default function AllocationCard() {
           onClick={() => setAddOpen(true)}
           className="flex shrink-0 items-center gap-2 rounded-[14px] bg-[#43507F] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#525f92]"
         >
-          <Plus size={20} />
+          <TicketPlusIcon size={20} />
           เพิ่มหุ้นกู้
         </button>
       </div>
@@ -36,6 +38,7 @@ export default function AllocationCard() {
         <ul className="flex flex-col gap-2 pb-8">
           {allocationHoldings.map((h) => {
             const dimmed = activeId !== null && activeId !== h.id;
+            const Icon = SECTOR_ICON[h.id] ?? SECTOR_ICON_FALLBACK;
             return (
               <li
                 key={h.id}
@@ -44,11 +47,14 @@ export default function AllocationCard() {
                 className="flex cursor-pointer items-center gap-2 rounded-lg"
               >
                 <span
-                  className="h-3 w-3 shrink-0 rounded-full transition-colors duration-300 ease-out"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors duration-300 ease-out"
                   style={{
-                    backgroundColor: dimmed ? `${h.color}40` : h.color,
+                    backgroundColor: dimmed ? `${h.color}0D` : `${h.color}1A`,
+                    color: dimmed ? `${h.color}59` : h.color,
                   }}
-                />
+                >
+                  <Icon size={15} stroke={2} />
+                </span>
                 <div className="flex min-w-0 flex-col gap-1">
                   <p
                     className={`truncate text-xs leading-tight font-bold transition-colors duration-300 ease-out ${
@@ -71,13 +77,13 @@ export default function AllocationCard() {
         </ul>
 
         <div className="flex items-end justify-end">
-          <div className="-mr-6 -mb-7 h-80 w-full">
+          <PinchZoom className="-mr-6 -mb-7 h-80 w-full" max={5}>
             <AllocationStaircase
               holdings={allocationHoldings}
               activeId={activeId}
               onHover={setActiveId}
             />
-          </div>
+          </PinchZoom>
         </div>
       </div>
 

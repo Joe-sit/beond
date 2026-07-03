@@ -45,7 +45,11 @@ export function useAllocation(): {
   holdings: AllocationHolding[];
   refetch: () => void;
 } {
-  const [holdings, setHoldings] = useState<AllocationHolding[]>(mockHoldings);
+  // With Supabase on, real data is the only source — no mock underneath, so
+  // an empty DB reads as empty (not fake data). Mock only when Supabase is off.
+  const [holdings, setHoldings] = useState<AllocationHolding[]>(
+    supabaseEnabled ? [] : mockHoldings,
+  );
   const [version, setVersion] = useState(0);
   const refetch = useCallback(() => setVersion((v) => v + 1), []);
 
@@ -55,7 +59,11 @@ export function useAllocation(): {
       .from("holdings")
       .select("face_value, bonds(symbol, sectors(id, label_th, color))")
       .then(({ data, error }) => {
-        if (error || !data?.length) return;
+        if (error) return;
+        if (!data.length) {
+          setHoldings([]);
+          return;
+        }
         const bySector = new Map<string, AllocationHolding>();
         let total = 0;
         for (const row of data as unknown as HoldingRow[]) {
@@ -86,7 +94,11 @@ export function useAllocation(): {
 
 // Twelve-month payout timeline (BE year). Falls back to mock data.
 export function useTimeline(): TimelineMonth[] {
-  const [months, setMonths] = useState<TimelineMonth[]>(mockTimeline);
+  // Same rule as allocation: real data only when Supabase is on; mock is a
+  // pure offline fallback so it can never sit on top of live data.
+  const [months, setMonths] = useState<TimelineMonth[]>(
+    supabaseEnabled ? [] : mockTimeline,
+  );
 
   useEffect(() => {
     if (!supabaseEnabled || !supabase) return;
@@ -97,9 +109,22 @@ export function useTimeline(): TimelineMonth[] {
       )
       .order("payout_date")
       .then(({ data, error }) => {
-        if (error || !data?.length) return;
+        if (error) return;
+        if (!data.length) {
+          setMonths([]);
+          return;
+        }
         const rows = data as unknown as PayoutRow[];
-        const year = new Date(rows[0].payout_date).getFullYear();
+        // Schedules span multiple years; show the calendar year that carries
+        // the most payouts so the 12-month view stays coherent.
+        const perYear = new Map<number, number>();
+        for (const r of rows) {
+          const y = new Date(r.payout_date).getFullYear();
+          perYear.set(y, (perYear.get(y) ?? 0) + 1);
+        }
+        const year = [...perYear.entries()].sort(
+          (a, b) => b[1] - a[1] || a[0] - b[0],
+        )[0][0];
         const skeleton: TimelineMonth[] = THAI_MONTHS.map((m, i) => ({
           id: `m-${i}`,
           month: m,
@@ -108,6 +133,7 @@ export function useTimeline(): TimelineMonth[] {
         }));
         for (const row of rows) {
           const d = new Date(row.payout_date);
+          if (d.getFullYear() !== year) continue;
           const bond = row.holdings.bonds;
           skeleton[d.getMonth()].payouts.push({
             id: `${bond.symbol}-${row.installment}`,

@@ -1,4 +1,5 @@
 import { supabase, supabaseEnabled } from "./supabase";
+import { parseFrequency } from "./couponSchedule";
 
 // A bond candidate shown in the add-bond search results, normalized from
 // either the SEC Open Data API or the local bonds table (fallback).
@@ -10,7 +11,9 @@ export interface BondCandidate {
   issuer: string;
   couponRate: number | null;
   maturityDate: string | null;
+  issueDate: string | null;
   termYears: number | null;
+  frequency: number | null; // coupon payments per year (parsed from coupon text)
   source: "sec" | "local";
 }
 
@@ -20,8 +23,14 @@ interface SecFeatureRow {
   bond_name_th: string | null;
   bond_name_en: string | null;
   company_id: string | null;
-  coupon?: { rate?: number | null } | null;
+  coupon?: {
+    rate?: number | null;
+    type?: string | null;
+    name_th?: string | null;
+    desc_th?: string | null;
+  } | null;
   maturity?: {
+    issue_date?: string | null;
     maturity_date?: string | null;
     term_year?: number | null;
   } | null;
@@ -33,6 +42,7 @@ interface SecFeatureResponse {
 }
 
 function toCandidate(r: SecFeatureRow): BondCandidate {
+  const couponText = r.coupon?.desc_th ?? r.coupon?.name_th ?? r.coupon?.type ?? null;
   return {
     symbol: r.thaibma_symbol!,
     nameTh: r.bond_name_th ?? r.bond_name_en ?? r.thaibma_symbol!,
@@ -41,7 +51,9 @@ function toCandidate(r: SecFeatureRow): BondCandidate {
     issuer: r.company_id ?? "-",
     couponRate: r.coupon?.rate ?? null,
     maturityDate: r.maturity?.maturity_date?.slice(0, 10) ?? null,
+    issueDate: r.maturity?.issue_date?.slice(0, 10) ?? null,
     termYears: r.maturity?.term_year ?? null,
+    frequency: parseFrequency(couponText),
     source: "sec",
   };
 }
@@ -158,7 +170,9 @@ async function searchSupabase(term: string): Promise<BondCandidate[]> {
     issuer: b.issuer,
     couponRate: Number(b.coupon_rate),
     maturityDate: b.maturity_date,
+    issueDate: null,
     termYears: null,
+    frequency: null,
     source: "local" as const,
   }));
 }

@@ -91,10 +91,7 @@ function PayoutCard({ payout }: { payout: TimelinePayout }) {
             </div>
           </div>
         </div>
-        <div className="flex w-25 shrink-0 flex-col text-right">
-          <p className="font-nunito text-xs font-medium text-[#181D20]/80">
-            {payout.payoutDate}
-          </p>
+        <div className="flex w-25 shrink-0 flex-col justify-center text-right">
           <p className="font-nunito text-base font-bold text-[#181D20]">
             ฿{formatTHB(payout.amount)}
           </p>

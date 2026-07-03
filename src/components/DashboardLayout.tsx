@@ -29,7 +29,7 @@ export default function DashboardLayout({ hero, panel }: DashboardLayoutProps) {
         ref={heroRef}
         src={beondHero}
         alt=""
-        className="pointer-events-none absolute inset-x-0 top-0 w-full transition-opacity duration-150 ease-linear"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[22vw] w-full object-cover object-bottom transition-opacity duration-150 ease-linear"
       />
 
       {/* Content sits above the hero; each column scrolls on its own */}

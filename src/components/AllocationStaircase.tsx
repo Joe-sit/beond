@@ -1,4 +1,5 @@
 import { MAX_ALLOCATION_SECTORS, type AllocationHolding } from "../data/mockData";
+import { SECTOR_ICON, SECTOR_ICON_FALLBACK } from "../data/sectorIcons";
 
 // Parametric pillar built from asset-pillar.svg geometry (126×207).
 // Cap slants are fixed; the body stretches vertically with the value.
@@ -11,6 +12,11 @@ const Y_RIGHT = 12.99;
 
 const MAX_BODY = 330; // body height of the tallest pillar
 const MIN_LABEL_BODY = 48; // below this, the % label moves above the cap
+
+// Centroid of the top-cap parallelogram (local frame) for the sector icon.
+const CAP_CX = (0 + PEAK_X + W + FW) / 4;
+const CAP_CY = (Y_LEFT + 0 + Y_RIGHT + Y_MID) / 4;
+const CAP_ICON = 22;
 
 // Face shades derive from the holding's base hue: front = base,
 // top and side are progressively mixed toward white.
@@ -26,6 +32,7 @@ function formatTHB(value: number): string {
 }
 
 interface PillarProps {
+  id: string;
   x: number;
   ground: number; // y of the front-left bottom corner on the shared floor
   h: number; // body height
@@ -36,10 +43,12 @@ interface PillarProps {
   onHover: (hovering: boolean) => void;
 }
 
-function Pillar({ x, ground, h, pct, color, label, dimmed, onHover }: PillarProps) {
+function Pillar({ id, x, ground, h, pct, color, label, dimmed, onHover }: PillarProps) {
   const top = ground - h - Y_LEFT;
   const p = (px: number, py: number) => `${x + px},${top + py}`;
   const labelOnFace = h >= MIN_LABEL_BODY;
+  const Icon = SECTOR_ICON[id] ?? SECTOR_ICON_FALLBACK;
+  const iconColor = mixWithWhite(color, dimmed ? 0.7 : 0);
   // Unfocused pillars wash their hues toward the surface instead of
   // going transparent, so the stack keeps its solid shape.
   const face = mixWithWhite(color, dimmed ? 0.78 : 0);
@@ -72,16 +81,35 @@ function Pillar({ x, ground, h, pct, color, label, dimmed, onHover }: PillarProp
         points={`${p(0, Y_LEFT)} ${p(PEAK_X, 0)} ${p(W, Y_RIGHT)} ${p(FW, Y_MID)}`}
         fill={cap}
       />
+      <circle
+        cx={x + CAP_CX}
+        cy={top + CAP_CY}
+        r={CAP_ICON * 0.72}
+        fill="#FFFFFF"
+        className={faceCls}
+        opacity={dimmed ? 0.55 : 1}
+      />
+      <Icon
+        x={x + CAP_CX - CAP_ICON / 2}
+        y={top + CAP_CY - CAP_ICON / 2}
+        width={CAP_ICON}
+        height={CAP_ICON}
+        stroke={2}
+        color={iconColor}
+        className={`pointer-events-none ${faceCls}`}
+      />
       <text
         x={x + (labelOnFace ? FW / 2 : PEAK_X)}
         y={
           labelOnFace
             ? top + (Y_LEFT + Y_MID) / 2 + Math.min(h * 0.35, 60)
-            : top - 16
+            : top - 22
         }
         textAnchor="middle"
         dominantBaseline="central"
-        className={`pointer-events-none font-nunito text-3xl font-bold ${faceCls}`}
+        className={`pointer-events-none font-nunito font-bold ${
+          labelOnFace ? "text-3xl" : "text-lg"
+        } ${faceCls}`}
         fill={
           labelOnFace
             ? dimmed
@@ -90,6 +118,11 @@ function Pillar({ x, ground, h, pct, color, label, dimmed, onHover }: PillarProp
             : dimmed
               ? mixWithWhite("#43507F", 0.6)
               : "#43507F"
+        }
+        style={
+          labelOnFace
+            ? undefined
+            : { paintOrder: "stroke", stroke: "#FFFFFF", strokeWidth: 4 }
         }
       >
         {pct}%

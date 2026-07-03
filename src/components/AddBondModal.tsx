@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { ensureCatalog, searchBonds, type BondCandidate } from "../lib/secApi";
+import { deriveCouponSchedule } from "../lib/couponSchedule";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import { allocationHoldings } from "../data/mockData";
 
@@ -48,6 +49,7 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
   const [selected, setSelected] = useState<BondCandidate | null>(null);
   const [amount, setAmount] = useState("");
   const [sectorId, setSectorId] = useState(SECTOR_OPTIONS[0].id);
+  const [freq, setFreq] = useState(2); // coupon payments per year (SEC omits this)
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -93,6 +95,7 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
     setResults([]);
     setSelected(null);
     setAmount("");
+    setFreq(2);
     setError(null);
   };
 
@@ -123,6 +126,16 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
         .single();
       if (!user) throw new Error("ไม่พบผู้ใช้");
 
+      // Real coupon schedule derived from the bond's SEC attributes.
+      const schedule = deriveCouponSchedule({
+        issueDate: selected.issueDate,
+        maturityDate: selected.maturityDate,
+        termYears: selected.termYears,
+        frequency: freq, // user-picked; SEC omits payment frequency
+        couponRate: selected.couponRate,
+        faceValue,
+      });
+
       let { data: bond } = await supabase
         .from("bonds")
         .select("id")
@@ -137,10 +150,12 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
             issuer: selected.issuer,
             sector_id: sectorId,
             coupon_rate: selected.couponRate ?? 0,
-            total_installments: selected.termYears
-              ? Math.max(1, Math.round(selected.termYears * 2))
-              : 4,
+            total_installments:
+              schedule.length ||
+              (selected.termYears ? Math.max(1, Math.round(selected.termYears * 2)) : 4),
             maturity_date: selected.maturityDate,
+            issue_date: selected.issueDate,
+            coupon_freq: freq,
           })
           .select("id")
           .single();
@@ -148,12 +163,29 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
         bond = inserted;
       }
 
-      const { error: holdErr } = await supabase.from("holdings").insert({
-        user_id: user.id,
-        bond_id: bond!.id,
-        face_value: faceValue,
-      });
+      const { data: holding, error: holdErr } = await supabase
+        .from("holdings")
+        .insert({
+          user_id: user.id,
+          bond_id: bond!.id,
+          face_value: faceValue,
+        })
+        .select("id")
+        .single();
       if (holdErr) throw holdErr;
+
+      // Seed this holding's payout timeline from the derived schedule.
+      if (holding && schedule.length) {
+        const { error: payErr } = await supabase.from("payouts").insert(
+          schedule.map((p) => ({
+            holding_id: holding.id,
+            installment: p.installment,
+            amount: p.amount,
+            payout_date: p.date,
+          })),
+        );
+        if (payErr) throw payErr;
+      }
 
       handleClose();
       onAdded();
@@ -211,7 +243,10 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
                 {results.map((b) => (
                   <li key={b.symbol}>
                     <button
-                      onClick={() => setSelected(b)}
+                      onClick={() => {
+                        setSelected(b);
+                        setFreq(b.frequency ?? 2);
+                      }}
                       className="flex w-full items-center justify-between gap-3 rounded-2xl border border-[#E7E7E7] p-3 text-left transition-colors hover:border-[#43507F]/40 hover:bg-[#43507F]/5"
                     >
                       <div className="min-w-0">
@@ -281,6 +316,23 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
                   </option>
                 ))}
               </select>
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium text-black/60">งวดจ่ายดอกเบี้ย</span>
+              <select
+                value={freq}
+                onChange={(e) => setFreq(Number(e.target.value))}
+                className="rounded-2xl border border-[#E7E7E7] bg-white px-4 py-3 text-sm outline-none focus:border-[#43507F]/50"
+              >
+                <option value={2}>ทุก 6 เดือน (ครึ่งปี)</option>
+                <option value={4}>ทุก 3 เดือน (รายไตรมาส)</option>
+                <option value={12}>ทุกเดือน</option>
+                <option value={1}>ปีละครั้ง</option>
+              </select>
+              <span className="text-xs text-black/40">
+                SEC ไม่ระบุความถี่ — เลือกตามหนังสือชี้ชวน/statement ของหุ้นกู้
+              </span>
             </label>
 
             {error && <p className="text-sm text-red-500">{error}</p>}

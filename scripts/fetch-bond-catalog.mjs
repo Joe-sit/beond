@@ -11,6 +11,19 @@ if (!key) {
   process.exit(1);
 }
 
+// Parse coupon payment frequency (payments/year) from SEC coupon text.
+const FREQ_PATTERNS = [
+  [/ทุก\s*1\s*เดือน|รายเดือน|monthly/i, 12],
+  [/ทุก\s*3\s*เดือน|รายไตรมาส|ไตรมาส|quarter/i, 4],
+  [/ทุก\s*6\s*เดือน|ครึ่งปี|semi-?annual|half.?year/i, 2],
+  [/ทุก\s*12\s*เดือน|ทุกปี|รายปี|annual|yearly/i, 1],
+];
+function parseFrequency(text) {
+  if (!text) return null;
+  for (const [re, f] of FREQ_PATTERNS) if (re.test(text)) return f;
+  return null;
+}
+
 const today = new Date().toISOString().slice(0, 10);
 const items = [];
 let cursor = null;
@@ -33,6 +46,7 @@ for (;;) {
     if (!r.thaibma_symbol) continue;
     const maturity = r.maturity?.maturity_date?.slice(0, 10) ?? null;
     if (maturity && maturity < today) continue; // matured — not buyable
+    const couponText = r.coupon?.desc_th ?? r.coupon?.name_th ?? r.coupon?.type ?? null;
     items.push({
       symbol: r.thaibma_symbol,
       nameTh: r.bond_name_th ?? r.bond_name_en ?? r.thaibma_symbol,
@@ -41,7 +55,9 @@ for (;;) {
       issuer: r.company_id ?? "-",
       couponRate: r.coupon?.rate ?? null,
       maturityDate: maturity,
+      issueDate: r.maturity?.issue_date?.slice(0, 10) ?? null,
       termYears: r.maturity?.term_year ?? null,
+      frequency: parseFrequency(couponText),
       source: "sec",
     });
   }

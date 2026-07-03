@@ -1,51 +1,13 @@
 @import "tailwindcss";
 
-@font-face {
-  font-family: "Sukhumvit Set";
-  src: url("./assets/fonts/SukhumvitSet-Thin.ttf") format("truetype");
-  font-weight: 100;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Sukhumvit Set";
-  src: url("./assets/fonts/SukhumvitSet-Light.ttf") format("truetype");
-  font-weight: 300;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Sukhumvit Set";
-  src: url("./assets/fonts/SukhumvitSet-Text.ttf") format("truetype");
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Sukhumvit Set";
-  src: url("./assets/fonts/SukhumvitSet-Medium.ttf") format("truetype");
-  font-weight: 500;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Sukhumvit Set";
-  src: url("./assets/fonts/SukhumvitSet-SemiBold.ttf") format("truetype");
-  font-weight: 600;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Sukhumvit Set";
-  src: url("./assets/fonts/SukhumvitSet-Bold.ttf") format("truetype");
-  font-weight: 700;
-  font-display: swap;
+/* Scale the whole UI up: rem-based Tailwind text/spacing grows from this root. */
+html {
+  font-size: 18px;
 }
 
 @theme {
-  --font-sukhumvit: "Sukhumvit Set", "Sarabun", system-ui, -apple-system, "Segoe UI", Roboto,
-    sans-serif;
-  --font-nunito: "Nunito", "Sukhumvit Set", system-ui, sans-serif;
+  --font-sukhumvit: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-nunito: "Nunito", "Noto Sans Thai", system-ui, sans-serif;
 }
 
 /* Scroll without a visible scrollbar */
@@ -71,6 +33,5 @@
 body {
   margin: 0;
   background: #f6f4f1;
-  font-family: "Sukhumvit Set", "Sarabun", system-ui, -apple-system, "Segoe UI", Roboto,
-    sans-serif;
+  font-family: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
