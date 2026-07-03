@@ -1,52 +1,98 @@
+import { useState } from "react";
 import { Plus } from "lucide-react";
 import AllocationStaircase from "./AllocationStaircase";
-import { allocationHoldings, allocationUpdatedAt } from "../data/mockData";
+import AddBondModal from "./AddBondModal";
+import { allocationUpdatedAt } from "../data/mockData";
+import { useAllocation } from "../hooks/usePortfolio";
 
 function formatTHB(value: number): string {
   return new Intl.NumberFormat("th-TH").format(value);
 }
 
 export default function AllocationCard() {
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const { holdings: allocationHoldings, refetch } = useAllocation();
+
   return (
-    <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
+    <div className="relative overflow-hidden rounded-3xl border border-[#E7E7E7] bg-white p-6">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-bold text-gray-900">สัดส่วนการลงทุน</h2>
-          <p className="mt-1 text-xs text-gray-400">
+        <div className="flex flex-col gap-2">
+          <h2 className="text-base font-bold text-[#43507F]">สัดส่วนการลงทุน</h2>
+          <p className="text-xs font-medium text-black/60">
             ข้อมูลนี้มาจากการเพิ่มหุ้นกู้ในพอร์ตของคุณ
           </p>
         </div>
-        <button className="flex shrink-0 items-center gap-1.5 rounded-full bg-[#1e3a5f] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#274670]">
-          <Plus size={16} />
+        <button
+          onClick={() => setAddOpen(true)}
+          className="flex shrink-0 items-center gap-2 rounded-[14px] bg-[#43507F] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#525f92]"
+        >
+          <Plus size={20} />
           เพิ่มหุ้นกู้
         </button>
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <ul className="space-y-3">
-          {allocationHoldings.map((h) => (
-            <li key={h.id} className="flex items-start gap-2.5">
-              <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-slate-300" />
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-gray-800">
-                  {h.label} (<span className="font-nunito">{h.pct}%</span>)
-                </p>
-                <p className="text-xs text-gray-400">
-                  มูลค่า <span className="font-nunito">฿{formatTHB(h.value)}</span>
-                </p>
-              </div>
-            </li>
-          ))}
+      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-[0.8fr_1.2fr]">
+        <ul className="flex flex-col gap-2 pb-8">
+          {allocationHoldings.map((h) => {
+            const dimmed = activeId !== null && activeId !== h.id;
+            return (
+              <li
+                key={h.id}
+                onMouseEnter={() => setActiveId(h.id)}
+                onMouseLeave={() => setActiveId(null)}
+                className="flex cursor-pointer items-center gap-2 rounded-lg"
+              >
+                <span
+                  className="h-3 w-3 shrink-0 rounded-full transition-colors duration-300 ease-out"
+                  style={{
+                    backgroundColor: dimmed ? `${h.color}40` : h.color,
+                  }}
+                />
+                <div className="flex min-w-0 flex-col gap-1">
+                  <p
+                    className={`truncate text-xs leading-tight font-bold transition-colors duration-300 ease-out ${
+                      dimmed ? "text-black/20" : "text-black/60"
+                    }`}
+                  >
+                    {h.label} (<span className="font-nunito">{h.pct}%</span>)
+                  </p>
+                  <p
+                    className={`text-xs leading-tight transition-colors duration-300 ease-out ${
+                      dimmed ? "text-black/20" : "text-black/60"
+                    }`}
+                  >
+                    มูลค่า <span className="font-nunito">฿{formatTHB(h.value)}</span>
+                  </p>
+                </div>
+              </li>
+            );
+          })}
         </ul>
 
-        <div className="flex items-end justify-center">
-          <div className="h-48 w-full max-w-55">
-            <AllocationStaircase />
+        <div className="flex items-end justify-end">
+          <div className="-mr-6 -mb-7 h-80 w-full">
+            <AllocationStaircase
+              holdings={allocationHoldings}
+              activeId={activeId}
+              onHover={setActiveId}
+            />
           </div>
         </div>
       </div>
 
-      <p className="mt-4 text-xs text-gray-400">ข้อมูลล่าสุด {allocationUpdatedAt}</p>
+      {/* Fade footer over the legend, matching Figma Frame 123 */}
+      <div className="pointer-events-none absolute bottom-0 left-0 flex w-81 items-center bg-linear-to-b from-white/0 to-white to-45% p-6 backdrop-blur-[2px]">
+        <p className="text-xs font-medium text-black/40">
+          ข้อมูลล่าสุด {allocationUpdatedAt}
+        </p>
+      </div>
+
+      <AddBondModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onAdded={refetch}
+      />
     </div>
   );
 }

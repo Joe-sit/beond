@@ -1,0 +1,57 @@
+// Fetches the full SEC bond catalog and writes the active (not-yet-matured)
+// bonds to public/bond-catalog.json for instant client-side search.
+// Usage: npm run fetch:bonds   (needs SEC_API_KEY in .env.local)
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const envFile = readFileSync(resolve(process.cwd(), ".env.local"), "utf8");
+const key = envFile.match(/^SEC_API_KEY=(.+)$/m)?.[1]?.trim();
+if (!key) {
+  console.error("SEC_API_KEY missing in .env.local");
+  process.exit(1);
+}
+
+const today = new Date().toISOString().slice(0, 10);
+const items = [];
+let cursor = null;
+let pages = 0;
+
+for (;;) {
+  const url =
+    "https://api.sec.or.th/v2/bond/features?page_size=100" +
+    (cursor ? `&next_cursor=${encodeURIComponent(cursor)}` : "");
+  const res = await fetch(url, {
+    headers: { "Ocp-Apim-Subscription-Key": key },
+  });
+  if (!res.ok) {
+    console.error(`page ${pages + 1} failed: HTTP ${res.status}`);
+    break;
+  }
+  const body = await res.json();
+  pages++;
+  for (const r of body.items ?? []) {
+    if (!r.thaibma_symbol) continue;
+    const maturity = r.maturity?.maturity_date?.slice(0, 10) ?? null;
+    if (maturity && maturity < today) continue; // matured — not buyable
+    items.push({
+      symbol: r.thaibma_symbol,
+      nameTh: r.bond_name_th ?? r.bond_name_en ?? r.thaibma_symbol,
+      nameEn: r.bond_name_en ?? "",
+      isin: r.isin_code ?? "",
+      issuer: r.company_id ?? "-",
+      couponRate: r.coupon?.rate ?? null,
+      maturityDate: maturity,
+      termYears: r.maturity?.term_year ?? null,
+      source: "sec",
+    });
+  }
+  if (pages % 20 === 0) console.log(`…page ${pages}, active so far ${items.length}`);
+  cursor = body.next_cursor ?? null;
+  if (!cursor) break;
+}
+
+writeFileSync(
+  resolve(process.cwd(), "public/bond-catalog.json"),
+  JSON.stringify({ at: Date.now(), items }),
+);
+console.log(`done: ${pages} pages, ${items.length} active bonds → public/bond-catalog.json`);
