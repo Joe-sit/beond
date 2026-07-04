@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Retheme HeroUI's brand token to the beond indigo so migrated components
+   (primary buttons, focus rings, …) match the existing look. Loaded after
+   HeroUI's stylesheet, so these win. */
+:root {
+  --accent: #43507f;
+  --accent-hover: #525f92;
+  --accent-foreground: #ffffff;
+}
+
 /* Scale the whole UI up: rem-based Tailwind text/spacing grows from this root. */
 html {
   font-size: 18px;
