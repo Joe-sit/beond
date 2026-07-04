@@ -115,16 +115,16 @@ export function useTimeline(): TimelineMonth[] {
           return;
         }
         const rows = data as unknown as PayoutRow[];
-        // Schedules span multiple years; show the calendar year that carries
-        // the most payouts so the 12-month view stays coherent.
-        const perYear = new Map<number, number>();
-        for (const r of rows) {
-          const y = new Date(r.payout_date).getFullYear();
-          perYear.set(y, (perYear.get(y) ?? 0) + 1);
-        }
-        const year = [...perYear.entries()].sort(
-          (a, b) => b[1] - a[1] || a[0] - b[0],
-        )[0][0];
+        // Schedules span multiple years; show the current year when it has
+        // payouts, else the next upcoming year, else the latest — so the
+        // 12-month view reflects what the user is actually receiving now.
+        const years = [
+          ...new Set(rows.map((r) => new Date(r.payout_date).getFullYear())),
+        ].sort((a, b) => a - b);
+        const now = new Date().getFullYear();
+        const year =
+          (years.includes(now) ? now : years.find((y) => y > now)) ??
+          years[years.length - 1];
         const skeleton: TimelineMonth[] = THAI_MONTHS.map((m, i) => ({
           id: `m-${i}`,
           month: m,
