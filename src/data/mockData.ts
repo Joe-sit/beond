@@ -9,6 +9,7 @@ export interface TimelinePayout {
   installment: string;
   payoutDate: string;
   amount: number;
+  completed?: boolean; // final coupon already paid — bond fully redeemed
 }
 
 export interface TimelineMonth {

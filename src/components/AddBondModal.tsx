@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { Modal, ModalBackdrop, ModalContainer, ModalDialog } from "@heroui/react";
 import { Search, X } from "lucide-react";
 import { ensureCatalog, searchBonds, type BondCandidate } from "../lib/secApi";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
+import { overrideFor } from "../data/couponOverrides";
+import { notifyPortfolioChanged } from "../hooks/usePortfolio";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import { allocationHoldings } from "../data/mockData";
 
@@ -88,8 +91,6 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
     };
   }, [term, open, selected]);
 
-  if (!open) return null;
-
   const reset = () => {
     setTerm("");
     setResults([]);
@@ -119,12 +120,11 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
     setSaving(true);
     setError(null);
     try {
-      const { data: user } = await supabase
-        .from("users")
-        .select("id")
-        .eq("line_user_id", "demo")
-        .single();
-      if (!user) throw new Error("ไม่พบผู้ใช้");
+      // The signed-in user's public.users id is carried in the session JWT's
+      // app_metadata (set by the line-auth function). RLS keys on it.
+      const { data: authData } = await supabase.auth.getUser();
+      const publicUserId = authData.user?.app_metadata?.public_user_id as string | undefined;
+      if (!publicUserId) throw new Error("ไม่พบผู้ใช้ กรุณาเข้าสู่ระบบใหม่");
 
       // Real coupon schedule derived from the bond's SEC attributes.
       const schedule = deriveCouponSchedule({
@@ -166,7 +166,7 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
       const { data: holding, error: holdErr } = await supabase
         .from("holdings")
         .insert({
-          user_id: user.id,
+          user_id: publicUserId,
           bond_id: bond!.id,
           face_value: faceValue,
         })
@@ -187,6 +187,7 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
         if (payErr) throw payErr;
       }
 
+      notifyPortfolioChanged();
       handleClose();
       onAdded();
     } catch (e) {
@@ -197,14 +198,10 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={handleClose}
-    >
-      <div
-        className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-3xl bg-white p-6"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal isOpen={open} onOpenChange={(isOpen) => { if (!isOpen) handleClose(); }}>
+      <ModalBackdrop isDismissable>
+        <ModalContainer placement="center">
+          <ModalDialog className="flex h-140 w-full max-w-lg flex-col rounded-3xl bg-white p-6">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-[#43507F]">เพิ่มหุ้นกู้</h3>
           <button
@@ -245,7 +242,8 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
                     <button
                       onClick={() => {
                         setSelected(b);
-                        setFreq(b.frequency ?? 2);
+                        // Verified master map wins over parsed/default frequency.
+                        setFreq(overrideFor(b.symbol)?.frequency ?? b.frequency ?? 2);
                       }}
                       className="flex w-full items-center justify-between gap-3 rounded-2xl border border-[#E7E7E7] p-3 text-left transition-colors hover:border-[#43507F]/40 hover:bg-[#43507F]/5"
                     >
@@ -354,7 +352,9 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
             </div>
           </div>
         )}
-      </div>
-    </div>
+          </ModalDialog>
+        </ModalContainer>
+      </ModalBackdrop>
+    </Modal>
   );
 }

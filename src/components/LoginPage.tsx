@@ -34,7 +34,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         className="pointer-events-none absolute inset-x-0 top-0 w-full"
       />
 
-      <div className="relative z-10 mx-4 flex w-full max-w-md flex-col items-center rounded-4xl bg-white px-8 py-10 text-center shadow-xl">
+      <div className="relative z-10 mx-4 flex w-full max-w-md flex-col items-center rounded-4xl bg-white px-8 py-10 text-center">
         <img src={mascot} alt="" className="h-28 w-auto" />
         <img
           src={logo}

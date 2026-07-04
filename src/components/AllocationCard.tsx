@@ -1,11 +1,16 @@
 import { useState } from "react";
+import { Button } from "@heroui/react";
+import { IconFlask2, IconBug } from "@tabler/icons-react";
 import AllocationStaircase from "./AllocationStaircase";
 import PinchZoom from "./PinchZoom";
 import TicketPlusIcon from "./icons/TicketPlusIcon";
 import AddBondModal from "./AddBondModal";
+import DebugPanel from "./DebugPanel";
 import { allocationUpdatedAt } from "../data/mockData";
 import { useAllocation } from "../hooks/usePortfolio";
 import { SECTOR_ICON, SECTOR_ICON_FALLBACK } from "../data/sectorIcons";
+import { supabaseEnabled } from "../lib/supabase";
+import { resetAndSeedTestData } from "../lib/testData";
 
 function formatTHB(value: number): string {
   return new Intl.NumberFormat("th-TH").format(value);
@@ -14,7 +19,21 @@ function formatTHB(value: number): string {
 export default function AllocationCard() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [seeding, setSeeding] = useState(false);
   const { holdings: allocationHoldings, refetch } = useAllocation();
+
+  const loadTestData = async () => {
+    if (seeding) return;
+    setSeeding(true);
+    try {
+      await resetAndSeedTestData();
+      window.location.reload();
+    } catch (e) {
+      setSeeding(false);
+      alert(`โหลด test data ไม่สำเร็จ: ${e instanceof Error ? e.message : e}`);
+    }
+  };
 
   return (
     <div className="relative overflow-hidden rounded-3xl border border-[#E7E7E7] bg-white p-6">
@@ -25,13 +44,33 @@ export default function AllocationCard() {
             ข้อมูลนี้มาจากการเพิ่มหุ้นกู้ในพอร์ตของคุณ
           </p>
         </div>
-        <button
-          onClick={() => setAddOpen(true)}
-          className="flex shrink-0 items-center gap-2 rounded-[14px] bg-[#43507F] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#525f92]"
-        >
-          <TicketPlusIcon size={20} />
-          เพิ่มหุ้นกู้
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {supabaseEnabled && (
+            <>
+              <button
+                onClick={() => setDebugOpen(true)}
+                title="Debug — ลบหุ้นกู้ที่ถือทีละตัว"
+                className="flex items-center gap-1.5 rounded-[14px] border border-[#E7E7E7] px-3 py-2 text-xs font-bold text-black/50 transition-colors hover:bg-black/5"
+              >
+                <IconBug size={18} />
+                Debug
+              </button>
+              <button
+                onClick={loadTestData}
+                disabled={seeding}
+                title="ล้างพอร์ตแล้วโหลดข้อมูลหุ้นกู้ตัวอย่าง"
+                className="flex items-center gap-1.5 rounded-[14px] border border-[#43507F]/30 px-3 py-2 text-xs font-bold text-[#43507F] transition-colors hover:bg-[#43507F]/5 disabled:opacity-60"
+              >
+                <IconFlask2 size={18} />
+                {seeding ? "กำลังโหลด..." : "Test data"}
+              </button>
+            </>
+          )}
+          <Button variant="primary" onPress={() => setAddOpen(true)}>
+            <TicketPlusIcon size={18} />
+            เพิ่มหุ้นกู้
+          </Button>
+        </div>
       </div>
 
       <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-[0.8fr_1.2fr]">
@@ -99,6 +138,8 @@ export default function AllocationCard() {
         onClose={() => setAddOpen(false)}
         onAdded={refetch}
       />
+
+      <DebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} />
     </div>
   );
 }

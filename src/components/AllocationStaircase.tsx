@@ -156,6 +156,7 @@ export default function AllocationStaircase({
   onHover,
 }: AllocationStaircaseProps) {
   const shown = holdings.slice(0, MAX_ALLOCATION_SECTORS);
+  if (shown.length === 0) return null; // nothing to plot — avoid Infinity viewBox
   const maxPct = Math.max(...shown.map((s) => s.pct));
 
   // Taller half lives on the back row, shorter half up front — so no front

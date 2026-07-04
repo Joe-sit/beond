@@ -24,6 +24,30 @@ function parseFrequency(text) {
   return null;
 }
 
+// company_id -> issuer name. SEC bond/features only carries the company_id
+// code, so we resolve real names from bond/issuers first.
+const issuerMap = new Map();
+{
+  let ic = null;
+  for (;;) {
+    const url =
+      "https://api.sec.or.th/v2/bond/issuers?page_size=100" +
+      (ic ? `&next_cursor=${encodeURIComponent(ic)}` : "");
+    const res = await fetch(url, { headers: { "Ocp-Apim-Subscription-Key": key } });
+    if (!res.ok) {
+      console.error(`issuers page failed: HTTP ${res.status}`);
+      break;
+    }
+    const body = await res.json();
+    for (const r of body.items ?? []) {
+      if (r.company_id) issuerMap.set(r.company_id, r.company_name_th || r.company_name_en);
+    }
+    ic = body.next_cursor ?? null;
+    if (!ic) break;
+  }
+  console.log(`issuer names: ${issuerMap.size}`);
+}
+
 const today = new Date().toISOString().slice(0, 10);
 const items = [];
 let cursor = null;
@@ -52,7 +76,7 @@ for (;;) {
       nameTh: r.bond_name_th ?? r.bond_name_en ?? r.thaibma_symbol,
       nameEn: r.bond_name_en ?? "",
       isin: r.isin_code ?? "",
-      issuer: r.company_id ?? "-",
+      issuer: issuerMap.get(r.company_id) ?? r.company_id ?? "-",
       couponRate: r.coupon?.rate ?? null,
       maturityDate: maturity,
       issueDate: r.maturity?.issue_date?.slice(0, 10) ?? null,
