@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 import { ensureCatalog, searchBonds, type BondCandidate } from "../lib/secApi";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
+import { overrideFor } from "../data/couponOverrides";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import { allocationHoldings } from "../data/mockData";
 
@@ -245,7 +246,8 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
                     <button
                       onClick={() => {
                         setSelected(b);
-                        setFreq(b.frequency ?? 2);
+                        // Verified master map wins over parsed/default frequency.
+                        setFreq(overrideFor(b.symbol)?.frequency ?? b.frequency ?? 2);
                       }}
                       className="flex w-full items-center justify-between gap-3 rounded-2xl border border-[#E7E7E7] p-3 text-left transition-colors hover:border-[#43507F]/40 hover:bg-[#43507F]/5"
                     >
