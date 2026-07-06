@@ -9,6 +9,7 @@ export interface TimelinePayout {
   installment: string;
   payoutDate: string;
   amount: number;
+  color?: string; // sector hue, for the stacked bar chart
   completed?: boolean; // final coupon already paid — bond fully redeemed
 }
 

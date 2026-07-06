@@ -40,11 +40,7 @@ export default function DashboardLayout({ hero, panel }: DashboardLayoutProps) {
         <div className="no-scrollbar h-full overflow-y-auto" onScroll={handleHeroScroll}>
           {hero}
         </div>
-        <div className="flex h-full min-h-0 p-5 md:p-6">
-          <div className="flex-1 overflow-hidden rounded-4xl bg-white">
-            <div className="no-scrollbar h-full overflow-y-auto p-6 md:p-8">{panel}</div>
-          </div>
-        </div>
+        <div className="flex h-full min-h-0 flex-col p-5 md:p-6">{panel}</div>
       </div>
     </div>
   );

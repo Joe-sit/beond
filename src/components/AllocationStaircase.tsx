@@ -1,22 +1,21 @@
 import { MAX_ALLOCATION_SECTORS, type AllocationHolding } from "../data/mockData";
-import { SECTOR_ICON, SECTOR_ICON_FALLBACK } from "../data/sectorIcons";
 
-// Parametric pillar built from asset-pillar.svg geometry (126×207).
-// Cap slants are fixed; the body stretches vertically with the value.
-const FW = 73.625; // front-face width
-const W = 125.53; // full pillar width
-const PEAK_X = 52.82; // back peak of the top cap
+// Parametric pillar built from asset-pillar.svg geometry, widened ~20% so the
+// bars read chunkier. Cap slants are fixed; the body stretches with the value.
+const FW = 88.35; // front-face width
+const W = 150.6; // full pillar width
+const PEAK_X = 63.4; // back peak of the top cap
 const Y_LEFT = 15.17; // cap corner heights
 const Y_MID = 28.16;
 const Y_RIGHT = 12.99;
 
 const MAX_BODY = 330; // body height of the tallest pillar
-const MIN_LABEL_BODY = 48; // below this, the % label moves above the cap
 
-// Centroid of the top-cap parallelogram (local frame) for the sector icon.
-const CAP_CX = (0 + PEAK_X + W + FW) / 4;
-const CAP_CY = (Y_LEFT + 0 + Y_RIGHT + Y_MID) / 4;
-const CAP_ICON = 22;
+// The % label sits on the FRONT face. That face is a vertical parallelogram
+// whose top edge slopes down to the right, so the text is skewed vertically by
+// the same slope (verticals stay upright) to look painted on it.
+const FRONT_CX = FW / 2;
+const FRONT_SLOPE = (Y_MID - Y_LEFT) / FW;
 
 // Face shades derive from the holding's base hue: front = base,
 // top and side are progressively mixed toward white.
@@ -40,15 +39,13 @@ interface PillarProps {
   color: string;
   label: string;
   dimmed: boolean;
+  index: number;
   onHover: (hovering: boolean) => void;
 }
 
-function Pillar({ id, x, ground, h, pct, color, label, dimmed, onHover }: PillarProps) {
+function Pillar({ x, ground, h, pct, color, label, dimmed, index, onHover }: PillarProps) {
   const top = ground - h - Y_LEFT;
   const p = (px: number, py: number) => `${x + px},${top + py}`;
-  const labelOnFace = h >= MIN_LABEL_BODY;
-  const Icon = SECTOR_ICON[id] ?? SECTOR_ICON_FALLBACK;
-  const iconColor = mixWithWhite(color, dimmed ? 0.7 : 0);
   // Unfocused pillars wash their hues toward the surface instead of
   // going transparent, so the stack keeps its solid shape.
   const face = mixWithWhite(color, dimmed ? 0.78 : 0);
@@ -65,6 +62,12 @@ function Pillar({ id, x, ground, h, pct, color, label, dimmed, onHover }: Pillar
       tabIndex={0}
       role="img"
       aria-label={`${label} ${pct}%`}
+      style={{
+        transformBox: "fill-box",
+        transformOrigin: "bottom",
+        animation: "pillar-rise 0.5s cubic-bezier(0.22,1,0.36,1) both",
+        animationDelay: `${index * 80}ms`,
+      }}
     >
       <polygon
         className={faceCls}
@@ -81,49 +84,15 @@ function Pillar({ id, x, ground, h, pct, color, label, dimmed, onHover }: Pillar
         points={`${p(0, Y_LEFT)} ${p(PEAK_X, 0)} ${p(W, Y_RIGHT)} ${p(FW, Y_MID)}`}
         fill={cap}
       />
-      <circle
-        cx={x + CAP_CX}
-        cy={top + CAP_CY}
-        r={CAP_ICON * 0.72}
-        fill="#FFFFFF"
-        className={faceCls}
-        opacity={dimmed ? 0.55 : 1}
-      />
-      <Icon
-        x={x + CAP_CX - CAP_ICON / 2}
-        y={top + CAP_CY - CAP_ICON / 2}
-        width={CAP_ICON}
-        height={CAP_ICON}
-        stroke={2}
-        color={iconColor}
-        className={`pointer-events-none ${faceCls}`}
-      />
+      {/* % painted on the front face — skewed to the face's isometric slope */}
       <text
-        x={x + (labelOnFace ? FW / 2 : PEAK_X)}
-        y={
-          labelOnFace
-            ? top + (Y_LEFT + Y_MID) / 2 + Math.min(h * 0.35, 60)
-            : top - 22
-        }
+        transform={`translate(${x + FRONT_CX} ${top + (Y_LEFT + Y_MID) / 2 + h / 2}) matrix(1 ${FRONT_SLOPE} 0 1 0 0)`}
         textAnchor="middle"
         dominantBaseline="central"
-        className={`pointer-events-none font-nunito font-bold ${
-          labelOnFace ? "text-3xl" : "text-lg"
-        } ${faceCls}`}
-        fill={
-          labelOnFace
-            ? dimmed
-              ? mixWithWhite(color, 0.45)
-              : "#FFFFFF"
-            : dimmed
-              ? mixWithWhite("#43507F", 0.6)
-              : "#43507F"
-        }
-        style={
-          labelOnFace
-            ? undefined
-            : { paintOrder: "stroke", stroke: "#FFFFFF", strokeWidth: 4 }
-        }
+        fontSize={28}
+        className={`pointer-events-none font-nunito font-bold ${faceCls}`}
+        fill={dimmed ? mixWithWhite(color, 0.5) : "#FFFFFF"}
+        style={{ paintOrder: "stroke", stroke: "rgba(0,0,0,0.12)", strokeWidth: 3 }}
       >
         {pct}%
       </text>
@@ -216,10 +185,11 @@ export default function AllocationStaircase({
       aria-label="สัดส่วนการลงทุนแบบแท่งสามมิติ"
       preserveAspectRatio="xMaxYMax meet"
     >
-      {pillars.map((s) => (
+      {pillars.map((s, i) => (
         <Pillar
           key={s.id}
           {...s}
+          index={i}
           dimmed={activeId !== null && activeId !== s.id}
           onHover={(hovering) => onHover(hovering ? s.id : null)}
         />

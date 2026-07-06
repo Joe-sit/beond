@@ -1,4 +1,5 @@
 // Company logo helpers using SET's public direct-link endpoint.
+import { DISCOVERED_DOMAINS } from "../data/issuerDomains";
 
 // Bond symbols are ISSUER_TICKER + numbers + optional series letters:
 //   BRI267A -> BRI, SIRI288B -> SIRI, CPALL266A -> CPALL.
@@ -27,6 +28,7 @@ const ISSUER_DOMAINS: Record<string, string> = {
   ORI: "origin.co.th", SIRI: "sansiri.com", AP: "apthai.com",
   SPALI: "supalai.com", QH: "qh.co.th", PSH: "psh.co.th",
   BRI: "britania.co.th", SC: "scasset.com", ANAN: "ananda.co.th",
+  PRIN: "prinsiri.com",
   LH: "lh.co.th", LPN: "lpn.co.th", NOBLE: "noblehome.com",
   SCC: "scg.com", SCGP: "scgpackaging.com", TOA: "toagroup.com",
   CPN: "cpn.co.th", CRC: "centralretail.com", WHA: "wha-group.com",
@@ -51,7 +53,9 @@ const LOGODEV_TOKEN = import.meta.env.VITE_LOGODEV_TOKEN as string | undefined;
 export function getIssuerLogoUrl(symbol: string): string | null {
   if (!LOGODEV_TOKEN) return null;
   const ticker = issuerTicker(symbol);
-  const path = ISSUER_DOMAINS[ticker] ?? `ticker/${ticker}`;
+  // Manual map wins (hand-verified); then the auto-discovered domain; else fall
+  // back to logo.dev's own ticker DB.
+  const path = ISSUER_DOMAINS[ticker] ?? DISCOVERED_DOMAINS[ticker] ?? `ticker/${ticker}`;
   return `https://img.logo.dev/${path}?token=${LOGODEV_TOKEN}&size=80&format=png&retina=true&fallback=404`;
 }
 

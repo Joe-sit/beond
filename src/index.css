@@ -39,8 +39,37 @@ html {
   }
 }
 
+/* Allocation pillars rise from the ground on mount, staggered per pillar. */
+@keyframes pillar-rise {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
 body {
   margin: 0;
   background: #f6f4f1;
   font-family: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Every interactive element gets a pointer cursor (native buttons don't by
+   default); disabled ones fall back to not-allowed. */
+button,
+[role="button"],
+[role="tab"],
+a[href],
+label[for],
+select,
+summary {
+  cursor: pointer;
+}
+
+button:disabled,
+button[data-disabled="true"],
+[role="button"][aria-disabled="true"],
+[data-disabled="true"] {
+  cursor: not-allowed;
 }

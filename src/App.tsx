@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { Toast } from "@heroui/react";
 import DashboardLayout from "./components/DashboardLayout";
 import BrandHeader from "./components/BrandHeader";
 import PortfolioHeader from "./components/PortfolioHeader";
 import DividendTimeline from "./components/DividendTimeline";
-import PortfolioOverview from "./components/PortfolioOverview";
+import TaxCard from "./components/TaxCard";
+import RightPanel from "./components/RightPanel";
 import LoginPage from "./components/LoginPage";
 import { initAuth, login, logout, liffEnabled, type AuthProfile } from "./lib/auth";
 
@@ -44,16 +46,20 @@ function App() {
   }
 
   return (
-    <DashboardLayout
-      hero={
-        <>
-          <BrandHeader />
-          <PortfolioHeader />
-          <DividendTimeline />
-        </>
-      }
-      panel={<PortfolioOverview profile={profile} onLogout={handleLogout} />}
-    />
+    <>
+      <DashboardLayout
+        hero={
+          <>
+            <BrandHeader profile={profile} onLogout={handleLogout} />
+            <PortfolioHeader />
+            <DividendTimeline />
+            <TaxCard />
+          </>
+        }
+        panel={<RightPanel profile={profile} onLogout={handleLogout} />}
+      />
+      <Toast.Provider placement="bottom end" />
+    </>
   );
 }
 

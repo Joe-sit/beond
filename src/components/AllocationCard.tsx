@@ -1,11 +1,9 @@
 import { useState } from "react";
-import { Button } from "@heroui/react";
-import { IconFlask2, IconBug } from "@tabler/icons-react";
+import { Button, Tooltip } from "@heroui/react";
+import { IconFlask2, IconListDetails } from "@tabler/icons-react";
 import AllocationStaircase from "./AllocationStaircase";
 import PinchZoom from "./PinchZoom";
-import TicketPlusIcon from "./icons/TicketPlusIcon";
-import AddBondModal from "./AddBondModal";
-import DebugPanel from "./DebugPanel";
+import ManageBondsModal from "./ManageBondsModal";
 import { allocationUpdatedAt } from "../data/mockData";
 import { useAllocation } from "../hooks/usePortfolio";
 import { SECTOR_ICON, SECTOR_ICON_FALLBACK } from "../data/sectorIcons";
@@ -16,12 +14,20 @@ function formatTHB(value: number): string {
   return new Intl.NumberFormat("th-TH").format(value);
 }
 
+type ViewMode = "sector" | "rating" | "bond";
+
+const VIEW_TABS: [ViewMode, string][] = [
+  ["rating", "ตามอันดับเสี่ยง"],
+  ["sector", "ตามกลุ่มธุรกิจ"],
+  ["bond", "ตามรุ่น"],
+];
+
 export default function AllocationCard() {
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [addOpen, setAddOpen] = useState(false);
-  const [debugOpen, setDebugOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
   const [seeding, setSeeding] = useState(false);
-  const { holdings: allocationHoldings, refetch } = useAllocation();
+  const [view, setView] = useState<ViewMode>("sector");
+  const { holdings: allocationHoldings, refetch } = useAllocation(view);
 
   const loadTestData = async () => {
     if (seeding) return;
@@ -36,44 +42,49 @@ export default function AllocationCard() {
   };
 
   return (
-    <div className="relative overflow-hidden rounded-3xl border border-[#E7E7E7] bg-white p-6">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-2">
-          <h2 className="text-base font-bold text-[#43507F]">สัดส่วนการลงทุน</h2>
-          <p className="text-xs font-medium text-black/60">
-            ข้อมูลนี้มาจากการเพิ่มหุ้นกู้ในพอร์ตของคุณ
-          </p>
-        </div>
+    <div className="relative flex h-full flex-col overflow-hidden rounded-3xl border border-[#E7E7E7] bg-[#F6F4F1] p-6">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-bold text-[#43507F]">สัดส่วนการลงทุน</h2>
         <div className="flex shrink-0 items-center gap-2">
           {supabaseEnabled && (
             <>
-              <button
-                onClick={() => setDebugOpen(true)}
-                title="Debug — ลบหุ้นกู้ที่ถือทีละตัว"
-                className="flex items-center gap-1.5 rounded-[14px] border border-[#E7E7E7] px-3 py-2 text-xs font-bold text-black/50 transition-colors hover:bg-black/5"
-              >
-                <IconBug size={18} />
-                Debug
-              </button>
-              <button
-                onClick={loadTestData}
-                disabled={seeding}
-                title="ล้างพอร์ตแล้วโหลดข้อมูลหุ้นกู้ตัวอย่าง"
-                className="flex items-center gap-1.5 rounded-[14px] border border-[#43507F]/30 px-3 py-2 text-xs font-bold text-[#43507F] transition-colors hover:bg-[#43507F]/5 disabled:opacity-60"
-              >
-                <IconFlask2 size={18} />
-                {seeding ? "กำลังโหลด..." : "Test data"}
-              </button>
+              <Tooltip>
+                <Button isIconOnly size="sm" variant="ghost" onPress={() => setManageOpen(true)} aria-label="จัดการหุ้นกู้">
+                  <IconListDetails size={18} />
+                </Button>
+                <Tooltip.Content>จัดการหุ้นกู้ — แก้จำนวนเงิน / ลบ</Tooltip.Content>
+              </Tooltip>
+              <Tooltip>
+                <Button isIconOnly size="sm" variant="ghost" isDisabled={seeding} onPress={loadTestData} aria-label="โหลดข้อมูลตัวอย่าง">
+                  <IconFlask2 size={18} />
+                </Button>
+                <Tooltip.Content>ล้างพอร์ตแล้วโหลดข้อมูลหุ้นกู้ตัวอย่าง</Tooltip.Content>
+              </Tooltip>
             </>
           )}
-          <Button variant="primary" onPress={() => setAddOpen(true)}>
-            <TicketPlusIcon size={18} />
-            เพิ่มหุ้นกู้
-          </Button>
+          {/* View mode: group the pillars by risk rating or business sector. */}
+          <div className="flex items-center gap-1">
+            {VIEW_TABS.map(([mode, label]) => (
+              <button
+                key={mode}
+                onClick={() => {
+                  setActiveId(null);
+                  setView(mode);
+                }}
+                className={`rounded-lg px-3 py-1 text-xs transition-colors ${
+                  view === mode
+                    ? "bg-[#43507F]/10 font-bold text-[#43507F]"
+                    : "font-medium text-black/60 hover:text-black/80"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-[0.8fr_1.2fr]">
+      <div className="mt-5 grid min-h-0 flex-1 grid-cols-1 gap-4 sm:grid-cols-[0.8fr_1.2fr]">
         <ul className="flex flex-col gap-2 pb-8">
           {allocationHoldings.map((h) => {
             const dimmed = activeId !== null && activeId !== h.id;
@@ -115,8 +126,8 @@ export default function AllocationCard() {
           })}
         </ul>
 
-        <div className="flex items-end justify-end">
-          <PinchZoom className="-mr-6 -mb-7 h-80 w-full" max={5}>
+        <div className="flex min-h-0 items-end justify-end">
+          <PinchZoom className="-mr-6 -mb-7 h-full min-h-64 w-full" max={5}>
             <AllocationStaircase
               holdings={allocationHoldings}
               activeId={activeId}
@@ -127,19 +138,17 @@ export default function AllocationCard() {
       </div>
 
       {/* Fade footer over the legend, matching Figma Frame 123 */}
-      <div className="pointer-events-none absolute bottom-0 left-0 flex w-81 items-center bg-linear-to-b from-white/0 to-white to-45% p-6 backdrop-blur-[2px]">
+      <div className="pointer-events-none absolute bottom-0 left-0 flex w-81 items-center bg-linear-to-b from-[#f6f4f1]/0 to-[#f6f4f1] to-45% p-6 backdrop-blur-[2px]">
         <p className="text-xs font-medium text-black/40">
           ข้อมูลล่าสุด {allocationUpdatedAt}
         </p>
       </div>
 
-      <AddBondModal
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        onAdded={refetch}
+      <ManageBondsModal
+        open={manageOpen}
+        onClose={() => setManageOpen(false)}
+        onChanged={refetch}
       />
-
-      <DebugPanel open={debugOpen} onClose={() => setDebugOpen(false)} />
     </div>
   );
 }
