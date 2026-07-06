@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Button, Tooltip } from "@heroui/react";
 import { IconFlask2, IconListDetails } from "@tabler/icons-react";
 import AllocationStaircase from "./AllocationStaircase";
-import PinchZoom from "./PinchZoom";
 import ManageBondsModal from "./ManageBondsModal";
 import { allocationUpdatedAt } from "../data/mockData";
 import { useAllocation } from "../hooks/usePortfolio";
@@ -127,13 +126,15 @@ export default function AllocationCard() {
         </ul>
 
         <div className="flex min-h-0 items-end justify-end">
-          <PinchZoom className="-mr-6 -mb-7 h-full min-h-64 w-full" max={5}>
+          {/* Cap the staircase to a viewport-relative height so the pillars scale
+              with the screen instead of ballooning to fill the whole card. */}
+          <div className="-mb-2 h-[clamp(160px,24vh,280px)] w-full">
             <AllocationStaircase
               holdings={allocationHoldings}
               activeId={activeId}
               onHover={setActiveId}
             />
-          </PinchZoom>
+          </div>
         </div>
       </div>
 

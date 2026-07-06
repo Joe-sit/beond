@@ -9,9 +9,18 @@
   --accent-foreground: #ffffff;
 }
 
-/* Scale the whole UI up: rem-based Tailwind text/spacing grows from this root. */
+/* Scale the whole UI up: rem-based Tailwind text/spacing grows from this root.
+   Mobile (LIFF) stays at 18px; on desktop the 2-col dashboard has room, so the
+   root scales down and grows gently with viewport width instead of sitting at
+   the oversized mobile value. */
 html {
   font-size: 18px;
+}
+
+@media (min-width: 1024px) {
+  html {
+    font-size: clamp(14px, 0.7vw + 5px, 16px);
+  }
 }
 
 @theme {
@@ -36,6 +45,78 @@ html {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* Subtle, formal idle float for the money illustration — a slow bob with a
+   slight tilt so it feels alive without being playful. */
+@keyframes money-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-4px) rotate(-2deg);
+  }
+}
+.animate-money-float {
+  animation: money-float 3.6s ease-in-out infinite;
+  transform-origin: bottom center;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-money-float {
+    animation: none;
+  }
+}
+
+/* Landing-page entrance motion — an elegant staggered rise + fade, plus a slow
+   float for the hero mascot. Easing is a soft ease-out so nothing feels bouncy. */
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(1.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes float-soft {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+.animate-fade-rise {
+  animation: fade-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.animate-fade-in {
+  animation: fade-in 1s ease-out both;
+}
+/* Fade in once, then keep floating gently. */
+.animate-rise-float {
+  animation:
+    fade-in 0.9s ease-out both,
+    float-soft 5.5s ease-in-out 0.9s infinite;
+  will-change: transform, opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-rise,
+  .animate-fade-in,
+  .animate-rise-float {
+    animation: none;
   }
 }
 

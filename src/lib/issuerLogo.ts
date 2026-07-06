@@ -43,6 +43,23 @@ const ISSUER_DOMAINS: Record<string, string> = {
   ADVANC: "ais.th", TRUE: "truecorp.co.th", INTUCH: "intouchcompany.com",
   MINT: "minor.com", CENTEL: "centarahotelsresorts.com", ERW: "theerawan.com",
   IVL: "indoramaventures.com", DELTA: "deltathailand.com", KCE: "kcethai.com",
+  // State enterprises, banks & institutions
+  EGAT: "egat.co.th", GHB: "ghbank.co.th", BAAC: "baac.or.th",
+  EXIM: "exim.go.th", LHBANK: "lhbank.co.th", LHFG: "lhfg.co.th",
+  // Securities & leasing/finance
+  KGI: "kgieworld.co.th", YUANTA: "yuanta.co.th", ASK: "ask.co.th",
+  JMT: "jmtnetwork.co.th",
+  // Property, REITs & construction
+  FPT: "frasersproperty.co.th", FTREIT: "frasersproperty.co.th",
+  MQDC: "mqdc.com", DTP: "dtgo.com", CPNREIT: "cpn.co.th",
+  CWTTH: "chewathai.com", UNIQ: "unique-cons.com",
+  // Consumer, agri & industrial
+  CPFTH: "cpfoods.com", MPSC: "mitrphol.com", STA: "sritranggroup.com",
+  LOTUSS: "lotuss.com", NER: "nerubber.com", TPIPP: "tpipolene.co.th",
+  // Energy, utilities, transport & telecom
+  PTTC: "pttplc.com", EASTW: "eastwater.com",
+  WHART: "wha-group.com", WHAUP: "wha-group.com",
+  DTN: "truecorp.co.th", TUC: "truecorp.co.th", TAA: "airasia.com",
 };
 
 const LOGODEV_TOKEN = import.meta.env.VITE_LOGODEV_TOKEN as string | undefined;

@@ -47,7 +47,7 @@ export default function RightPanel({ profile, onLogout }: RightPanelProps) {
 
       <div className="min-h-0 flex-1 overflow-hidden rounded-3xl rounded-tl-none bg-white">
         {tab === "home" ? (
-          <div className="h-full p-6 md:p-8">
+          <div className="no-scrollbar h-full overflow-y-auto p-6 md:p-8">
             <PortfolioOverview />
           </div>
         ) : (

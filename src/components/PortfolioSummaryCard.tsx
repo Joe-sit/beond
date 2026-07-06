@@ -37,7 +37,7 @@ export default function PortfolioSummaryCard() {
       <img
         src={moneyIllustration}
         alt=""
-        className="pointer-events-none absolute -top-1 right-2 h-28 w-40 object-contain"
+        className="animate-money-float pointer-events-none absolute -top-1 right-2 h-28 w-40 object-contain"
       />
 
       <div className="relative flex flex-col gap-0.5 p-5 pb-4">

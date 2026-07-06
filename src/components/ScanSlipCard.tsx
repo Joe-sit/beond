@@ -11,18 +11,22 @@ export default function ScanSlipCard() {
   const [addOpen, setAddOpen] = useState(false);
 
   return (
-    <div className="relative flex min-h-31 items-center overflow-hidden rounded-3xl bg-[#B4CAE4]">
-      {/* Mascot pokes up from the bottom-left, clipped to the card */}
-      <img
-        src={mascot}
-        alt=""
-        className="pointer-events-none absolute bottom-0 left-2 h-[150%] w-24 object-contain object-bottom"
-      />
+    <div className="relative flex min-h-27 items-center rounded-3xl bg-[#B4CAE4]">
+      {/* Mascot: a fixed 80×124 frame (Figma node 402:1494) that pokes above the
+          card top and is clipped so it shows a zoomed crop of the figure — the
+          inner img scale/offset mirror the Figma values exactly. */}
+      <div className="pointer-events-none absolute bottom-0 left-4 z-10 h-31 w-20 overflow-hidden">
+        <img
+          src={mascot}
+          alt=""
+          className="absolute left-[-38.71%] top-[-35.16%] h-[162.67%] w-[182.8%] max-w-none"
+        />
+      </div>
 
       <div className="flex flex-1 items-center justify-between gap-3 py-4 pr-4 pl-28">
         <div className="min-w-0">
-          <p className="text-sm font-bold text-[#43507F]">เพิ่มหุ้นกู้เข้าพอร์ตโฟลิโอ</p>
-          <p className="mt-1 text-xs leading-snug text-[#43507F]/90">
+          <p className="text-base font-bold text-[#43507F]">เพิ่มหุ้นกู้เข้าพอร์ตโฟลิโอ</p>
+          <p className="mt-1 text-sm leading-snug text-[#43507F]">
             เพียงอัปโหลดไฟล์ 50 ทวิของ
             <br />
             ใบจ่ายหุ้นกู้รายตัว
@@ -31,7 +35,7 @@ export default function ScanSlipCard() {
         <Button
           variant="primary"
           size="sm"
-          className="shrink-0 bg-[#43507F]"
+          className="shrink-0 rounded-[14px] bg-[#43507F] text-xs"
           onPress={() => setAddOpen(true)}
         >
           <IconScan size={20} />
