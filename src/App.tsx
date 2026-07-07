@@ -7,6 +7,7 @@ import DividendTimeline from "./components/DividendTimeline";
 import RightPanel from "./components/RightPanel";
 import LoginPage from "./components/LoginPage";
 import AdminDashboard from "./components/AdminDashboard";
+import DashboardSkeleton from "./components/DashboardSkeleton";
 import { initAuth, login, logout, liffEnabled, type AuthProfile } from "./lib/auth";
 
 function App() {
@@ -34,18 +35,7 @@ function App() {
   };
 
   if (!ready) {
-    return (
-      <div className="flex h-screen flex-col gap-4 bg-[#F6F4F1] p-6">
-        <div className="h-14 w-full animate-pulse rounded-2xl bg-black/5" />
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="animate-pulse rounded-3xl bg-black/5" />
-          <div className="flex flex-col gap-4">
-            <div className="h-32 animate-pulse rounded-3xl bg-black/5" />
-            <div className="flex-1 animate-pulse rounded-3xl bg-black/5" />
-          </div>
-        </div>
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   if (!profile) {
