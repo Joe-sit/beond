@@ -10,6 +10,7 @@ const Y_MID = 28.16;
 const Y_RIGHT = 12.99;
 
 const MAX_BODY = 330; // body height of the tallest pillar
+const MIN_BODY = 96; // floor so small holdings stay readable
 
 // The % label sits on the FRONT face. That face is a vertical parallelogram
 // whose top edge slopes down to the right, so the text is skewed vertically by
@@ -128,16 +129,19 @@ export default function AllocationStaircase({
   if (shown.length === 0) return null; // nothing to plot — avoid Infinity viewBox
   const maxPct = Math.max(...shown.map((s) => s.pct));
 
-  // Taller half lives on the back row, shorter half up front — so no front
-  // pillar can ever occlude a back face. Column order is then shuffled into
-  // a jagged skyline (like the Figma reference) instead of a staircase.
-  const SKYLINE = [2, 0, 3, 1];
+  // Body height scales with the share, but never below MIN_BODY — so a tiny
+  // holding (e.g. 4%) still renders a readable pillar with a legible % label
+  // instead of a sliver.
+  const bodyHeight = (pct: number) =>
+    Math.max(MIN_BODY, (pct / maxPct) * MAX_BODY);
+
+  // Split the sorted list so the TALLER half sits on the back row (never
+  // occluded by the shorter front row). Within each row, order tallest→shortest
+  // so the skyline steps down cleanly and is easy to compare — no random jumble.
   const sorted = [...shown].sort((a, b) => b.pct - a.pct);
   const half = Math.ceil(sorted.length / 2);
-  const shuffle = (arr: typeof sorted) =>
-    SKYLINE.filter((i) => i < arr.length).map((i) => arr[i]);
-  const backs = shuffle(sorted.slice(0, half));
-  const fronts = shuffle(sorted.slice(half));
+  const backs = sorted.slice(0, half); // taller
+  const fronts = sorted.slice(half); // shorter
 
   const placed = [
     ...backs.map((s, col) => ({ s, col, row: 1 })),
@@ -148,10 +152,11 @@ export default function AllocationStaircase({
     color: s.color,
     label: s.label,
     value: s.value,
-    h: (s.pct / maxPct) * MAX_BODY,
+    h: bodyHeight(s.pct),
     ...slotFor(col, row),
     row,
   }));
+  // Paint back row first, then front, left→right (painter's order).
   const pillars = [...placed].sort((a, b) => b.row - a.row || a.x - b.x);
 
   // Fit the viewBox to the pillars actually rendered.

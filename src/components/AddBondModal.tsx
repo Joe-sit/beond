@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Modal, ModalBackdrop, ModalContainer, ModalDialog,
-  Button, CloseButton, SearchField, TextField, Label, Input, toast,
+  Button, CloseButton, SearchField, Label, NumberField, toast,
 } from "@heroui/react";
 import { ensureCatalog, searchBonds, type BondCandidate } from "../lib/secApi";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
@@ -22,9 +22,9 @@ interface AddBondModalProps {
 // bonds land in the "unclassified" sector (migration 0015).
 const FALLBACK_SECTOR_ID = "other";
 
-function formatTHB(value: number): string {
-  return new Intl.NumberFormat("th-TH").format(value);
-}
+// Minimum face value a holding can be added with, and the counter's step.
+const MIN_FACE_VALUE = 100_000;
+const AMOUNT_PRESETS = [100_000, 500_000, 1_000_000];
 
 const FREQ_LABEL: Record<number, string> = {
   1: "ปีละครั้ง",
@@ -60,7 +60,7 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
   const [results, setResults] = useState<BondCandidate[]>([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<BondCandidate | null>(null);
-  const [amount, setAmount] = useState("");
+  const [amount, setAmount] = useState<number>(NaN);
   const [rating, setRating] = useState(""); // credit rating; "" → nonRate
   const [freq, setFreq] = useState(2); // coupon payments per year (SEC omits this)
   const [saving, setSaving] = useState(false);
@@ -105,7 +105,7 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
     setTerm("");
     setResults([]);
     setSelected(null);
-    setAmount("");
+    setAmount(NaN);
     setRating("");
     setFreq(2);
     setError(null);
@@ -118,9 +118,9 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
 
   const handleSave = async () => {
     if (!selected || saving) return;
-    const faceValue = Number(amount.replace(/,/g, ""));
-    if (!faceValue || faceValue <= 0) {
-      setError("กรุณากรอกจำนวนเงินลงทุน");
+    const faceValue = amount;
+    if (!Number.isFinite(faceValue) || faceValue < MIN_FACE_VALUE) {
+      setError(`จำนวนเงินลงทุนขั้นต่ำ ${MIN_FACE_VALUE.toLocaleString("th-TH")} บาท`);
       return;
     }
     if (!supabaseEnabled || !supabase) {
@@ -329,20 +329,43 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
               </div>
             </div>
 
-            <TextField
-              value={amount}
-              onChange={(v) => {
-                const digits = v.replace(/[^\d]/g, "");
-                setAmount(digits ? formatTHB(Number(digits)) : "");
-              }}
-              aria-label="จำนวนเงินลงทุน (บาท)"
-              className="flex flex-col gap-1.5"
-            >
-              <Label className="text-sm font-medium text-black/60">
-                จำนวนเงินลงทุน (บาท)
-              </Label>
-              <Input autoFocus inputMode="numeric" placeholder="เช่น 100,000" className="font-nunito" />
-            </TextField>
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-sm font-medium text-black/60">จำนวนเงินลงทุน (บาท)</Label>
+
+              {/* Quick-pick presets */}
+              <div className="flex flex-wrap gap-2">
+                {AMOUNT_PRESETS.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setAmount(v)}
+                    className={`rounded-full border px-3 py-1 font-nunito text-xs transition-colors ${
+                      amount === v
+                        ? "border-[#43507F] bg-[#43507F]/10 font-bold text-[#43507F]"
+                        : "border-[#E7E7E7] text-black/60 hover:border-[#43507F]/40"
+                    }`}
+                  >
+                    {v.toLocaleString("th-TH")}
+                  </button>
+                ))}
+              </div>
+
+              {/* Stepper — step 100,000, min 100,000 */}
+              <NumberField
+                value={amount}
+                onChange={setAmount}
+                minValue={MIN_FACE_VALUE}
+                step={MIN_FACE_VALUE}
+                formatOptions={{ useGrouping: true, maximumFractionDigits: 0 }}
+                aria-label="จำนวนเงินลงทุน (บาท)"
+              >
+                <NumberField.Group>
+                  <NumberField.DecrementButton />
+                  <NumberField.Input autoFocus placeholder="เช่น 100,000" className="text-center font-nunito" />
+                  <NumberField.IncrementButton />
+                </NumberField.Group>
+              </NumberField>
+            </div>
 
             {error && <p className="text-sm text-red-500">{error}</p>}
 

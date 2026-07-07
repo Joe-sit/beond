@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { IconEye, IconEyeOff, IconPercentage, IconReport } from "@tabler/icons-react";
 import { usePortfolioStats } from "../hooks/usePortfolio";
-import moneyIllustration from "../assets/figma-money.svg";
+import MoneyIllustration from "./MoneyIllustration";
 
 function formatTHB(value: number): string {
   return new Intl.NumberFormat("th-TH").format(Math.round(value));
@@ -10,7 +10,7 @@ function formatTHB(value: number): string {
 interface StatPillProps {
   icon: React.ReactNode;
   label: string;
-  value: string;
+  value: React.ReactNode | null; // null → skeleton while loading
 }
 
 function StatPill({ icon, label, value }: StatPillProps) {
@@ -19,7 +19,11 @@ function StatPill({ icon, label, value }: StatPillProps) {
       <span className="shrink-0 text-[#F6F4F1]">{icon}</span>
       <div className="min-w-0">
         <p className="text-xs leading-tight font-medium text-[#F6F4F1]/80">{label}</p>
-        <p className="font-nunito text-sm leading-tight font-bold text-[#F6F4F1]">{value}</p>
+        {value === null ? (
+          <span className="mt-1 block h-3.5 w-16 animate-pulse rounded bg-[#F6F4F1]/25" />
+        ) : (
+          <p className="font-nunito text-sm leading-tight font-bold text-[#F6F4F1]">{value}</p>
+        )}
       </div>
     </div>
   );
@@ -28,17 +32,14 @@ function StatPill({ icon, label, value }: StatPillProps) {
 // "My portfolio" — total invested with the weighted average coupon and
 // remaining-years stats on an attached green card. Matches the Home redesign.
 export default function PortfolioSummaryCard() {
-  const { totalValue, avgCoupon, avgRemainingYears } = usePortfolioStats();
+  const { totalValue, avgCoupon, avgRemainingYears, loading } = usePortfolioStats();
   const [hidden, setHidden] = useState(false);
 
   return (
     <div className="relative overflow-hidden rounded-3xl border border-[#E8E8E8] bg-[#F6F4F1] shadow-[0px_4px_24px_0px_rgba(0,0,0,0.05)]">
-      {/* Money illustration bleeds off the top-right corner */}
-      <img
-        src={moneyIllustration}
-        alt=""
-        className="animate-money-float pointer-events-none absolute -top-1 right-2 h-28 w-40 object-contain"
-      />
+      {/* Money illustration bleeds off the top-right corner — the back cheque
+          settles in, then the front cheque + coins flick out on top. */}
+      <MoneyIllustration className="pointer-events-none absolute -top-1 right-2 h-28 w-40" />
 
       <div className="relative flex flex-col gap-0.5 p-5 pb-4">
         <button
@@ -50,10 +51,13 @@ export default function PortfolioSummaryCard() {
           <span className="text-sm font-medium">พอร์ตโฟลิโอของฉัน</span>
           {hidden ? <IconEyeOff size={16} /> : <IconEye size={16} />}
         </button>
-        <p className="text-2xl leading-none font-bold text-[#00665D]">
-          ฿
-          <span className="font-nunito">{hidden ? "••••••" : formatTHB(totalValue)}</span>
-        </p>
+        {loading ? (
+          <span className="mt-1 h-7 w-40 animate-pulse rounded-lg bg-[#00665D]/10" />
+        ) : (
+          <p className="text-2xl leading-none font-bold text-[#00665D]">
+            ฿<span className="font-nunito">{hidden ? "••••••" : formatTHB(totalValue)}</span>
+          </p>
+        )}
       </div>
 
       {/* Attached green stats card — sits above the illustration */}
@@ -61,12 +65,12 @@ export default function PortfolioSummaryCard() {
         <StatPill
           icon={<IconPercentage size={20} />}
           label="ดอกเบี้ยเฉลี่ย"
-          value={`${avgCoupon.toFixed(2)}% ต่อปี`}
+          value={loading ? null : `${avgCoupon.toFixed(2)}% ต่อปี`}
         />
         <StatPill
           icon={<IconReport size={20} />}
           label="อายุคงเหลือเฉลี่ย"
-          value={`${avgRemainingYears.toFixed(2)} ปี`}
+          value={loading ? null : `${avgRemainingYears.toFixed(2)} ปี`}
         />
       </div>
     </div>

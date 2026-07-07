@@ -1,6 +1,8 @@
 import { useState } from "react";
+import { motion, useReducedMotion } from "motion/react";
 import type { TimelineMonth } from "../data/mockData";
 import { issuerName } from "../lib/issuerLogo";
+import IssuerLogo from "./IssuerLogo";
 
 // Coupon interest is taxed 15% at source; the chart plots the net received.
 const WHT_RATE = 0.15;
@@ -14,6 +16,11 @@ function formatShortTHB(v: number): string {
 function formatTHB(v: number): string {
   return new Intl.NumberFormat("th-TH").format(v);
 }
+
+const THAI_MONTH_NAMES = [
+  "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+];
 
 const MONTH_ABBR: Record<string, string> = {
   มกราคม: "ม.ค.", กุมภาพันธ์: "ก.พ.", มีนาคม: "มี.ค.", เมษายน: "เม.ย.",
@@ -53,16 +60,25 @@ interface Bar {
   year: string;
   total: number;
   segments: Segment[];
+  isCurrent: boolean;
 }
 
 // Stacked bar chart of monthly net coupon income — HeroUI-Pro-style bars with a
 // dark hover tooltip breaking the month down by bond.
 export default function InterestBarChart({ months }: { months: TimelineMonth[] }) {
   const [hover, setHover] = useState<number | null>(null);
+  // Cursor position within the plot, so the tooltip can follow the pointer.
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const reduce = useReducedMotion();
 
   // Stable colour per bond across the whole chart (sorted for determinism).
   const symbols = [...new Set(months.flatMap((m) => m.payouts.map((p) => p.symbol)))].sort();
   const colorBySymbol = new Map(symbols.map((s, i) => [s, PALETTE[i % PALETTE.length]]));
+
+  // Current month (Thai BE year) so the chart can flag "this month".
+  const now = new Date();
+  const curMonth = THAI_MONTH_NAMES[now.getMonth()];
+  const curYearBE = now.getFullYear() + 543;
 
   const bars: Bar[] = months.map((m) => {
     const segments = m.payouts.map((p) => ({
@@ -80,14 +96,19 @@ export default function InterestBarChart({ months }: { months: TimelineMonth[] }
       year: m.year,
       total: segments.reduce((s, x) => s + x.amount, 0),
       segments,
+      isCurrent: m.month === curMonth && Number(m.year) === curYearBE,
     };
   });
 
   const max = niceCeil(Math.max(...bars.map((b) => b.total), 1));
   const ticks = [1, 0.75, 0.5, 0.25, 0].map((f) => f * max); // top → bottom
 
+  // Re-keys the bar row so the grow-in animation replays on load and whenever the
+  // selected year changes (all bars in a view share one year).
+  const yearKey = bars[0]?.year ?? "none";
+
   return (
-    <div className="mt-4 rounded-3xl border border-[#E7E7E7] bg-white p-5">
+    <div className="mt-4 flex h-88 flex-col rounded-3xl border border-[#E7E7E7] bg-white p-5">
       <div className="flex gap-3">
         {/* Y axis */}
         <div className="flex h-64 flex-col justify-between py-0.5 text-right font-nunito text-[11px] text-black/40">
@@ -98,7 +119,17 @@ export default function InterestBarChart({ months }: { months: TimelineMonth[] }
 
         {/* Plot */}
         <div className="min-w-0 flex-1">
-          <div className="relative h-64">
+          <div
+            className="relative h-64"
+            onMouseMove={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setPos({ x: e.clientX - r.left, y: e.clientY - r.top });
+            }}
+            onMouseLeave={() => {
+              setHover(null);
+              setPos(null);
+            }}
+          >
             {/* Gridlines */}
             <div className="absolute inset-0 flex flex-col justify-between">
               {ticks.map((_, i) => (
@@ -106,21 +137,23 @@ export default function InterestBarChart({ months }: { months: TimelineMonth[] }
               ))}
             </div>
 
-            {/* Bars */}
-            <div className="relative flex h-full items-end gap-1.5">
+            {/* Bars — keyed by year so they grow in on load / year change */}
+            <div key={yearKey} className="relative flex h-full items-end gap-1.5">
               {bars.map((b, i) => (
                 <div
                   key={b.key}
                   className="relative flex h-full min-w-0 flex-1 items-end justify-center"
                   onMouseEnter={() => setHover(i)}
-                  onMouseLeave={() => setHover(null)}
                 >
                   {b.total > 0 && (
-                    <div
-                      className={`flex w-full max-w-8.5 flex-col-reverse overflow-hidden rounded-t-lg transition-[filter] ${
+                    <motion.div
+                      className={`flex w-full max-w-8.5 origin-bottom flex-col-reverse overflow-hidden rounded-t-lg transition-[filter] ${
                         hover !== null && hover !== i ? "brightness-105 saturate-50 opacity-60" : ""
                       }`}
                       style={{ height: `${(b.total / max) * 100}%` }}
+                      initial={reduce ? false : { scaleY: 0, opacity: 0 }}
+                      animate={{ scaleY: 1, opacity: 1 }}
+                      transition={{ duration: 0.5, delay: i * 0.04, ease: [0.22, 1, 0.36, 1] }}
                     >
                       {b.segments.map((s) => (
                         <div
@@ -133,52 +166,69 @@ export default function InterestBarChart({ months }: { months: TimelineMonth[] }
                           }}
                         />
                       ))}
-                    </div>
-                  )}
-
-                  {/* Tooltip */}
-                  {hover === i && b.total > 0 && (
-                    <div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-max max-w-55 -translate-x-1/2 rounded-2xl bg-[#181D20] p-3 text-left shadow-lg">
-                      <p className="mb-2 text-xs font-medium text-white/60">
-                        {b.label} {b.year}
-                      </p>
-                      <div className="flex flex-col gap-1.5">
-                        {b.segments.map((s) => (
-                          <div key={s.id} className="flex items-center gap-2 text-xs">
-                            <span
-                              className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
-                              style={{ backgroundColor: s.color }}
-                            />
-                            <span className="font-nunito font-bold text-white">{s.symbol}</span>
-                            <span className="ml-auto pl-3 font-nunito font-bold text-white">
-                              ฿{formatTHB(s.amount)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="mt-2 flex items-center justify-between border-t border-white/10 pt-2 text-xs">
-                        <span className="text-white/60">รวมสุทธิ</span>
-                        <span className="font-nunito font-bold text-white">฿{formatTHB(b.total)}</span>
-                      </div>
-                    </div>
+                    </motion.div>
                   )}
                 </div>
               ))}
             </div>
+
+            {/* Tooltip — follows the cursor within the plot */}
+            {hover !== null && pos && bars[hover].total > 0 && (
+              <div
+                className="pointer-events-none absolute z-50 w-max max-w-55 -translate-x-1/2 -translate-y-full rounded-2xl bg-[#181D20] p-3 text-left shadow-lg"
+                style={{ left: pos.x, top: pos.y - 12 }}
+              >
+                <p className="mb-2 text-xs font-medium text-white/60">
+                  {bars[hover].label} {bars[hover].year}
+                </p>
+                <div className="flex flex-col gap-1.5">
+                  {bars[hover].segments.map((s) => (
+                    <div key={s.id} className="flex items-center gap-2 text-xs">
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
+                        style={{ backgroundColor: s.color }}
+                      />
+                      <IssuerLogo symbol={s.symbol} name={s.company} size={18} />
+                      <span className="font-nunito font-bold text-white">{s.symbol}</span>
+                      <span className="ml-auto pl-3 font-nunito font-bold text-white">
+                        ฿{formatTHB(s.amount)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex items-center justify-between border-t border-white/10 pt-2 text-xs">
+                  <span className="text-white/60">รวมสุทธิ</span>
+                  <span className="font-nunito font-bold text-white">
+                    ฿{formatTHB(bars[hover].total)}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* X labels */}
+          {/* X labels — year shown once per year-group (first bar or on change) */}
           <div className="mt-2 flex gap-1.5">
-            {bars.map((b) => (
-              <div
-                key={b.key}
-                className={`min-w-0 flex-1 text-center text-[11px] ${
-                  b.total > 0 ? "font-medium text-black/60" : "text-black/30"
-                }`}
-              >
-                {b.label}
-              </div>
-            ))}
+            {bars.map((b, i) => {
+              const showYear = i === 0 || b.year !== bars[i - 1].year;
+              return (
+                <div
+                  key={b.key}
+                  className={`flex min-w-0 flex-1 flex-col items-center text-[11px] ${
+                    b.isCurrent
+                      ? "font-bold text-[#43507F]"
+                      : b.total > 0
+                        ? "font-medium text-black/60"
+                        : "text-black/30"
+                  }`}
+                >
+                  {b.label}
+                  {b.isCurrent && <span className="mt-0.5 h-1.5 w-1.5 rounded-full bg-[#43507F]" />}
+                  {showYear && (
+                    <span className="mt-0.5 font-nunito text-[10px] text-black/35">{b.year}</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

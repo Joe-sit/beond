@@ -50,6 +50,16 @@ function groupBySector(rows: HoldingRow[]): AllocationHolding[] {
 }
 
 // Group by individual bond series (one pillar per symbol), largest first.
+// Distinct hue pool for the per-bond view, so every bond pillar/legend reads as
+// its own colour instead of collapsing to its sector's shade. Assigned by sorted
+// symbol (stable per bond) and cycled if there are more bonds than colours.
+const BOND_PALETTE = [
+  "#4A5AA8", "#5990D7", "#2FA8AD", "#5FB865",
+  "#E0991B", "#E8763A", "#D95F8A", "#9B6FD0",
+  "#3D7DD8", "#12A594", "#C6A015", "#6C7CC4",
+  "#E05B5B", "#42B3C2", "#8FB43A", "#B072C9",
+];
+
 function groupByBond(rows: HoldingRow[]): AllocationHolding[] {
   const map = new Map<string, AllocationHolding>();
   let total = 0;
@@ -59,10 +69,14 @@ function groupByBond(rows: HoldingRow[]): AllocationHolding[] {
     total += v;
     const prev = map.get(sym);
     if (prev) prev.value += v;
-    else map.set(sym, { id: sym, label: sym, color: row.bonds.sectors?.color ?? "#4A5AA8", value: v, pct: 0 });
+    else map.set(sym, { id: sym, label: sym, symbol: sym, color: "#4A5AA8", value: v, pct: 0 });
   }
+  // Stable colour per bond: index into the palette by the symbol's sorted rank.
+  const colorBy = new Map(
+    [...map.keys()].sort().map((sym, i) => [sym, BOND_PALETTE[i % BOND_PALETTE.length]]),
+  );
   return [...map.values()]
-    .map((h) => ({ ...h, pct: Math.round((h.value / total) * 100) }))
+    .map((h) => ({ ...h, color: colorBy.get(h.id) ?? h.color, pct: Math.round((h.value / total) * 100) }))
     .sort((a, b) => b.value - a.value);
 }
 
@@ -138,6 +152,7 @@ function useRealtimeRefetch(table: string, onChange: () => void) {
 // configured and seeded; live-refreshes on holdings changes.
 export function useAllocation(groupBy: "sector" | "rating" | "bond" = "sector"): {
   holdings: AllocationHolding[];
+  loading: boolean;
   refetch: () => void;
 } {
   // With Supabase on, real data is the only source — no mock underneath, so
@@ -145,25 +160,28 @@ export function useAllocation(groupBy: "sector" | "rating" | "bond" = "sector"):
   const [holdings, setHoldings] = useState<AllocationHolding[]>(
     supabaseEnabled ? [] : mockHoldings,
   );
+  const [loading, setLoading] = useState(supabaseEnabled);
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
     const { data, error } = await supabase
       .from("holdings")
       .select("face_value, bonds(symbol, rating, sectors(id, label_th, color))");
-    if (error) return;
-    if (!data.length) {
-      setHoldings([]);
+    if (error) {
+      setLoading(false);
       return;
     }
     const rows = data as unknown as HoldingRow[];
     setHoldings(
-      groupBy === "rating"
-        ? groupByRating(rows)
-        : groupBy === "bond"
-          ? groupByBond(rows)
-          : groupBySector(rows),
+      !rows.length
+        ? []
+        : groupBy === "rating"
+          ? groupByRating(rows)
+          : groupBy === "bond"
+            ? groupByBond(rows)
+            : groupBySector(rows),
     );
+    setLoading(false);
   }, [groupBy]);
 
   useEffect(() => {
@@ -172,7 +190,7 @@ export function useAllocation(groupBy: "sector" | "rating" | "bond" = "sector"):
   useEffect(() => subscribePortfolio(load), [load]);
   useRealtimeRefetch("holdings", load);
 
-  return { holdings, refetch: load };
+  return { holdings, loading, refetch: load };
 }
 
 // Per-holding detail for the manage/CRUD view — carries the bond attributes
@@ -259,6 +277,7 @@ export function useHoldings(): {
 // refreshes on payouts changes so adding a bond updates it in real time.
 export function useTimeline(): {
   months: TimelineMonth[];
+  loading: boolean;
   refetch: () => void;
 } {
   // Same rule as allocation: real data only when Supabase is on; mock is a
@@ -266,6 +285,7 @@ export function useTimeline(): {
   const [months, setMonths] = useState<TimelineMonth[]>(
     supabaseEnabled ? [] : mockTimeline,
   );
+  const [loading, setLoading] = useState(supabaseEnabled);
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
@@ -275,9 +295,13 @@ export function useTimeline(): {
         "installment, amount, payout_date, holdings!inner(id, bonds(symbol, issuer, total_installments, sectors(color)))",
       )
       .order("payout_date");
-    if (error) return;
+    if (error) {
+      setLoading(false);
+      return;
+    }
     if (!data.length) {
       setMonths([]);
+      setLoading(false);
       return;
     }
     const rows = data as unknown as PayoutRow[];
@@ -329,6 +353,7 @@ export function useTimeline(): {
       });
     }
     setMonths(skeleton);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -337,7 +362,7 @@ export function useTimeline(): {
   useEffect(() => subscribePortfolio(load), [load]);
   useRealtimeRefetch("payouts", load);
 
-  return { months, refetch: load };
+  return { months, loading, refetch: load };
 }
 
 // Withholding-tax credits from OCR'd 50-ทวิ slips (added via the LINE bot),
@@ -347,6 +372,7 @@ export interface TaxDoc {
   id: string;
   status: "pending" | "confirmed" | "rejected";
   payerName: string | null;
+  payerTaxId: string | null;
   symbol: string | null;
   incomeSubtype: string | null;
   grossAmount: number | null;
@@ -360,6 +386,7 @@ interface TaxDocRow {
   id: string;
   status: TaxDoc["status"];
   payer_name: string | null;
+  payer_tax_id: string | null;
   income_subtype: string | null;
   gross_amount: number | null;
   wht_amount: number | null;
@@ -369,33 +396,39 @@ interface TaxDocRow {
   bonds: { symbol: string } | null;
 }
 
-export function useTaxCredits(): { docs: TaxDoc[]; refetch: () => void } {
+export function useTaxCredits(): { docs: TaxDoc[]; loading: boolean; refetch: () => void } {
   const [docs, setDocs] = useState<TaxDoc[]>([]);
+  const [loading, setLoading] = useState(supabaseEnabled);
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
     const { data, error } = await supabase
       .from("tax_documents")
       .select(
-        "id, status, payer_name, income_subtype, gross_amount, wht_amount, wht_rate, pay_date, tax_year, bonds(symbol)",
+        "id, status, payer_name, payer_tax_id, income_subtype, gross_amount, wht_amount, wht_rate, pay_date, tax_year, bonds(symbol)",
       )
       .neq("status", "rejected")
       .order("pay_date", { ascending: false, nullsFirst: false });
-    if (error) return;
+    if (error) {
+      setLoading(false);
+      return;
+    }
     setDocs(
       (data as unknown as TaxDocRow[]).map((r) => ({
         id: r.id,
         status: r.status,
         payerName: r.payer_name,
+        payerTaxId: r.payer_tax_id,
         symbol: r.bonds?.symbol ?? null,
         incomeSubtype: r.income_subtype,
         grossAmount: r.gross_amount === null ? null : Number(r.gross_amount),
         whtAmount: r.wht_amount === null ? null : Number(r.wht_amount),
         whtRate: r.wht_rate === null ? null : Number(r.wht_rate),
         payDate: r.pay_date,
-        taxYear: r.tax_year,
+        taxYear: r.tax_year === null ? null : Number(r.tax_year),
       })),
     );
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -404,7 +437,7 @@ export function useTaxCredits(): { docs: TaxDoc[]; refetch: () => void } {
   useEffect(() => subscribePortfolio(load), [load]);
   useRealtimeRefetch("tax_documents", load);
 
-  return { docs, refetch: load };
+  return { docs, loading, refetch: load };
 }
 
 // Current Thai tax year in the Buddhist calendar (พ.ศ.).
@@ -453,12 +486,13 @@ export interface PortfolioStats {
   totalValue: number;
   avgCoupon: number;
   avgRemainingYears: number;
+  loading: boolean;
 }
 
 export function usePortfolioStats(): PortfolioStats {
-  const { holdings } = useHoldings();
+  const { holdings, loading } = useHoldings();
   const totalValue = holdings.reduce((s, h) => s + h.faceValue, 0);
-  if (!holdings.length) return { totalValue: 0, avgCoupon: 0, avgRemainingYears: 0 };
+  if (!holdings.length) return { totalValue: 0, avgCoupon: 0, avgRemainingYears: 0, loading };
 
   // Coupon = yield on invested capital, so it's face-value-weighted (a big
   // holding pulls the average toward its rate). Remaining years = a plain
@@ -478,5 +512,5 @@ export function usePortfolioStats(): PortfolioStats {
       ) / dated.length
     : 0;
 
-  return { totalValue, avgCoupon, avgRemainingYears };
+  return { totalValue, avgCoupon, avgRemainingYears, loading };
 }

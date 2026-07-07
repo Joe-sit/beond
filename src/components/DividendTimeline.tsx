@@ -49,7 +49,7 @@ function FilterToggle({ value, onChange }: FilterToggleProps) {
 export default function DividendTimeline() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [addOpen, setAddOpen] = useState(false);
-  const { months: timeline, refetch } = useTimeline();
+  const { months: timeline, loading, refetch } = useTimeline();
   const hasAny = timeline.some((m) => m.payouts.length > 0);
 
   // The chart shows one year at a time; ◀ ▶ steps between the years that have data.
@@ -111,7 +111,17 @@ export default function DividendTimeline() {
         </div>
       </div>
 
-      {hasAny ? (
+      {loading ? (
+        <div className="mt-4 flex h-64 items-end gap-2 rounded-3xl border border-[#E7E7E7] bg-white p-5">
+          {[40, 65, 52, 80, 48, 70, 58, 88, 44, 62].map((h, i) => (
+            <div
+              key={i}
+              className="flex-1 animate-pulse rounded-t-lg bg-black/5"
+              style={{ height: `${h}%` }}
+            />
+          ))}
+        </div>
+      ) : hasAny ? (
         <div className="mt-1">
           <div className="relative">
             <InterestBarChart months={months} />

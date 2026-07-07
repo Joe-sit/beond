@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IconScan, IconPuzzle } from "@tabler/icons-react";
 import logo from "../assets/landing-logo.svg";
 import mascot from "../assets/landing-mascot.png";
@@ -14,10 +14,36 @@ interface LoginPageProps {
   onLogin: () => void;
 }
 
+// Toggles `.is-visible` on `.reveal` children once they scroll into view, so
+// the feature section fades/rises in gradually. Fires once per element.
+function useScrollReveal() {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const els = root.querySelectorAll(".reveal");
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            e.target.classList.add("is-visible");
+            io.unobserve(e.target);
+          }
+        }
+      },
+      { threshold: 0.15, rootMargin: "0px 0px -10% 0px" },
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, []);
+  return ref;
+}
+
 // Desktop/marketing landing page (Figma node 239:441). The LINE button starts
 // the auth flow; the extension button is a Phase-4 placeholder.
 export default function LoginPage({ onLogin }: LoginPageProps) {
   const [loading, setLoading] = useState(false);
+  const featureRef = useScrollReveal();
 
   const handleLogin = () => {
     if (loading) return;
@@ -43,9 +69,9 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         </nav>
 
         <div className="relative mx-auto grid max-w-300 grid-cols-1 items-center gap-8 px-6 pb-28 pt-10 lg:grid-cols-2">
-          {/* Copy + CTAs */}
-          <div className="relative z-10">
-            <h1 className="animate-fade-rise text-3xl font-bold leading-tight text-white sm:text-4xl lg:text-5xl xl:text-6xl">
+          {/* Copy + CTAs — kept above the money illustration via z-index */}
+          <div className="relative z-20">
+            <h1 className="animate-fade-rise text-3xl font-bold leading-tight text-balance text-white sm:text-4xl lg:text-5xl xl:text-6xl">
               ปลดล็อคผลตอบแทนในหุ้นกู้ ด้วยการจัดการเครดิตภาษีที่สะดวกกว่าเดิม
             </h1>
             <p className="animate-fade-rise mt-5 max-w-xl text-base text-white/80 [animation-delay:120ms] sm:text-lg lg:text-xl">
@@ -104,15 +130,18 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
       </section>
 
       {/* ── Feature section ──────────────────────────────────────────────── */}
-      <section className="relative z-20 -mt-8 rounded-t-[40px] bg-white px-6 pb-24 pt-12">
+      <section
+        ref={featureRef}
+        className="relative z-20 -mt-8 rounded-t-[40px] bg-white px-6 pb-24 pt-12"
+      >
         <div className="mx-auto max-w-300">
-          <h2 className="text-2xl font-bold text-[#27518D] sm:text-3xl lg:text-4xl">
+          <h2 className="reveal text-2xl font-bold text-[#27518D] sm:text-3xl lg:text-4xl">
             ปลดล็อคผลตอบแทนในหุ้นกู้
           </h2>
 
           <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[1.8fr_1fr]">
             {/* Scan-to-tax-credit card */}
-            <div className="group relative min-h-80 overflow-hidden rounded-[40px] bg-[#253E7F] p-8 shadow-lg transition-all duration-300 hover:-translate-y-1 hover:shadow-2xl md:p-10">
+            <div className="reveal group relative min-h-80 overflow-hidden rounded-[40px] bg-[#253E7F] p-8 shadow-lg transition-all duration-300 [--reveal-delay:120ms] hover:-translate-y-1 hover:shadow-2xl md:p-10">
               <h3 className="max-w-md text-2xl font-bold leading-snug text-white sm:text-3xl">
                 ใบ 50 ทวิหุ้นกู้ของปีนี้
                 <br />
@@ -152,7 +181,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             </div>
 
             {/* Reserved feature slot */}
-            <div className="min-h-80 rounded-[40px] bg-[#00665D]" />
+            <div className="reveal min-h-80 rounded-[40px] bg-[#00665D] [--reveal-delay:240ms]" />
           </div>
         </div>
       </section>

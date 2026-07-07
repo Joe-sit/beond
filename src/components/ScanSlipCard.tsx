@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { Button } from "@heroui/react";
-import { IconScan } from "@tabler/icons-react";
+import { IconPlus } from "@tabler/icons-react";
 import AddBondModal from "./AddBondModal";
 import { notifyPortfolioChanged } from "../hooks/usePortfolio";
 import mascot from "../assets/figma-mascot.png";
 
-// Blue CTA to add a bond by scanning its 50-ทวิ slip (LINE OCR flow). For now the
-// button opens the add-bond search; the camera/LIFF scan flow lands here later.
+// Primary home CTA to add a bond to the portfolio — search the catalog + confirm
+// (NOT scanning; that's the 50-ทวิ tax flow in "จัดการภาษี").
 export default function ScanSlipCard() {
   const [addOpen, setAddOpen] = useState(false);
 
@@ -27,9 +27,9 @@ export default function ScanSlipCard() {
         <div className="min-w-0">
           <p className="text-base font-bold text-[#43507F]">เพิ่มหุ้นกู้เข้าพอร์ตโฟลิโอ</p>
           <p className="mt-1 text-sm leading-snug text-[#43507F]">
-            เพียงอัปโหลดไฟล์ 50 ทวิของ
+            ค้นหาหุ้นกู้ที่ถือ แล้วยืนยัน
             <br />
-            ใบจ่ายหุ้นกู้รายตัว
+            เข้าพอร์ตของคุณ
           </p>
         </div>
         <Button
@@ -38,8 +38,8 @@ export default function ScanSlipCard() {
           className="shrink-0 rounded-[14px] bg-[#43507F] text-xs"
           onPress={() => setAddOpen(true)}
         >
-          <IconScan size={20} />
-          สแกนใบหุ้นกู้
+          <IconPlus size={20} />
+          เพิ่มหุ้นกู้
         </Button>
       </div>
 

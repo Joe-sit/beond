@@ -152,6 +152,7 @@ export interface AllocationHolding {
   pct: number;
   value: number;
   color: string; // base hue; pillar faces derive lighter shades from it
+  symbol?: string; // set in the per-bond view → legend shows the issuer logo
 }
 
 // Real-ish sector allocation; pct sums to 100 and values sum to
