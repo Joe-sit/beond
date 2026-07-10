@@ -89,9 +89,9 @@ export default function DividendTimeline() {
   }, []);
 
   return (
-    <div className="px-8 pb-12 md:px-12">
+    <div className="px-5 pb-12 sm:px-8 md:px-12">
       <div ref={sentinelRef} className="h-0" aria-hidden />
-      <div className="sticky top-0 z-30 -mx-8 px-8 pt-6 pb-3 md:-mx-12 md:px-12 md:pt-8">
+      <div className="sticky top-0 z-30 -mx-5 px-5 pt-6 pb-3 sm:-mx-8 sm:px-8 md:-mx-12 md:px-12 md:pt-8">
         {/* Progressive blur: stacked layers, each masked so blur is strongest
             at the top and fades to none toward the bottom. Only fades in once
             the header is stuck, so it never frosts the hero illustration. */}

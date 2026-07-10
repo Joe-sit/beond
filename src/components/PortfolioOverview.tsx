@@ -9,14 +9,15 @@ export default function PortfolioOverview() {
   const isEmpty = !loading && holdings.length === 0;
 
   return (
-    <div className="flex h-full flex-col gap-4">
+    <div className="flex flex-col gap-4 lg:h-full">
       {isEmpty ? (
         <EmptyPortfolioCard />
       ) : (
         <>
           <PortfolioSummaryCard />
           <ScanSlipCard />
-          <div className="min-h-0 flex-1">
+          {/* < lg the card needs its own height (parent grows with content) */}
+          <div className="min-h-120 lg:min-h-0 lg:flex-1">
             <AllocationCard />
           </div>
         </>

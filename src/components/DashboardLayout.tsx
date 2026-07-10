@@ -8,14 +8,16 @@ interface DashboardLayoutProps {
 
 export default function DashboardLayout({ hero, panel }: DashboardLayoutProps) {
   return (
-    <div className="relative h-screen overflow-hidden bg-[#F6F4F1]">
-      {/* Full-width hero illustration (gradient + clouds + rising bond + podium). */}
-      <HeroBackground className="pointer-events-none absolute inset-x-0 top-0 h-[22vw] w-full" />
+    // < lg (mobile/tablet): sections stack and the page scrolls naturally.
+    // ≥ lg (desktop): fixed two-column viewport, panels scroll internally.
+    <div className="relative min-h-dvh bg-[#F6F4F1] lg:h-screen lg:overflow-hidden">
+      {/* Full-width hero illustration (gradient + clouds + rising bond + podium).
+          Taller on small screens so the band still reads behind the header. */}
+      <HeroBackground className="pointer-events-none absolute inset-x-0 top-0 h-[88vw] w-full sm:h-[52vw] lg:h-[22vw]" />
 
-      {/* Left column is fixed (no scroll); the right panel manages its own. */}
-      <div className="relative grid h-full grid-cols-1 lg:grid-cols-2">
-        <div className="h-full overflow-hidden">{hero}</div>
-        <div className="flex h-full min-h-0 flex-col p-5 md:p-6">{panel}</div>
+      <div className="relative grid grid-cols-1 lg:h-full lg:grid-cols-2">
+        <div className="lg:h-full lg:overflow-hidden">{hero}</div>
+        <div className="flex min-h-0 flex-col p-4 sm:p-5 md:p-6 lg:h-full">{panel}</div>
       </div>
     </div>
   );

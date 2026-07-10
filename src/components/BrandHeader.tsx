@@ -25,8 +25,8 @@ export default function BrandHeader({ profile, onLogout }: BrandHeaderProps) {
   }, [open]);
 
   return (
-    <div className="flex items-center justify-between px-8 pt-8 md:px-12">
-      <img src={logo} alt="beond — Bring Your Bonds Beyond" width={150} height={47} />
+    <div className="flex items-center justify-between px-6 pt-6 sm:px-8 sm:pt-8 md:px-12">
+      <img src={logo} alt="beond — Bring Your Bonds Beyond" width={150} height={47} className="w-28 sm:w-37.5" />
 
       <div className="relative" ref={ref}>
         <button

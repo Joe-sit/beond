@@ -8,11 +8,25 @@ import RightPanel from "./components/RightPanel";
 import LoginPage from "./components/LoginPage";
 import AdminDashboard from "./components/AdminDashboard";
 import DashboardSkeleton from "./components/DashboardSkeleton";
+import ScanFlow from "./components/ScanFlow";
+import { notifyPortfolioChanged } from "./hooks/usePortfolio";
 import { initAuth, login, logout, liffEnabled, type AuthProfile } from "./lib/auth";
 
 function App() {
   const [profile, setProfile] = useState<AuthProfile | null>(null);
   const [ready, setReady] = useState(false);
+  // Deep link from the LINE "แก้ไข" button (?review=<taxDocId>) → open the OCR
+  // review screen for that saved slip. Cleared when the sheet closes.
+  const [reviewId, setReviewId] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get("review"),
+  );
+
+  const closeReview = () => {
+    setReviewId(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("review");
+    window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+  };
 
   useEffect(() => {
     initAuth()
@@ -60,6 +74,14 @@ function App() {
         }
         panel={<RightPanel profile={profile} onLogout={handleLogout} />}
       />
+      {reviewId && (
+        <ScanFlow
+          open
+          reviewDocId={reviewId}
+          onClose={closeReview}
+          onSubmit={() => notifyPortfolioChanged()}
+        />
+      )}
       <Toast.Provider placement="bottom end" />
     </>
   );

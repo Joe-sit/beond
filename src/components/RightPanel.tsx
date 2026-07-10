@@ -24,7 +24,9 @@ export default function RightPanel({ profile, onLogout }: RightPanelProps) {
   const [tab, setTab] = useState<TabKey>("home");
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    // < lg the panel grows with its content (page scrolls); ≥ lg it fills the
+    // fixed column and scrolls internally.
+    <div className="flex min-h-0 flex-col lg:h-full">
       <div className="flex gap-1.5">
         {TABS.map((t) => {
           const active = tab === t.key;
@@ -32,7 +34,7 @@ export default function RightPanel({ profile, onLogout }: RightPanelProps) {
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`flex w-35 items-center justify-center gap-2 rounded-t-2xl px-6 py-3 text-xs font-bold transition-colors ${
+              className={`flex flex-1 items-center justify-center gap-2 rounded-t-2xl px-3 py-3 text-xs font-bold transition-colors sm:px-6 lg:w-35 lg:flex-none ${
                 active
                   ? "bg-white text-[#43507F]"
                   : "bg-white/40 text-[#43507F]/60 hover:bg-white/70"
@@ -45,13 +47,13 @@ export default function RightPanel({ profile, onLogout }: RightPanelProps) {
         })}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden rounded-3xl rounded-tl-none bg-white">
+      <div className="min-h-0 flex-1 rounded-3xl rounded-tl-none bg-white lg:overflow-hidden">
         {tab === "home" ? (
-          <div className="h-full overflow-hidden p-6 md:p-8">
+          <div className="p-4 sm:p-6 md:p-8 lg:h-full lg:overflow-hidden">
             <PortfolioOverview />
           </div>
         ) : (
-          <div className="no-scrollbar h-full overflow-y-auto p-6 md:p-8">
+          <div className="no-scrollbar p-4 sm:p-6 md:p-8 lg:h-full lg:overflow-y-auto">
             {tab === "tax" && <TaxManagePanel />}
             {tab === "settings" && <SettingsPanel profile={profile} onLogout={onLogout} />}
           </div>

@@ -8,7 +8,6 @@ import {
   IconCircleCheck,
   IconAlertTriangle,
   IconChevronLeft,
-  IconChevronDown,
   IconPlus,
   IconList,
   IconSearch,
@@ -17,7 +16,7 @@ import slipArt from "../assets/review-slip.png";
 import taxArt from "../assets/review-tax.png";
 import { EMPTY_SLIP, type SlipFields } from "../lib/scanTypes";
 import { ensureCatalog, searchBonds, type BondCandidate } from "../lib/secApi";
-import { extractSlip, saveTaxDocument } from "../lib/taxDocuments";
+import { extractSlip, saveTaxDocument, getReviewSlip, confirmReviewedSlip } from "../lib/taxDocuments";
 import { useHoldings, notifyPortfolioChanged } from "../hooks/usePortfolio";
 import { issuerName, issuerTickerFromTaxId } from "../lib/issuerLogo";
 import AddBondModal from "./AddBondModal";
@@ -36,6 +35,9 @@ interface ScanFlowProps {
   open: boolean;
   onClose: () => void;
   onSubmit?: (fields: SlipFields) => void;
+  // When set, skip the camera and open straight on the review screen with a
+  // saved (pending) document's fields — used by the LINE "แก้ไข" deep link.
+  reviewDocId?: string;
 }
 
 // Full-screen, mobile-first flow for scanning a 50-ทวิ slip inside the LIFF
@@ -43,7 +45,7 @@ interface ScanFlowProps {
 //   camera → (capture) → detecting → review (transcript + edit) → done
 // Camera uses the rear lens via getUserMedia; if that's unavailable (desktop,
 // denied permission) it falls back to a file picker.
-export default function ScanFlow({ open, onClose, onSubmit }: ScanFlowProps) {
+export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanFlowProps) {
   const [step, setStep] = useState<Step>("camera");
   const [shot, setShot] = useState<string | null>(null); // captured frame (dataURL)
   const [fields, setFields] = useState<SlipFields>(EMPTY_SLIP);
@@ -57,17 +59,35 @@ export default function ScanFlow({ open, onClose, onSubmit }: ScanFlowProps) {
   const streamRef = useRef<MediaStream | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Reset to the camera step every time the sheet opens.
+  // Reset when the sheet opens. Deep-link (reviewDocId) → load the saved slip and
+  // jump straight to review; otherwise start at the camera.
   useEffect(() => {
-    if (open) {
-      setStep("camera");
-      setShot(null);
+    if (!open) return;
+    setShot(null);
+    setCamError(null);
+    setSaveError(null);
+    setSaving(false);
+    if (reviewDocId) {
       setFields(EMPTY_SLIP);
-      setCamError(null);
-      setSaveError(null);
-      setSaving(false);
+      setStep("detecting");
+      let alive = true;
+      getReviewSlip(reviewDocId).then((slip) => {
+        if (!alive) return;
+        if (slip) {
+          setFields(slip);
+          setStep("review");
+        } else {
+          setCamError("ไม่พบเอกสารนี้");
+          setStep("review");
+        }
+      });
+      return () => {
+        alive = false;
+      };
     }
-  }, [open]);
+    setFields(EMPTY_SLIP);
+    setStep("camera");
+  }, [open, reviewDocId]);
 
   // Start/stop the rear camera alongside the camera step.
   useEffect(() => {
@@ -170,6 +190,11 @@ export default function ScanFlow({ open, onClose, onSubmit }: ScanFlowProps) {
   };
 
   const retake = () => {
+    // Deep-link review has no camera to return to — the back chevron just closes.
+    if (reviewDocId) {
+      onClose();
+      return;
+    }
     setShot(null);
     setSaveError(null);
     setStep("camera");
@@ -179,7 +204,10 @@ export default function ScanFlow({ open, onClose, onSubmit }: ScanFlowProps) {
     if (saving) return;
     setSaving(true);
     setSaveError(null);
-    const res = await saveTaxDocument(fields);
+    // Deep-link edit → update+confirm the existing pending doc; scan → insert new.
+    const res = reviewDocId
+      ? await confirmReviewedSlip(reviewDocId, fields)
+      : await saveTaxDocument(fields);
     setSaving(false);
     if (res.ok) {
       onSubmit?.(fields);
@@ -472,9 +500,21 @@ function ReviewStep({
   const set = <K extends keyof SlipFields>(k: K, v: SlipFields[K]) =>
     onChange({ ...fields, [k]: v });
 
-  const setNum = (k: keyof SlipFields, raw: string) => {
+  // The user only enters the actual amount received (net). WHT is a flat 15%, so
+  // gross = net / 0.85 and wht = gross − net — both derived, never edited.
+  const setNet = (raw: string) => {
     const n = raw.trim() === "" ? null : Number(raw.replace(/[, ]/g, ""));
-    set(k, (Number.isNaN(n) ? null : n) as SlipFields[typeof k]);
+    const net = n === null || Number.isNaN(n) ? null : n;
+    const gross = net === null ? null : Math.round((net / 0.85) * 100) / 100;
+    const wht = net === null || gross === null ? null : Math.round((gross - net) * 100) / 100;
+    onChange({ ...fields, net_amount: net, gross_amount: gross, wht_amount: wht, wht_rate: 15 });
+  };
+
+  // On mobile the on-screen keyboard covers the lower fields — scroll the focused
+  // input to center once the keyboard has animated in.
+  const scrollIntoFocus = (e: React.FocusEvent<HTMLInputElement>) => {
+    const el = e.currentTarget;
+    setTimeout(() => el.scrollIntoView({ block: "center", behavior: "smooth" }), 300);
   };
 
   const bondUnheld = !!fields.bond_symbol && !bondOptions.some((b) => b.symbol === fields.bond_symbol);
@@ -506,7 +546,7 @@ function ReviewStep({
           >
             <IconChevronLeft size={22} />
           </button>
-          <h2 className="text-lg font-bold text-white">ตรวจสอบข้อมูล</h2>
+          <h2 className="text-base font-bold text-white">ตรวจสอบข้อมูล</h2>
         </div>
         <p className="relative mt-2 max-w-[230px] text-xs leading-normal font-medium text-white/80">
           กรุณาตรวจสอบข้อมูลการได้รับดอกเบี้ยก่อนทำการบันทึก
@@ -514,27 +554,25 @@ function ReviewStep({
       </div>
 
       {/* Only this fields region scrolls; rounded top clips the content */}
-      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto rounded-t-3xl">
+      <div className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain rounded-t-3xl">
         {/* Bond + payer */}
-        <div className="flex flex-col gap-4 rounded-t-3xl bg-[#F6F4F1] px-4 pt-5 pb-5">
-          <div className="block pt-2">
-            <span className="mb-2 block text-xs font-medium text-[#1B1C1D]/80">รหัสหุ้นกู้</span>
-            <div className="flex items-center gap-2 border-b border-[#779BC6] pb-3">
-              {/* Typable — free text, upper-cased like a bond code */}
-              <input
-                value={fields.bond_symbol ?? ""}
-                onChange={(e) => set("bond_symbol", e.target.value.toUpperCase() || null)}
-                className={bigInput}
-                placeholder="พิมพ์รหัส เช่น BRI275A"
-                autoComplete="off"
-              />
-              <button
-                onClick={() => setSheetOpen(true)}
-                className="flex shrink-0 items-center gap-1 rounded-lg bg-[#2968A5]/10 px-2.5 py-1.5 text-xs font-medium text-[#2968A5]"
-              >
-                <IconList size={14} /> เลือกจากพอร์ต
-              </button>
-            </div>
+        <div className="flex flex-col gap-4 rounded-t-3xl bg-[#F6F4F1] px-4 pt-5 pb-11">
+          <div>
+            <SlipField
+              label="รหัสหุ้นกู้"
+              value={fields.bond_symbol ?? ""}
+              onChange={(v) => set("bond_symbol", v.toUpperCase() || null)}
+              onFocus={scrollIntoFocus}
+              placeholder="พิมพ์รหัส เช่น BRI275A"
+              right={
+                <button
+                  onClick={() => setSheetOpen(true)}
+                  className="ml-2 flex shrink-0 items-center gap-1 rounded-lg bg-[#2968A5]/10 px-2.5 py-1.5 text-xs font-medium text-[#2968A5]"
+                >
+                  <IconList size={14} /> เลือกจากพอร์ต
+                </button>
+              }
+            />
             {bondUnheld && (
               <button
                 onClick={() => setAddOpen(true)}
@@ -544,39 +582,42 @@ function ReviewStep({
               </button>
             )}
           </div>
-          <LineField label="ผู้จ่ายเงินได้" right={<IconChevronDown size={18} className="shrink-0 text-black/40" />}>
-            <input
-              value={fields.payer_name ?? ""}
-              onChange={(e) => set("payer_name", e.target.value || null)}
-              className={bigInput}
-              placeholder="ชื่อบริษัทผู้จ่าย"
-            />
-          </LineField>
+          <SlipField
+            label="เลขประจำตัวผู้เสียภาษีของผู้จ่าย"
+            value={fields.payer_tax_id ?? ""}
+            onChange={(v) => set("payer_tax_id", v.replace(/[^\d]/g, "") || null)}
+            onFocus={scrollIntoFocus}
+            inputMode="numeric"
+            placeholder="เลข 13 หลัก"
+          />
         </div>
 
         {/* Tax banner — overlaps the card above so the rounded corners cut into
             it (no page-color gap at the corners) */}
         <div className="relative -mt-6 rounded-t-3xl bg-[#2968A5] px-6 pt-5 pb-10">
           <img src={taxArt} alt="" className="pointer-events-none absolute top-3 right-4 h-14 w-24 object-contain" />
-          <p className="relative text-lg font-bold text-white">การหักภาษี ณ ที่จ่าย</p>
+          <p className="relative text-base font-bold text-white">การหักภาษี ณ ที่จ่าย</p>
           <p className="relative mt-1 text-xs font-medium text-white/80">
             ภาษีหัก ณ ที่จ่าย 15% · ปีภาษี <span className="font-nunito">{fields.tax_year ?? "-"}</span>
           </p>
         </div>
 
-        {/* Amounts */}
-        <div className="relative -mt-6 rounded-t-3xl bg-[#F6F4F1] px-4 pt-5 pb-5">
+        {/* Amounts — user enters the amount actually received (net); gross and the
+            15% tax are back-calculated (gross = net / 0.85) */}
+        <div className="relative -mt-6 flex-1 rounded-t-3xl bg-[#F6F4F1] px-4 pt-5 pb-5">
+          <SlipField
+            label="คงเหลือจ่ายจริง"
+            value={fields.net_amount ?? ""}
+            onChange={setNet}
+            onFocus={scrollIntoFocus}
+            inputMode="decimal"
+            placeholder="0.00"
+            suffix={baht}
+          />
           <div className="grid grid-cols-2 gap-x-4">
-            <LineField label="จำนวนเงินที่จ่าย" right={baht}>
-              <input inputMode="decimal" value={fields.gross_amount ?? ""} onChange={(e) => setNum("gross_amount", e.target.value)} className={bigInput} />
-            </LineField>
-            <LineField label="ภาษีที่หักและนำส่งไว้" right={baht}>
-              <input inputMode="decimal" value={fields.wht_amount ?? ""} onChange={(e) => setNum("wht_amount", e.target.value)} className={bigInput} />
-            </LineField>
+            <SlipField label="จำนวนเงินที่จ่าย" value={fields.gross_amount ?? ""} disabled placeholder="0.00" suffix={baht} />
+            <SlipField label="ภาษีหัก 15%" value={fields.wht_amount ?? ""} disabled placeholder="0.00" suffix={baht} />
           </div>
-          <LineField label="คงเหลือจ่ายจริง" right={baht}>
-            <input inputMode="decimal" value={fields.net_amount ?? ""} onChange={(e) => setNum("net_amount", e.target.value)} className={bigInput} />
-          </LineField>
         </div>
       </div>
 
@@ -698,7 +739,7 @@ function BondSheet({
           </div>
         </div>
 
-        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
           {showSearch ? (
             searching ? (
               <p className="py-6 text-center text-xs text-black/40">กำลังค้นหา…</p>
@@ -748,28 +789,62 @@ function BondRow({ symbol, name, onClick }: { symbol: string; name: string; onCl
   );
 }
 
-const bigInput =
-  "w-full min-w-0 bg-transparent text-base font-bold text-[#1B1C1D] outline-none placeholder:font-normal placeholder:text-black/25";
-const baht = <span className="ml-2 shrink-0 text-xs font-medium text-[#1B1C1D]/80">บาท</span>;
+const baht = <span className="ml-1.5 shrink-0 text-[11px] font-medium text-[#1B1C1D]/80">บาท</span>;
 
-// One design row: small label, then a value on an underline with an optional
-// trailing element (chevron for pickers, "บาท" for amounts).
-function LineField({
+// One OCR-review field: a label over an underlined value. Reacts to state —
+//   default  → grey underline
+//   focus    → blue underline (while typing)
+//   disabled → faint underline + muted value (read-only derived fields)
+// `right` holds a trailing control (the "เลือกจากพอร์ต" button); `suffix` a unit
+// tag ("บาท") that sits inside the field with the value.
+function SlipField({
   label,
-  active,
+  value,
+  onChange,
+  onFocus,
+  placeholder,
+  inputMode,
+  disabled = false,
   right,
-  children,
+  suffix,
 }: {
   label: string;
-  active?: boolean;
+  value: string | number;
+  onChange?: (v: string) => void;
+  onFocus?: (e: React.FocusEvent<HTMLInputElement>) => void;
+  placeholder?: string;
+  inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"];
+  disabled?: boolean;
   right?: React.ReactNode;
-  children: React.ReactNode;
+  suffix?: React.ReactNode;
 }) {
+  const [focused, setFocused] = useState(false);
+  const border = disabled
+    ? "border-black/10"
+    : focused
+      ? "border-[#2968A5]"
+      : "border-black/20";
   return (
     <label className="block pt-2">
-      <span className="mb-2 block text-xs font-medium text-[#1B1C1D]/80">{label}</span>
-      <div className={`flex items-center justify-between border-b pb-3 ${active ? "border-[#779BC6]" : "border-black/20"}`}>
-        <div className="min-w-0 flex-1">{children}</div>
+      <span className="mb-1.5 block text-[11px] font-medium text-[#1B1C1D]/80">{label}</span>
+      <div className={`flex items-center justify-between border-b pb-2.5 transition-colors ${border}`}>
+        <input
+          value={value}
+          readOnly={disabled || !onChange}
+          onChange={onChange ? (e) => onChange(e.target.value) : undefined}
+          onFocus={(e) => {
+            setFocused(true);
+            onFocus?.(e);
+          }}
+          onBlur={() => setFocused(false)}
+          inputMode={inputMode}
+          placeholder={placeholder}
+          autoComplete="off"
+          className={`w-full min-w-0 bg-transparent text-[13px] font-bold outline-none placeholder:font-normal placeholder:text-black/25 ${
+            disabled ? "text-black/50" : "text-[#1B1C1D]"
+          }`}
+        />
+        {suffix}
         {right}
       </div>
     </label>

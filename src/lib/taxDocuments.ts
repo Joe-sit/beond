@@ -54,6 +54,8 @@ export async function saveTaxDocument(fields: SlipFields): Promise<SaveResult> {
   const userId = sess.session?.user.app_metadata?.public_user_id as string | undefined;
   if (!userId) return { ok: false, error: "ยังไม่ได้เข้าสู่ระบบ" };
 
+  const bondId = await resolveBondId(fields.bond_symbol);
+
   const { error } = await supabase.from("tax_documents").insert({
     user_id: userId,
     source: "web_upload",
@@ -68,6 +70,7 @@ export async function saveTaxDocument(fields: SlipFields): Promise<SaveResult> {
     pay_date: fields.pay_date,
     doc_ref: fields.doc_ref,
     tax_year: fields.tax_year,
+    bond_id: bondId,
   });
 
   if (error) {
@@ -75,8 +78,29 @@ export async function saveTaxDocument(fields: SlipFields): Promise<SaveResult> {
     if (error.code === "23505") return { ok: false, error: "สลิปนี้ถูกบันทึกไว้แล้ว" };
     return { ok: false, error: error.message };
   }
+  // Learn the issuer's tax id for this bond series (canonical, self-improving).
+  await bindBondPayerTaxId(fields.bond_symbol, fields.payer_tax_id);
   notifyPortfolioChanged();
   return { ok: true };
+}
+
+// Resolve a bond code to its catalog id (uppercased); null when not in catalog.
+async function resolveBondId(symbol: string | null): Promise<string | null> {
+  if (!symbol || !supabase) return null;
+  const { data } = await supabase
+    .from("bonds").select("id").eq("symbol", symbol.toUpperCase()).maybeSingle();
+  return data?.id ?? null;
+}
+
+// Bind the payer's (issuer's) 13-digit tax id to the bond series on the catalog,
+// so future scans/lookups resolve the issuer from the tax id. No-op unless both
+// the bond code and a tax id are present.
+async function bindBondPayerTaxId(symbol: string | null, taxId: string | null): Promise<void> {
+  if (!supabase || !symbol || !taxId) return;
+  await supabase
+    .from("bonds")
+    .update({ payer_tax_id: taxId })
+    .eq("symbol", symbol.toUpperCase());
 }
 
 // The editable columns of a tax document. `bond_symbol` is resolved to a
@@ -102,12 +126,7 @@ export async function updateTaxDocument(id: string, patch: TaxDocPatch): Promise
   }
 
   // Link the bond code to the catalog when it resolves; otherwise leave it null.
-  let bondId: string | null = null;
-  if (patch.bond_symbol) {
-    const { data: bond } = await supabase
-      .from("bonds").select("id").eq("symbol", patch.bond_symbol.toUpperCase()).maybeSingle();
-    bondId = bond?.id ?? null;
-  }
+  const bondId = await resolveBondId(patch.bond_symbol);
 
   const { error } = await supabase
     .from("tax_documents")
@@ -123,6 +142,128 @@ export async function updateTaxDocument(id: string, patch: TaxDocPatch): Promise
     })
     .eq("id", id);
 
+  if (error) return { ok: false, error: error.message };
+  // Keep the catalog's learned issuer tax id in sync with the user's edit.
+  await bindBondPayerTaxId(patch.bond_symbol, patch.payer_tax_id);
+  notifyPortfolioChanged();
+  return { ok: true };
+}
+
+// Manually add a tax document from the จัดการภาษี panel (no scan) — for slips the
+// OCR missed or paper records entered by hand. Lands `confirmed` like a reviewed
+// scan and binds the issuer tax id to the bond series.
+export async function createTaxDocument(patch: TaxDocPatch): Promise<SaveResult> {
+  if (!supabaseEnabled || !supabase) {
+    notifyPortfolioChanged();
+    return { ok: true };
+  }
+
+  const { data: sess } = await supabase.auth.getSession();
+  const userId = sess.session?.user.app_metadata?.public_user_id as string | undefined;
+  if (!userId) return { ok: false, error: "ยังไม่ได้เข้าสู่ระบบ" };
+
+  const bondId = await resolveBondId(patch.bond_symbol);
+
+  const { error } = await supabase.from("tax_documents").insert({
+    user_id: userId,
+    source: "web_upload",
+    status: "confirmed",
+    income_type: "40(4)",
+    payer_name: patch.payer_name,
+    payer_tax_id: patch.payer_tax_id,
+    gross_amount: patch.gross_amount,
+    wht_amount: patch.wht_amount,
+    wht_rate: patch.wht_rate,
+    pay_date: patch.pay_date,
+    tax_year: patch.tax_year,
+    bond_id: bondId,
+  });
+
+  if (error) {
+    if (error.code === "23505") return { ok: false, error: "รายการนี้ถูกบันทึกไว้แล้ว" };
+    return { ok: false, error: error.message };
+  }
+  await bindBondPayerTaxId(patch.bond_symbol, patch.payer_tax_id);
+  notifyPortfolioChanged();
+  return { ok: true };
+}
+
+// Load a saved tax document as SlipFields for the OCR-review screen — used by the
+// LINE "แก้ไข" deep link (?review=<id>) so a pending slip can be reviewed/edited
+// in the web app before confirming. RLS scopes it to the caller's own rows.
+export async function getReviewSlip(id: string): Promise<SlipFields | null> {
+  if (!supabaseEnabled || !supabase) return null;
+  const { data, error } = await supabase
+    .from("tax_documents")
+    .select(
+      "payer_name, payer_tax_id, income_subtype, gross_amount, wht_amount, wht_rate, pay_date, doc_ref, tax_year, bond_id",
+    )
+    .eq("id", id)
+    .maybeSingle();
+  if (error || !data) {
+    console.error("getReviewSlip failed:", error?.message);
+    return null;
+  }
+  // Resolve the bond code separately (avoid an embed that can fail on relationship
+  // inference); net_amount isn't stored, so derive it from gross − wht.
+  let bondSymbol: string | null = null;
+  if (data.bond_id) {
+    const { data: bond } = await supabase.from("bonds").select("symbol").eq("id", data.bond_id).maybeSingle();
+    bondSymbol = bond?.symbol ?? null;
+  }
+  const net =
+    data.gross_amount != null && data.wht_amount != null
+      ? Math.round((data.gross_amount - data.wht_amount) * 100) / 100
+      : null;
+  return {
+    payer_name: data.payer_name,
+    payer_tax_id: data.payer_tax_id,
+    income_subtype: data.income_subtype,
+    gross_amount: data.gross_amount,
+    net_amount: net,
+    wht_amount: data.wht_amount,
+    wht_rate: data.wht_rate,
+    pay_date: data.pay_date,
+    doc_ref: data.doc_ref,
+    tax_year: data.tax_year,
+    bond_symbol: bondSymbol,
+  };
+}
+
+// Update a pending LINE slip from the OCR-review screen, then confirm it.
+export async function confirmReviewedSlip(id: string, fields: SlipFields): Promise<SaveResult> {
+  if (!supabaseEnabled || !supabase) {
+    notifyPortfolioChanged();
+    return { ok: true };
+  }
+  const bondId = await resolveBondId(fields.bond_symbol);
+  const { error } = await supabase
+    .from("tax_documents")
+    .update({
+      status: "confirmed",
+      payer_name: fields.payer_name,
+      payer_tax_id: fields.payer_tax_id,
+      gross_amount: fields.gross_amount,
+      wht_amount: fields.wht_amount,
+      wht_rate: fields.wht_rate,
+      pay_date: fields.pay_date,
+      tax_year: fields.tax_year,
+      bond_id: bondId,
+    })
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  await bindBondPayerTaxId(fields.bond_symbol, fields.payer_tax_id);
+  notifyPortfolioChanged();
+  return { ok: true };
+}
+
+// Delete a user's own tax document. RLS scopes the delete to rows the caller owns.
+export async function deleteTaxDocument(id: string): Promise<SaveResult> {
+  if (!supabaseEnabled || !supabase) {
+    notifyPortfolioChanged();
+    return { ok: true };
+  }
+  const { error } = await supabase.from("tax_documents").delete().eq("id", id);
   if (error) return { ok: false, error: error.message };
   notifyPortfolioChanged();
   return { ok: true };

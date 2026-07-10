@@ -14,14 +14,23 @@
 //   service_role needs table grants (migration 0008).
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { encodeBase64 } from "jsr:@std/encoding/base64";
 
 const LINE_TOKEN = Deno.env.get("LINE_MESSAGING_ACCESS_TOKEN")!;
 const LINE_SECRET = Deno.env.get("LINE_MESSAGING_CHANNEL_SECRET")!;
 const TYPHOON_KEY = Deno.env.get("TYPHOON_API_KEY")!;
+const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const TYPHOON_URL = "https://api.opentyphoon.ai/v1/chat/completions";
+const GEMINI_MODEL = "gemini-flash-latest";
+const GEMINI_URL =
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+// LIFF entry for the "แก้ไข" deep link → opens the web OCR-review screen. The
+// LIFF id is a public client id (not a secret); override via LIFF_ID if it moves.
+const LIFF_ID = Deno.env.get("LIFF_ID") ?? "2010595004-4xF6RZlS";
+const LIFF_REVIEW_URL = `https://liff.line.me/${LIFF_ID}`;
 const admin = createClient(SUPABASE_URL, SERVICE_KEY);
 const encoder = new TextEncoder();
 
@@ -171,6 +180,60 @@ const EXTRACT_SYS =
   '"wht_rate":number,"pay_date":string,"doc_ref":string(เลขที่/ลำดับที่เอกสาร),' +
   '"tax_year":number,"bond_symbol":string}';
 
+// Gemini vision — image → structured fields in one call (reads Thai reliably,
+// no OCR→markdown→LLM hallucination). Primary path when GEMINI_API_KEY is set.
+const GEMINI_PROMPT =
+  "รูปนี้คือ 'หนังสือรับรองการหักภาษี ณ ที่จ่าย (50 ทวิ)' ของดอกเบี้ยหุ้นกู้/พันธบัตร สกัดข้อมูลตาม schema. กติกา:\n" +
+  "- คัดเฉพาะที่ปรากฏจริง ห้ามเดา ถ้าไม่พบให้เป็น null\n" +
+  "- ห้ามอ่าน/ส่งเลขบัตรประชาชนของผู้ถูกหักภาษี (payee) เด็ดขาด\n" +
+  "- payer_tax_id = เลขประจำตัวผู้เสียภาษีของบริษัทผู้จ่ายดอกเบี้ย (นิติบุคคล 13 หลัก)\n" +
+  "- payer_name = ชื่อบริษัทผู้จ่าย (ไม่ใช่ธนาคาร/นายทะเบียน)\n" +
+  "- bond_symbol = รหัสหุ้นกู้ เช่น BRI275A, ORI288B ถ้าไม่มีให้ null\n" +
+  "- gross_amount = จำนวนเงินที่จ่าย, wht_amount = ภาษีที่หักไว้, net_amount = คงเหลือจ่ายจริง (gross = net + wht)\n" +
+  "- wht_rate = อัตราภาษี (%) ปกติ 15\n" +
+  "- pay_date = 'YYYY-MM-DD' (ค.ศ. = พ.ศ. − 543), tax_year = ปีภาษี พ.ศ.";
+
+const GEMINI_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    payer_name: { type: "STRING", nullable: true },
+    payer_tax_id: { type: "STRING", nullable: true },
+    income_subtype: { type: "STRING", nullable: true },
+    gross_amount: { type: "NUMBER", nullable: true },
+    net_amount: { type: "NUMBER", nullable: true },
+    wht_amount: { type: "NUMBER", nullable: true },
+    wht_rate: { type: "NUMBER", nullable: true },
+    pay_date: { type: "STRING", nullable: true },
+    doc_ref: { type: "STRING", nullable: true },
+    tax_year: { type: "INTEGER", nullable: true },
+    bond_symbol: { type: "STRING", nullable: true },
+  },
+};
+
+async function geminiExtract(bytes: Uint8Array, contentType: string): Promise<SlipFields> {
+  const mime = contentType.includes("png") ? "image/png" : "image/jpeg";
+  const res = await fetch(GEMINI_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { inline_data: { mime_type: mime, data: encodeBase64(bytes) } },
+            { text: GEMINI_PROMPT },
+          ],
+        },
+      ],
+      generationConfig: { temperature: 0, responseMimeType: "application/json", responseSchema: GEMINI_SCHEMA },
+    }),
+  });
+  if (!res.ok) throw new Error(`gemini ${res.status}: ${await res.text()}`);
+  const json = await res.json();
+  const text: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
+  return JSON.parse(text) as SlipFields;
+}
+
 async function typhoonExtract(markdown: string): Promise<SlipFields> {
   const res = await fetch(TYPHOON_URL, {
     method: "POST",
@@ -264,22 +327,27 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const contentType = blob.type || "image/jpeg";
 
-    const markdown = await typhoonOcr(bytes, contentType);
-    const f = await typhoonExtract(markdown);
-
-    // Override the LLM's hallucination-prone fields with a deterministic parse of
-    // the OCR markdown (amounts + payer). The LLM output is only a fallback.
-    const triple = parseMoneyTriple(markdown);
-    if (triple) {
-      f.gross_amount = triple.gross;
-      f.net_amount = triple.net;
-      f.wht_amount = triple.wht;
-      f.wht_rate = triple.rate;
+    let f: SlipFields;
+    if (GEMINI_KEY) {
+      // Primary: Gemini vision reads the slip directly (accurate on Thai + skew).
+      f = await geminiExtract(bytes, contentType);
+    } else {
+      // Fallback: Typhoon OCR → markdown → LLM, then override the LLM's
+      // hallucination-prone fields with a deterministic parse of the markdown.
+      const markdown = await typhoonOcr(bytes, contentType);
+      f = await typhoonExtract(markdown);
+      const triple = parseMoneyTriple(markdown);
+      if (triple) {
+        f.gross_amount = triple.gross;
+        f.net_amount = triple.net;
+        f.wht_amount = triple.wht;
+        f.wht_rate = triple.rate;
+      }
+      const parsedPayer = parsePayerName(markdown);
+      if (parsedPayer) f.payer_name = parsedPayer;
+      const parsedTaxId = parsePayerTaxId(markdown, parsedPayer ?? f.payer_name);
+      if (parsedTaxId) f.payer_tax_id = parsedTaxId;
     }
-    const parsedPayer = parsePayerName(markdown);
-    if (parsedPayer) f.payer_name = parsedPayer;
-    const parsedTaxId = parsePayerTaxId(markdown, parsedPayer ?? f.payer_name);
-    if (parsedTaxId) f.payer_tax_id = parsedTaxId;
 
     // Cross-check amounts: the slip's own arithmetic (net + tax = gross) is more
     // reliable than a single OCR'd figure, so reconcile before trusting gross.
@@ -411,7 +479,8 @@ function buildConfirmFlex(documentId: string, f: SlipFields): unknown {
             type: "button",
             style: "secondary",
             height: "sm",
-            action: { type: "postback", label: "แก้ไข", data: `action=reject&id=${documentId}` },
+            // Open the web app's OCR-review screen (LIFF) for this pending slip.
+            action: { type: "uri", label: "แก้ไข", uri: `${LIFF_REVIEW_URL}?review=${documentId}` },
           },
           {
             type: "button",
@@ -441,6 +510,26 @@ async function ensureUser(lineUserId: string): Promise<string> {
   return data.id;
 }
 
+const SCAN_DAILY_LIMIT = 5;
+const today = () => new Date().toISOString().slice(0, 10);
+
+// True when the user has hit the daily scan cap (exempt accounts never do).
+async function scanQuotaExceeded(userId: string): Promise<boolean> {
+  const { data: u } = await admin.from("users").select("scan_unlimited").eq("id", userId).maybeSingle();
+  if (u?.scan_unlimited) return false;
+  const { data: row } = await admin
+    .from("scan_usage").select("count").eq("user_id", userId).eq("day", today()).maybeSingle();
+  return (row?.count ?? 0) >= SCAN_DAILY_LIMIT;
+}
+
+// Count one scan against today's quota.
+async function bumpScanQuota(userId: string): Promise<void> {
+  const day = today();
+  const { data: row } = await admin
+    .from("scan_usage").select("count").eq("user_id", userId).eq("day", day).maybeSingle();
+  await admin.from("scan_usage").upsert({ user_id: userId, day, count: (row?.count ?? 0) + 1 });
+}
+
 // ── Event handlers ──────────────────────────────────────────────────────────
 async function handleFollow(event: LineEvent): Promise<void> {
   if (event.source?.userId) await ensureUser(event.source.userId);
@@ -461,6 +550,17 @@ async function handleImage(event: LineEvent): Promise<void> {
   if (!lineUserId || !messageId) return;
 
   const userId = await ensureUser(lineUserId);
+
+  // Daily scan cap (Gemini cost) — exempt accounts (scan_unlimited) skip it.
+  if (await scanQuotaExceeded(userId)) {
+    if (event.replyToken) {
+      await lineReply(event.replyToken, [
+        { type: "text", text: `วันนี้สแกนครบ ${SCAN_DAILY_LIMIT} ครั้งแล้วครับ 🙏 พรุ่งนี้ลองใหม่ได้เลย` },
+      ]);
+    }
+    return;
+  }
+
   const { bytes, contentType } = await lineImageContent(messageId);
   const ext = contentType.includes("png") ? "png" : "jpg";
   const path = `${lineUserId}/${crypto.randomUUID()}.${ext}`;
@@ -480,6 +580,7 @@ async function handleImage(event: LineEvent): Promise<void> {
       { type: "text", text: "ได้รับเอกสารแล้ว ✅ กำลังอ่านข้อมูล เดี๋ยวสรุปให้นะครับ" },
     ]);
   }
+  await bumpScanQuota(userId);
   // OCR is slow; run it after responding so LINE's webhook doesn't time out.
   EdgeRuntime.waitUntil(processSlip(doc.id, lineUserId));
 }
@@ -488,7 +589,21 @@ async function handlePostback(event: LineEvent): Promise<void> {
   const data = new URLSearchParams(event.postback?.data ?? "");
   const action = data.get("action");
   const id = data.get("id");
-  if (!id || !event.replyToken) return;
+  if (!event.replyToken) return;
+
+  // Rich-menu "สแกนใบ 50 ทวิ" button → prompt the user to send a photo in chat
+  // (the image handler does the rest). No LIFF camera page needed.
+  if (action === "scan") {
+    await lineReply(event.replyToken, [
+      {
+        type: "text",
+        text: "ส่งรูปหนังสือรับรองการหักภาษี ณ ที่จ่าย (50 ทวิ) เข้ามาในแชทได้เลยครับ 📄\nระบบจะอ่านข้อมูลให้อัตโนมัติ แล้วส่งสรุปให้ยืนยัน",
+      },
+    ]);
+    return;
+  }
+
+  if (!id) return;
 
   if (action === "confirm") {
     await admin.from("tax_documents").update({ status: "confirmed" }).eq("id", id);

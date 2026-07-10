@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Button } from "@heroui/react";
+import { toast, AlertDialog, Dropdown } from "@heroui/react";
 import {
   IconClockHour4,
   IconCircleCheck,
@@ -9,9 +9,13 @@ import {
   IconLoader2,
   IconPuzzle,
   IconScan,
+  IconPlus,
+  IconTrash,
+  IconChevronDown,
 } from "@tabler/icons-react";
 import { IconPencil } from "@tabler/icons-react";
 import { useTaxCredits, currentTaxYearBE, notifyPortfolioChanged, type TaxDoc } from "../hooks/usePortfolio";
+import { deleteTaxDocument } from "../lib/taxDocuments";
 import IssuerLogo from "./IssuerLogo";
 import TaxCard from "./TaxCard";
 import ScanFlow from "./ScanFlow";
@@ -152,6 +156,22 @@ export default function TaxManagePanel() {
   const year = currentTaxYearBE();
   const [scanOpen, setScanOpen] = useState(false);
   const [editDoc, setEditDoc] = useState<TaxDoc | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const openEditor = (doc: TaxDoc | null) => {
+    setEditDoc(doc);
+    setEditorOpen(true);
+  };
+
+  const removeDoc = async (d: TaxDoc) => {
+    if (deletingId) return;
+    setDeletingId(d.id);
+    const res = await deleteTaxDocument(d.id);
+    setDeletingId(null);
+    if (res.ok) toast.success("ลบรายการภาษีแล้ว");
+    else toast.danger(`ลบไม่สำเร็จ: ${res.error ?? "เกิดข้อผิดพลาด"}`);
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -162,19 +182,43 @@ export default function TaxManagePanel() {
             เครดิตภาษีหัก ณ ที่จ่าย (15%) สำหรับยื่น ภ.ง.ด. ปี <span className="font-nunito">{year}</span>
           </p>
         </div>
-        <Button
-          variant="primary"
-          size="sm"
-          className="shrink-0 rounded-[14px] bg-[#43507F] text-xs"
-          onPress={() => setScanOpen(true)}
-        >
-          <IconScan size={18} />
-          สแกนใบ 50 ทวิ
-        </Button>
+        {/* Split button — one joined pill: primary action + divider + chevron
+            menu (ButtonGroup can't join a Dropdown-wrapped button via its
+            first/last-child CSS, so the pill is composed directly). */}
+        <div className="flex shrink-0 items-stretch overflow-hidden rounded-full bg-[#43507F] text-white">
+          <button
+            onClick={() => setScanOpen(true)}
+            className="flex items-center gap-1.5 py-2.5 pr-3 pl-4 text-xs font-semibold transition-colors hover:bg-white/10"
+          >
+            <IconScan size={18} />
+            สแกนใบ 50 ทวิ
+          </button>
+          <span className="my-2 w-px bg-white/25" />
+          <Dropdown>
+            <Dropdown.Trigger>
+              <button
+                aria-label="ตัวเลือกเพิ่ม"
+                className="flex items-center px-2.5 transition-colors hover:bg-white/10"
+              >
+                <IconChevronDown size={16} />
+              </button>
+            </Dropdown.Trigger>
+            <Dropdown.Popover placement="bottom end">
+              <Dropdown.Menu>
+                <Dropdown.Item onAction={() => setScanOpen(true)}>
+                  <IconScan size={16} /> สแกนใบ 50 ทวิ
+                </Dropdown.Item>
+                <Dropdown.Item onAction={() => openEditor(null)}>
+                  <IconPlus size={16} /> เพิ่มเอง
+                </Dropdown.Item>
+              </Dropdown.Menu>
+            </Dropdown.Popover>
+          </Dropdown>
+        </div>
       </div>
 
       <ScanFlow open={scanOpen} onClose={() => setScanOpen(false)} onSubmit={notifyPortfolioChanged} />
-      <EditTaxDocModal doc={editDoc} open={editDoc !== null} onClose={() => setEditDoc(null)} />
+      <EditTaxDocModal doc={editDoc} open={editorOpen} onClose={() => setEditorOpen(false)} />
 
       <TaxCard />
 
@@ -260,12 +304,59 @@ export default function TaxManagePanel() {
                         )}
                       </div>
                       <button
-                        onClick={() => setEditDoc(d)}
+                        onClick={() => openEditor(d)}
                         className="rounded-lg p-1.5 text-black/40 transition-colors hover:bg-black/5 hover:text-[#43507F]"
                         aria-label="แก้ไข"
                       >
                         <IconPencil size={16} />
                       </button>
+                      <AlertDialog.Root>
+                        <AlertDialog.Trigger>
+                          <button
+                            disabled={deletingId === d.id}
+                            className="rounded-lg p-1.5 text-black/40 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                            aria-label="ลบ"
+                          >
+                            {deletingId === d.id ? <IconLoader2 size={16} className="animate-spin" /> : <IconTrash size={16} />}
+                          </button>
+                        </AlertDialog.Trigger>
+                        <AlertDialog.Backdrop>
+                          <AlertDialog.Container placement="center">
+                            <AlertDialog.Dialog className="flex w-full max-w-sm flex-col gap-3 rounded-3xl bg-white p-6">
+                              {({ close }) => (
+                                <>
+                                  <AlertDialog.Icon status="danger">
+                                    <IconTrash size={20} />
+                                  </AlertDialog.Icon>
+                                  <AlertDialog.Header>
+                                    <AlertDialog.Heading className="text-base font-bold text-[#181D20]">
+                                      ลบรายการภาษี?
+                                    </AlertDialog.Heading>
+                                  </AlertDialog.Header>
+                                  <AlertDialog.Body className="text-sm text-black/55">
+                                    ลบเครดิตภาษีของ <span className="font-semibold text-[#181D20]">{company}</span>{" "}
+                                    (฿{formatTHB(d.whtAmount)}) — การลบนี้ย้อนกลับไม่ได้
+                                  </AlertDialog.Body>
+                                  <AlertDialog.Footer className="mt-3">
+                                    <button
+                                      onClick={close}
+                                      className="rounded-2xl border border-black/10 px-4 py-2.5 text-sm font-semibold text-[#43507F]"
+                                    >
+                                      ยกเลิก
+                                    </button>
+                                    <button
+                                      onClick={() => { close(); removeDoc(d); }}
+                                      className="rounded-2xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white"
+                                    >
+                                      ลบ
+                                    </button>
+                                  </AlertDialog.Footer>
+                                </>
+                              )}
+                            </AlertDialog.Dialog>
+                          </AlertDialog.Container>
+                        </AlertDialog.Backdrop>
+                      </AlertDialog.Root>
                     </div>
                   </li>
                 );
