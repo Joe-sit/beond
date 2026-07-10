@@ -130,6 +130,60 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// ── Deterministic parse of the OCR markdown ─────────────────────────────────
+// The Typhoon LLM extractor hallucinates on messy slips (trillion-baht gross,
+// invented payer names), so for rule-derivable fields we parse the markdown
+// directly and override the LLM. Mirrors line-webhook.
+const MONEY_RE = /\d{1,3}(?:,\d{3})*\.\d{2}(?!\d)/g;
+
+function parseMoneyTriple(text: string): { gross: number; net: number; wht: number; rate: number } | null {
+  const vals = [...new Set((text.match(MONEY_RE) ?? []).map((s) => Number(s.replace(/,/g, ""))))].filter((v) => v > 0);
+  let best: { gross: number; net: number; wht: number; rate: number; err: number } | null = null;
+  for (const g of vals) for (const n of vals) for (const t of vals) {
+    if (g === n || g === t || n === t) continue;
+    if (Math.abs(g - (n + t)) > 1 || g < n || g < t) continue;
+    const [net, wht] = n >= t ? [n, t] : [t, n];
+    const rate = wht / g;
+    if (rate < 0.05 || rate > 0.3) continue;
+    const err = Math.abs(rate - 0.15);
+    if (!best || err < best.err) best = { gross: g, net, wht, rate: Math.round(rate * 100), err };
+  }
+  return best ? { gross: best.gross, net: best.net, wht: best.wht, rate: best.rate } : null;
+}
+
+function parsePayerName(text: string): string | null {
+  const m = [...text.matchAll(/บริษัท\s+[^\n|]+?จำกัด\s*\(มหาชน\)/g)].map((x) => x[0].trim());
+  return m.find((s) => !/ธนาคาร/.test(s)) ?? null;
+}
+
+function parsePayerTaxId(text: string, payer: string | null): string | null {
+  if (payer) {
+    const i = text.indexOf(payer);
+    if (i >= 0) {
+      const after = text.slice(i, i + 200).match(/0\d{12}(?!\d)/);
+      if (after) return after[0];
+    }
+  }
+  const ids = [...text.matchAll(/0\d{12}(?!\d)/g)].map((m) => m[0]);
+  return ids.length ? ids[ids.length - 1] : null;
+}
+
+// Override the LLM's hallucination-prone fields with the deterministic parse.
+function applyDeterministic(f: SlipFields, markdown: string): SlipFields {
+  const triple = parseMoneyTriple(markdown);
+  if (triple) {
+    f.gross_amount = triple.gross;
+    f.net_amount = triple.net;
+    f.wht_amount = triple.wht;
+    f.wht_rate = triple.rate;
+  }
+  const payer = parsePayerName(markdown);
+  if (payer) f.payer_name = payer;
+  const tid = parsePayerTaxId(markdown, payer ?? f.payer_name);
+  if (tid) f.payer_tax_id = tid;
+  return f;
+}
+
 // Reconcile amounts using the slip's own arithmetic (net + tax = gross).
 function reconcile(f: SlipFields): SlipFields {
   const net = num(f.net_amount);
@@ -164,7 +218,7 @@ Deno.serve(async (req) => {
     if (!image) return json({ error: "missing image" }, 400);
     const bytes = Uint8Array.from(atob(image), (c) => c.charCodeAt(0));
     const markdown = await typhoonOcr(bytes, contentType ?? "image/jpeg");
-    const fields = reconcile(await typhoonExtract(markdown));
+    const fields = reconcile(applyDeterministic(await typhoonExtract(markdown), markdown));
     return json({ ok: true, fields });
   } catch (e) {
     return json({ error: String((e as Error).message) }, 500);

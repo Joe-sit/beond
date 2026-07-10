@@ -16,6 +16,7 @@ interface AddBondModalProps {
   open: boolean;
   onClose: () => void;
   onAdded: () => void;
+  initialTerm?: string; // prefill the search (e.g. a bond code OCR'd from a slip)
 }
 
 // SEC doesn't classify bonds by industry, and the form no longer asks — new
@@ -55,7 +56,7 @@ function ResultSkeleton() {
   );
 }
 
-export default function AddBondModal({ open, onClose, onAdded }: AddBondModalProps) {
+export default function AddBondModal({ open, onClose, onAdded, initialTerm }: AddBondModalProps) {
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<BondCandidate[]>([]);
   const [searching, setSearching] = useState(false);
@@ -71,8 +72,11 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
   // Warm the full bond catalog as soon as the modal opens, so free-text
   // searches (company names) answer locally and instantly.
   useEffect(() => {
-    if (open) ensureCatalog();
-  }, [open]);
+    if (open) {
+      ensureCatalog();
+      if (initialTerm) setTerm(initialTerm); // prefill from an OCR'd bond code
+    }
+  }, [open, initialTerm]);
 
   // Debounced search; stale in-flight requests are aborted.
   useEffect(() => {

@@ -78,3 +78,52 @@ export async function saveTaxDocument(fields: SlipFields): Promise<SaveResult> {
   notifyPortfolioChanged();
   return { ok: true };
 }
+
+// The editable columns of a tax document. `bond_symbol` is resolved to a
+// bond_id (catalog link) before the patch is written.
+export interface TaxDocPatch {
+  payer_name: string | null;
+  payer_tax_id: string | null;
+  bond_symbol: string | null;
+  gross_amount: number | null;
+  wht_amount: number | null;
+  wht_rate: number | null;
+  pay_date: string | null;
+  tax_year: number | null;
+}
+
+// Update a user's own tax document after they edit it in the จัดการภาษี panel.
+// RLS scopes the update to rows the caller owns. A confirmed edit keeps the slip
+// confirmed; the amounts are trusted as the user reviewed them.
+export async function updateTaxDocument(id: string, patch: TaxDocPatch): Promise<SaveResult> {
+  if (!supabaseEnabled || !supabase) {
+    notifyPortfolioChanged();
+    return { ok: true };
+  }
+
+  // Link the bond code to the catalog when it resolves; otherwise leave it null.
+  let bondId: string | null = null;
+  if (patch.bond_symbol) {
+    const { data: bond } = await supabase
+      .from("bonds").select("id").eq("symbol", patch.bond_symbol.toUpperCase()).maybeSingle();
+    bondId = bond?.id ?? null;
+  }
+
+  const { error } = await supabase
+    .from("tax_documents")
+    .update({
+      payer_name: patch.payer_name,
+      payer_tax_id: patch.payer_tax_id,
+      bond_id: bondId,
+      gross_amount: patch.gross_amount,
+      wht_amount: patch.wht_amount,
+      wht_rate: patch.wht_rate,
+      pay_date: patch.pay_date,
+      tax_year: patch.tax_year,
+    })
+    .eq("id", id);
+
+  if (error) return { ok: false, error: error.message };
+  notifyPortfolioChanged();
+  return { ok: true };
+}

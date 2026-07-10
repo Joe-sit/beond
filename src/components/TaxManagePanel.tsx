@@ -10,11 +10,13 @@ import {
   IconPuzzle,
   IconScan,
 } from "@tabler/icons-react";
+import { IconPencil } from "@tabler/icons-react";
 import { useTaxCredits, currentTaxYearBE, notifyPortfolioChanged, type TaxDoc } from "../hooks/usePortfolio";
 import IssuerLogo from "./IssuerLogo";
 import TaxCard from "./TaxCard";
 import ScanFlow from "./ScanFlow";
-import { issuerName } from "../lib/issuerLogo";
+import EditTaxDocModal from "./EditTaxDocModal";
+import { issuerName, issuerTicker, issuerTickerFromName, issuerTickerFromTaxId, cleanCompanyName } from "../lib/issuerLogo";
 import {
   buildEfilingRows,
   countUnfilable,
@@ -149,6 +151,7 @@ export default function TaxManagePanel() {
   const groups = groupByYear(docs);
   const year = currentTaxYearBE();
   const [scanOpen, setScanOpen] = useState(false);
+  const [editDoc, setEditDoc] = useState<TaxDoc | null>(null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -171,6 +174,7 @@ export default function TaxManagePanel() {
       </div>
 
       <ScanFlow open={scanOpen} onClose={() => setScanOpen(false)} onSubmit={notifyPortfolioChanged} />
+      <EditTaxDocModal doc={editDoc} open={editDoc !== null} onClose={() => setEditDoc(null)} />
 
       <TaxCard />
 
@@ -217,7 +221,16 @@ export default function TaxManagePanel() {
             </div>
             <ul className="flex flex-col gap-2">
               {g.docs.map((d) => {
-                const company = issuerName(d.symbol ?? "", d.payerName ?? "");
+                // Show the ISSUING COMPANY (who paid the interest), never the
+                // withholding bank. Resolve a ticker from the bond code or, when
+                // the slip omitted it, from the payer company name → real logo.
+                const ticker = d.symbol
+                  ? issuerTicker(d.symbol)
+                  : issuerTickerFromName(d.payerName) ?? issuerTickerFromTaxId(d.payerTaxId);
+                const company =
+                  (ticker ? issuerName(ticker) : cleanCompanyName(d.payerName ?? "")) || "ไม่ทราบบริษัท";
+                const logoSym = d.symbol ?? ticker ?? "";
+                const sub = [d.symbol, d.payDate, d.incomeSubtype ?? "ดอกเบี้ย"].filter(Boolean).join(" · ");
                 const pending = d.status === "pending";
                 return (
                   <li
@@ -227,27 +240,32 @@ export default function TaxManagePanel() {
                     }`}
                   >
                     <div className="flex min-w-0 items-center gap-2.5">
-                      <IssuerLogo symbol={d.symbol ?? company} name={company} size={38} />
+                      <IssuerLogo symbol={logoSym} name={company} size={38} />
                       <div className="min-w-0">
-                        <p className="truncate font-nunito text-sm font-bold text-[#181D20]">
-                          {d.symbol ?? company}
-                        </p>
-                        <p className="truncate text-xs text-black/55">
-                          {d.payDate ?? "-"} · {d.incomeSubtype ?? "ดอกเบี้ย"}
-                        </p>
+                        <p className="truncate text-sm font-bold text-[#181D20]">{company}</p>
+                        <p className="truncate text-xs text-black/55">{sub}</p>
                       </div>
                     </div>
-                    <div className="flex shrink-0 flex-col items-end gap-1">
-                      <p className="font-nunito text-sm font-bold text-[#43507F]">฿{formatTHB(d.whtAmount)}</p>
-                      {pending ? (
-                        <span className="flex items-center gap-1 rounded-lg bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-                          <IconClockHour4 size={12} /> รอยืนยันใน LINE
-                        </span>
-                      ) : (
-                        <span className="flex items-center gap-1 rounded-lg bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600">
-                          <IconCircleCheck size={12} /> เครดิตแล้ว
-                        </span>
-                      )}
+                    <div className="flex shrink-0 items-center gap-2">
+                      <div className="flex flex-col items-end gap-1">
+                        <p className="font-nunito text-sm font-bold text-[#43507F]">฿{formatTHB(d.whtAmount)}</p>
+                        {pending ? (
+                          <span className="flex items-center gap-1 rounded-lg bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                            <IconClockHour4 size={12} /> รอยืนยันใน LINE
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 rounded-lg bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600">
+                            <IconCircleCheck size={12} /> เครดิตแล้ว
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setEditDoc(d)}
+                        className="rounded-lg p-1.5 text-black/40 transition-colors hover:bg-black/5 hover:text-[#43507F]"
+                        aria-label="แก้ไข"
+                      >
+                        <IconPencil size={16} />
+                      </button>
                     </div>
                   </li>
                 );

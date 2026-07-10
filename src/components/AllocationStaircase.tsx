@@ -1,4 +1,6 @@
 import { MAX_ALLOCATION_SECTORS, type AllocationHolding } from "../data/mockData";
+import IssuerLogo from "./IssuerLogo";
+import { useAmountsHidden } from "../lib/privacy";
 
 // Parametric pillar built from asset-pillar.svg geometry, widened ~20% so the
 // bars read chunkier. Cap slants are fixed; the body stretches with the value.
@@ -27,6 +29,12 @@ function mixWithWhite(hex: string, t: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
+// Avatar sits flat on the top cap. Center of the cap in local pillar coords.
+const TOP_CX = 75.59;
+const TOP_CY = 14.08;
+const TOKEN = 54; // avatar diameter (local units)
+const TOKEN_R = TOKEN / 2;
+
 function formatTHB(value: number): string {
   return new Intl.NumberFormat("th-TH").format(value);
 }
@@ -39,12 +47,13 @@ interface PillarProps {
   pct: number;
   color: string;
   label: string;
+  symbol?: string; // per-bond view → issuer avatar painted on the front face
   dimmed: boolean;
   index: number;
   onHover: (hovering: boolean) => void;
 }
 
-function Pillar({ x, ground, h, pct, color, label, dimmed, index, onHover }: PillarProps) {
+function Pillar({ x, ground, h, pct, color, label, symbol, dimmed, index, onHover }: PillarProps) {
   const top = ground - h - Y_LEFT;
   const p = (px: number, py: number) => `${x + px},${top + py}`;
   // Unfocused pillars wash their hues toward the surface instead of
@@ -85,6 +94,18 @@ function Pillar({ x, ground, h, pct, color, label, dimmed, index, onHover }: Pil
         points={`${p(0, Y_LEFT)} ${p(PEAK_X, 0)} ${p(W, Y_RIGHT)} ${p(FW, Y_MID)}`}
         fill={cap}
       />
+      {/* Issuer avatar resting flat on the top cap */}
+      {symbol && (
+        <g
+          transform={`translate(${x + TOP_CX} ${top + TOP_CY - 10})`}
+          style={{ opacity: dimmed ? 0.5 : 1, transition: "opacity 300ms ease-out" }}
+        >
+          <circle r={TOKEN_R} fill="#FFFFFF" />
+          <foreignObject x={-TOKEN_R} y={-TOKEN_R} width={TOKEN} height={TOKEN}>
+            <IssuerLogo symbol={symbol} name={label} size={TOKEN} />
+          </foreignObject>
+        </g>
+      )}
       {/* % painted on the front face — skewed to the face's isometric slope */}
       <text
         transform={`translate(${x + FRONT_CX} ${top + (Y_LEFT + Y_MID) / 2 + h / 2}) matrix(1 ${FRONT_SLOPE} 0 1 0 0)`}
@@ -125,6 +146,7 @@ export default function AllocationStaircase({
   activeId,
   onHover,
 }: AllocationStaircaseProps) {
+  const hidden = useAmountsHidden();
   const shown = holdings.slice(0, MAX_ALLOCATION_SECTORS);
   if (shown.length === 0) return null; // nothing to plot — avoid Infinity viewBox
   const maxPct = Math.max(...shown.map((s) => s.pct));
@@ -151,6 +173,7 @@ export default function AllocationStaircase({
     pct: s.pct,
     color: s.color,
     label: s.label,
+    symbol: s.symbol,
     value: s.value,
     h: bodyHeight(s.pct),
     ...slotFor(col, row),
@@ -170,7 +193,7 @@ export default function AllocationStaircase({
   const tooltip = active
     ? (() => {
         const line1 = active.label;
-        const line2 = `มูลค่า ฿${formatTHB(active.value)} (${active.pct}%)`;
+        const line2 = `มูลค่า ฿${hidden ? "••••••" : formatTHB(active.value)} (${active.pct}%)`;
         const w = Math.max(line1.length, line2.length) * 11.5 + 32;
         const hBox = 72;
         const x = Math.min(

@@ -9,6 +9,7 @@ function formatTHB(value: number): string {
   return new Intl.NumberFormat("th-TH").format(value);
 }
 import { useAllocation } from "../hooks/usePortfolio";
+import { useAmountsHidden } from "../lib/privacy";
 import { SECTOR_ICON, SECTOR_ICON_FALLBACK } from "../data/sectorIcons";
 import { supabaseEnabled } from "../lib/supabase";
 
@@ -26,6 +27,7 @@ export default function AllocationCard() {
   const [manageOpen, setManageOpen] = useState(false);
   const [view, setView] = useState<ViewMode>("bond");
   const { holdings: allocationHoldings, loading, refetch } = useAllocation(view);
+  const hidden = useAmountsHidden();
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden rounded-3xl border border-[#E7E7E7] bg-[#F6F4F1] p-6">
@@ -64,7 +66,7 @@ export default function AllocationCard() {
         </div>
       </div>
 
-      <div className="mt-5 grid min-h-0 flex-1 grid-cols-1 gap-4 sm:grid-cols-[0.8fr_1.2fr]">
+      <div className="mt-5 -mb-6 grid min-h-0 flex-1 grid-cols-1 gap-4 sm:grid-cols-[0.8fr_1.2fr]">
         {loading ? (
           <>
             <ul className="flex flex-col gap-2 pb-8">
@@ -90,7 +92,7 @@ export default function AllocationCard() {
           </>
         ) : (
         <>
-        <ul className="no-scrollbar flex min-h-0 flex-col gap-2 overflow-y-auto pb-8">
+        <ul className="no-scrollbar flex min-h-0 flex-col gap-2 overflow-y-auto">
           {allocationHoldings.map((h) => {
             const dimmed = activeId !== null && activeId !== h.id;
             const Icon = SECTOR_ICON[h.id] ?? SECTOR_ICON_FALLBACK;
@@ -132,7 +134,7 @@ export default function AllocationCard() {
                       dimmed ? "text-black/20" : "text-black/60"
                     }`}
                   >
-                    มูลค่า <span className="font-nunito">฿{formatTHB(h.value)}</span>
+                    มูลค่า <span className="font-nunito">฿{hidden ? "••••••" : formatTHB(h.value)}</span>
                   </p>
                 </div>
               </li>

@@ -112,9 +112,59 @@ const ISSUER_NAMES: Record<string, string> = {
 export function issuerName(symbol: string, fallback = ""): string {
   const ticker = issuerTicker(symbol);
   if (ISSUER_NAMES[ticker]) return ISSUER_NAMES[ticker];
-  const cleaned = fallback
+  const cleaned = cleanCompanyName(fallback);
+  return cleaned || fallback || ticker;
+}
+
+// Strip Thai legal wrappers so "บริษัท บีทีเอส กรุ๊ป โฮลดิงส์ จำกัด (มหาชน)"
+// reads as "บีทีเอส กรุ๊ป โฮลดิงส์".
+export function cleanCompanyName(name: string): string {
+  return name
     .replace(/^(บริษัท|บมจ\.?|บจก\.?)\s*/u, "")
     .replace(/\s*จำกัด\s*(\(มหาชน\))?\s*$/u, "")
     .trim();
-  return cleaned || fallback || ticker;
+}
+
+// Extra name keywords → ticker, for issuers whose curated ISSUER_NAMES entry
+// doesn't cover every legal-name variant (e.g. "โฮลดิงส์"), matched by substring.
+const NAME_TICKER_ALIASES: [RegExp, string][] = [
+  [/บีทีเอส/, "BTSG"],
+  [/บริทาเนีย/, "BRI"],
+  [/ออริจิ้น/, "ORI"],
+  [/แสนสิริ/, "SIRI"],
+  [/กัลฟ์/, "GULF"],
+  [/ซีพี\s*ออลล์|ซีพีออลล์/, "CPALL"],
+  [/เจริญโภคภัณฑ์อาหาร/, "CPF"],
+  [/ทรู\s*คอร์ปอเรชั่น|ทรูคอร์ป/, "TRUE"],
+  [/ไมเนอร์/, "MINT"],
+  [/ทางด่วนและรถไฟฟ้า/, "BEM"],
+];
+
+// Map a payer company name (e.g. from a slip that omits the bond code) to an
+// issuer ticker, so it still resolves to the right logo + display name. Matches
+// the curated Thai names first, then the alias keywords.
+export function issuerTickerFromName(name: string | null | undefined): string | null {
+  if (!name) return null;
+  for (const [ticker, th] of Object.entries(ISSUER_NAMES)) {
+    if (name.includes(th)) return ticker;
+  }
+  for (const [re, ticker] of NAME_TICKER_ALIASES) {
+    if (re.test(name)) return ticker;
+  }
+  return null;
+}
+
+// Juristic (13-digit) tax id → issuer ticker. Client-side OCR reads Thai company
+// names poorly but reads the numeric tax id reliably, so this is the robust way
+// to resolve the paying company + its logo when a slip omits the bond code.
+// Curated like ISSUER_DOMAINS — extend as new issuers appear.
+const ISSUER_TAX_IDS: Record<string, string> = {
+  "0107536000421": "BTSG", // บีทีเอส กรุ๊ป โฮลดิงส์
+  "0107557000381": "ORI", // ออริจิ้น พร็อพเพอร์ตี้
+  "0107564000294": "BRI", // บริทาเนีย
+};
+
+export function issuerTickerFromTaxId(taxId: string | null | undefined): string | null {
+  if (!taxId) return null;
+  return ISSUER_TAX_IDS[taxId.replace(/\D/g, "")] ?? null;
 }

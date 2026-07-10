@@ -1,6 +1,6 @@
-import { useState } from "react";
 import { IconEye, IconEyeOff, IconPercentage, IconReport } from "@tabler/icons-react";
 import { usePortfolioStats } from "../hooks/usePortfolio";
+import { useAmountsHidden, toggleAmountsHidden } from "../lib/privacy";
 import MoneyIllustration from "./MoneyIllustration";
 
 function formatTHB(value: number): string {
@@ -33,7 +33,7 @@ function StatPill({ icon, label, value }: StatPillProps) {
 // remaining-years stats on an attached green card. Matches the Home redesign.
 export default function PortfolioSummaryCard() {
   const { totalValue, avgCoupon, avgRemainingYears, loading } = usePortfolioStats();
-  const [hidden, setHidden] = useState(false);
+  const hidden = useAmountsHidden();
 
   return (
     <div className="relative overflow-hidden rounded-3xl border border-[#E8E8E8] bg-[#F6F4F1] shadow-[0px_4px_24px_0px_rgba(0,0,0,0.05)]">
@@ -44,7 +44,7 @@ export default function PortfolioSummaryCard() {
       <div className="relative flex flex-col gap-0.5 p-5 pb-4">
         <button
           type="button"
-          onClick={() => setHidden((h) => !h)}
+          onClick={toggleAmountsHidden}
           className="flex items-center gap-1.5 text-[#00665D]/80 transition-colors hover:text-[#00665D]"
           aria-label={hidden ? "แสดงมูลค่า" : "ซ่อนมูลค่า"}
         >

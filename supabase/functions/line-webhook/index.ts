@@ -201,6 +201,55 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// Canonicalize a bond code so OCR's O↔0 / I↔1 confusions still match the
+// catalog. Mirrors the web scan flow's canonSym.
+const canonSym = (s: string) => s.replace(/O/g, "0").replace(/I/g, "1");
+
+// ── Deterministic parse of the OCR markdown ─────────────────────────────────
+// The Typhoon LLM extractor hallucinates on messy slips (e.g. gross of a
+// trillion baht, invented payer names), so for the fields we can derive by rule
+// we parse the OCR markdown directly and override the LLM. Amounts and the
+// payer are far more reliable this way; only the bond code, which the OCR
+// sometimes drops entirely, still leans on the LLM (validated against catalog).
+const MONEY_RE = /\d{1,3}(?:,\d{3})*\.\d{2}(?!\d)/g;
+
+// gross = net + wht with a plausible ~15% withholding rate. Returns the triple
+// whose rate is closest to 15%, or null if none is sane.
+function parseMoneyTriple(text: string): { gross: number; net: number; wht: number; rate: number } | null {
+  const vals = [...new Set((text.match(MONEY_RE) ?? []).map((s) => Number(s.replace(/,/g, ""))))].filter((v) => v > 0);
+  let best: { gross: number; net: number; wht: number; rate: number; err: number } | null = null;
+  for (const g of vals) for (const n of vals) for (const t of vals) {
+    if (g === n || g === t || n === t) continue;
+    if (Math.abs(g - (n + t)) > 1 || g < n || g < t) continue;
+    const [net, wht] = n >= t ? [n, t] : [t, n];
+    const rate = wht / g;
+    if (rate < 0.05 || rate > 0.3) continue;
+    const err = Math.abs(rate - 0.15);
+    if (!best || err < best.err) best = { gross: g, net, wht, rate: Math.round(rate * 100), err };
+  }
+  return best ? { gross: best.gross, net: best.net, wht: best.wht, rate: best.rate } : null;
+}
+
+// The issuing company: "บริษัท … จำกัด (มหาชน)" that is not a bank.
+function parsePayerName(text: string): string | null {
+  const m = [...text.matchAll(/บริษัท\s+[^\n|]+?จำกัด\s*\(มหาชน\)/g)].map((x) => x[0].trim());
+  return m.find((s) => !/ธนาคาร/.test(s)) ?? null;
+}
+
+// The payer's juristic tax id (leading 0) sits right after its name; fall back
+// to the last leading-0 id (a bank letterhead reg tends to appear first).
+function parsePayerTaxId(text: string, payer: string | null): string | null {
+  if (payer) {
+    const i = text.indexOf(payer);
+    if (i >= 0) {
+      const after = text.slice(i, i + 200).match(/0\d{12}(?!\d)/);
+      if (after) return after[0];
+    }
+  }
+  const ids = [...text.matchAll(/0\d{12}(?!\d)/g)].map((m) => m[0]);
+  return ids.length ? ids[ids.length - 1] : null;
+}
+
 // ── Slip processing (background) ────────────────────────────────────────────
 async function processSlip(documentId: string, lineUserId: string): Promise<void> {
   let imagePath: string | null = null;
@@ -218,6 +267,20 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
     const markdown = await typhoonOcr(bytes, contentType);
     const f = await typhoonExtract(markdown);
 
+    // Override the LLM's hallucination-prone fields with a deterministic parse of
+    // the OCR markdown (amounts + payer). The LLM output is only a fallback.
+    const triple = parseMoneyTriple(markdown);
+    if (triple) {
+      f.gross_amount = triple.gross;
+      f.net_amount = triple.net;
+      f.wht_amount = triple.wht;
+      f.wht_rate = triple.rate;
+    }
+    const parsedPayer = parsePayerName(markdown);
+    if (parsedPayer) f.payer_name = parsedPayer;
+    const parsedTaxId = parsePayerTaxId(markdown, parsedPayer ?? f.payer_name);
+    if (parsedTaxId) f.payer_tax_id = parsedTaxId;
+
     // Cross-check amounts: the slip's own arithmetic (net + tax = gross) is more
     // reliable than a single OCR'd figure, so reconcile before trusting gross.
     const net = num(f.net_amount);
@@ -233,12 +296,28 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
 
     const taxYear = f.tax_year ?? (f.pay_date ? new Date(f.pay_date).getFullYear() + 543 : null);
 
-    // Best-effort link to a known bond by its symbol.
+    // Best-effort link to a known bond by its symbol. OCR routinely confuses
+    // O↔0 and I↔1 inside a bond code, so if the exact symbol misses we retry on
+    // a canonical form against the catalog and adopt the catalog's true spelling.
     let bondId: string | null = null;
     if (f.bond_symbol) {
-      const { data: bond } = await admin
-        .from("bonds").select("id").eq("symbol", f.bond_symbol.toUpperCase()).maybeSingle();
-      bondId = bond?.id ?? null;
+      const sym = f.bond_symbol.toUpperCase();
+      const { data: exact } = await admin.from("bonds").select("id, symbol").eq("symbol", sym).maybeSingle();
+      if (exact) {
+        bondId = exact.id;
+        f.bond_symbol = exact.symbol;
+      } else {
+        const wanted = canonSym(sym);
+        const { data: bonds } = await admin.from("bonds").select("id, symbol");
+        const hit = (bonds ?? []).find((b) => canonSym(String(b.symbol).toUpperCase()) === wanted);
+        if (hit) {
+          bondId = hit.id;
+          f.bond_symbol = hit.symbol; // correct the OCR misread (e.g. BTSG280A → BTSG28OA)
+        }
+      }
+      // Not in the catalog → the LLM likely guessed (OCR often drops the bond
+      // line). Blank it rather than show a wrong code; the user picks on confirm.
+      if (!bondId) f.bond_symbol = null;
     }
 
     // Store only the fields a filing needs. No raw markdown (it contains the
