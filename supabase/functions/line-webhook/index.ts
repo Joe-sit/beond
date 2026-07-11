@@ -441,14 +441,24 @@ async function handleImage(event: LineEvent): Promise<void> {
     .select("id").single();
   if (insErr) throw new Error(`insert doc: ${insErr.message}`);
 
+  // Ack immediately via the reply token (instant), then run OCR. Ack failure
+  // (e.g. an expired token on a redelivered event) must not skip OCR.
   if (event.replyToken) {
-    await lineReply(event.replyToken, [
-      { type: "text", text: "ได้รับเอกสารแล้ว ✅ กำลังอ่านข้อมูล เดี๋ยวสรุปให้นะครับ" },
-    ]);
+    try {
+      await lineReply(event.replyToken, [
+        { type: "text", text: "ได้รับเอกสารแล้ว ✅ กำลังอ่านข้อมูล เดี๋ยวสรุปให้นะครับ" },
+      ]);
+    } catch (e) {
+      console.error("ack reply failed (continuing):", (e as Error).message);
+    }
   }
   await bumpScanQuota(userId);
-  // OCR is slow; run it after responding so LINE's webhook doesn't time out.
-  EdgeRuntime.waitUntil(processSlip(doc.id, lineUserId));
+  // Await OCR to completion — a fire-and-forget EdgeRuntime.waitUntil task was
+  // getting evicted mid-run when Gemini was slow (row left pending, image kept,
+  // no error logged). Awaiting keeps the isolate alive until the flex is pushed.
+  // The user already got the ack above; the flex arrives via push. LINE webhook
+  // redelivery is off by default, so a slow 200 won't duplicate the event.
+  await processSlip(doc.id, lineUserId);
 }
 
 async function handlePostback(event: LineEvent): Promise<void> {
