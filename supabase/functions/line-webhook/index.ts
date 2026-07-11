@@ -247,23 +247,31 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
     // Store only the fields a filing needs. No raw markdown (it contains the
     // investor's national ID) and no image_path — the slip image is deleted
     // below so beond never retains a copy of the ID document.
-    await admin
-      .from("tax_documents")
-      .update({
-        payer_name: f.payer_name ?? null,
-        payer_tax_id: f.payer_tax_id ?? null,
-        income_subtype: f.income_subtype ?? null,
-        gross_amount: gross,
-        wht_amount: wht,
-        wht_rate: rate,
-        pay_date: f.pay_date ?? null,
-        doc_ref: f.doc_ref ?? null,
-        tax_year: taxYear,
-        bond_id: bondId,
-        ocr_raw: { fields: f },
-        image_path: null,
-      })
-      .eq("id", documentId);
+    const payload = {
+      payer_name: f.payer_name ?? null,
+      payer_tax_id: f.payer_tax_id ?? null,
+      income_subtype: f.income_subtype ?? null,
+      gross_amount: gross,
+      wht_amount: wht,
+      wht_rate: rate,
+      pay_date: f.pay_date ?? null,
+      doc_ref: f.doc_ref ?? null,
+      tax_year: taxYear,
+      bond_id: bondId,
+      ocr_raw: { fields: f },
+      image_path: null,
+    };
+    let { error: updErr } = await admin
+      .from("tax_documents").update(payload).eq("id", documentId);
+    // doc_ref carries a UNIQUE(user_id, doc_ref) constraint (slip dedup). Re-
+    // scanning a slip whose doc_ref is already saved would 23505 and — because
+    // the error was previously unchecked — leave the row empty while the flex
+    // still showed data. Keep the OCR data, just drop the duplicate doc_ref.
+    if (updErr?.code === "23505") {
+      ({ error: updErr } = await admin
+        .from("tax_documents").update({ ...payload, doc_ref: null }).eq("id", documentId));
+    }
+    if (updErr) throw new Error(`update doc: ${updErr.message}`);
 
     await deleteSlipImage(imagePath);
     imagePath = null;

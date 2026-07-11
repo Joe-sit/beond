@@ -52,7 +52,6 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
   const [camError, setCamError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [reviewDebug, setReviewDebug] = useState<string | null>(null);
   const { holdings } = useHoldings();
   const bondOptions: BondOption[] = holdings.map((h) => ({ symbol: h.symbol, issuer: h.issuer }));
 
@@ -70,12 +69,10 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
     setSaving(false);
     if (reviewDocId) {
       setFields(EMPTY_SLIP);
-      setReviewDebug(null);
       setStep("detecting");
       let alive = true;
-      getReviewSlip(reviewDocId).then(({ slip, debug }) => {
+      getReviewSlip(reviewDocId).then((slip) => {
         if (!alive) return;
-        setReviewDebug(debug);
         if (slip) {
           setFields(slip);
         } else {
@@ -250,7 +247,6 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
             saving={saving}
             saveError={saveError}
             loadError={reviewDocId ? camError : null}
-            debug={reviewDocId ? reviewDebug : null}
             bondOptions={bondOptions}
             onChange={setFields}
             onRetake={retake}
@@ -503,7 +499,6 @@ function ReviewStep({
   saving,
   saveError,
   loadError,
-  debug,
   bondOptions,
   onChange,
   onRetake,
@@ -513,7 +508,6 @@ function ReviewStep({
   saving: boolean;
   saveError: string | null;
   loadError: string | null;
-  debug: string | null;
   bondOptions: BondOption[];
   onChange: (f: SlipFields) => void;
   onRetake: () => void;
@@ -577,11 +571,6 @@ function ReviewStep({
           <div className="relative mt-3 flex items-center gap-1.5 rounded-xl bg-amber-500/20 px-3 py-2 text-xs font-medium text-white">
             <IconAlertTriangle size={14} className="shrink-0" /> {loadError} — ลองเปิดลิงก์ใหม่อีกครั้ง
           </div>
-        )}
-        {debug && (
-          <p className="relative mt-2 rounded-lg bg-black px-2 py-1 font-nunito text-xs font-bold break-all text-yellow-300">
-            debug: {debug}
-          </p>
         )}
       </div>
 
