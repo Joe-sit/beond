@@ -18,7 +18,6 @@ type ViewMode = "sector" | "rating" | "bond";
 
 const VIEW_TABS: [ViewMode, string][] = [
   ["rating", "ตามอันดับเสี่ยง"],
-  ["sector", "ตามกลุ่มธุรกิจ"],
   ["bond", "ตามรุ่น"],
 ];
 
@@ -72,10 +71,10 @@ export default function AllocationCard() {
             <ul className="flex flex-col gap-2 pb-8">
               {Array.from({ length: 4 }, (_, i) => (
                 <li key={i} className="flex items-center gap-2">
-                  <span className="h-6 w-6 shrink-0 animate-pulse rounded-full bg-black/5" />
+                  <span className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-black/5" />
                   <div className="flex flex-1 flex-col gap-1">
-                    <span className="h-3 w-20 animate-pulse rounded bg-black/5" />
-                    <span className="h-3 w-14 animate-pulse rounded bg-black/5" />
+                    <span className="h-3.5 w-24 animate-pulse rounded bg-black/5" />
+                    <span className="h-3.5 w-16 animate-pulse rounded bg-black/5" />
                   </div>
                 </li>
               ))}
@@ -107,30 +106,30 @@ export default function AllocationCard() {
                   <IssuerLogo
                     symbol={h.symbol}
                     name={h.label}
-                    size={24}
+                    size={32}
                     className={`transition-opacity duration-300 ease-out ${dimmed ? "opacity-40" : ""}`}
                   />
                 ) : (
                   <span
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors duration-300 ease-out"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors duration-300 ease-out"
                     style={{
                       backgroundColor: dimmed ? `${h.color}0D` : `${h.color}1A`,
                       color: dimmed ? `${h.color}59` : h.color,
                     }}
                   >
-                    <Icon size={15} stroke={2} />
+                    <Icon size={19} stroke={2} />
                   </span>
                 )}
-                <div className="flex min-w-0 flex-col gap-1">
+                <div className="flex min-w-0 flex-col gap-0.5">
                   <p
-                    className={`truncate text-xs leading-tight font-bold transition-colors duration-300 ease-out ${
+                    className={`truncate text-sm leading-tight font-bold transition-colors duration-300 ease-out ${
                       dimmed ? "text-black/20" : "text-black/60"
                     }`}
                   >
                     {h.label} (<span className="font-nunito">{h.pct}%</span>)
                   </p>
                   <p
-                    className={`text-xs leading-tight transition-colors duration-300 ease-out ${
+                    className={`text-sm leading-tight transition-colors duration-300 ease-out ${
                       dimmed ? "text-black/20" : "text-black/60"
                     }`}
                   >

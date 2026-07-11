@@ -1,12 +1,29 @@
-import { useAnnualIncome, currentTaxYearBE } from "../hooks/usePortfolio";
+import { useEffect } from "react";
+import { animate, motion, useMotionValue, useTransform } from "motion/react";
+import { useAnnualIncome, currentTaxYearBE, useViewedYear } from "../hooks/usePortfolio";
 
 function formatTHB(value: number): string {
   return new Intl.NumberFormat("th-TH").format(Math.round(value));
 }
 
+// Count-up the income headline whenever it changes (year swap / live refresh)
+// so the number rolls to its new value instead of snapping.
+function AnimatedTHB({ value }: { value: number }) {
+  const mv = useMotionValue(value);
+  const text = useTransform(mv, (v) => formatTHB(v));
+  useEffect(() => {
+    const controls = animate(mv, value, { duration: 0.6, ease: [0.22, 1, 0.36, 1] });
+    return controls.stop;
+  }, [value, mv]);
+  return <motion.span className="font-nunito">{text}</motion.span>;
+}
+
 export default function PortfolioHeader() {
-  const { total } = useAnnualIncome();
-  const yearBE = currentTaxYearBE();
+  // Track whichever year the timeline chart is showing; fall back to the
+  // current tax year before the timeline has picked one.
+  const viewed = useViewedYear();
+  const yearBE = viewed ? Number(viewed) : currentTaxYearBE();
+  const { total } = useAnnualIncome(yearBE - 543);
 
   return (
     // Bottom padding clears the podium in the hero band — the calc() variants
@@ -16,7 +33,7 @@ export default function PortfolioHeader() {
         รายได้ดอกเบี้ยรวมปี <span className="font-nunito">{yearBE}</span>
       </p>
       <p className="mt-2 font-nunito text-3xl font-bold tracking-tight text-white sm:text-4xl md:text-5xl">
-        ฿{formatTHB(total)}
+        ฿<AnimatedTHB value={total} />
       </p>
     </div>
   );

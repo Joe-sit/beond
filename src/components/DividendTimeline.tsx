@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Chip, Button } from "@heroui/react";
 import { IconCalendarDollar, IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
-import { useTimeline, currentTaxYearBE } from "../hooks/usePortfolio";
+import { useTimeline, currentTaxYearBE, useViewedYear, setViewedYear } from "../hooks/usePortfolio";
 import InterestBarChart from "./InterestBarChart";
 import AddBondModal from "./AddBondModal";
 import TicketPlusIcon from "./icons/TicketPlusIcon";
@@ -57,14 +57,15 @@ export default function DividendTimeline() {
     () => [...new Set(timeline.map((m) => m.year))].sort(),
     [timeline],
   );
-  const [year, setYear] = useState<string | null>(null);
+  // Viewed year lives in a shared store so the hero income header tracks it too.
+  const year = useViewedYear();
   useEffect(() => {
-    if (year || !years.length) return;
+    if ((year && years.includes(year)) || !years.length) return;
     const cur = String(currentTaxYearBE());
     const withPayout = years.filter((y) =>
       timeline.some((m) => m.year === y && m.payouts.length > 0),
     );
-    setYear(years.includes(cur) ? cur : withPayout[0] ?? years[0]);
+    setViewedYear(years.includes(cur) ? cur : withPayout[0] ?? years[0]);
   }, [years, year, timeline]);
 
   const activeYear = year && years.includes(year) ? year : years[0] ?? "";
@@ -128,7 +129,7 @@ export default function DividendTimeline() {
             <button
               type="button"
               disabled={yearIdx <= 0}
-              onClick={() => setYear(years[yearIdx - 1])}
+              onClick={() => setViewedYear(years[yearIdx - 1])}
               aria-label="ปีก่อนหน้า"
               className="absolute top-1/2 left-2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white text-[#43507F] shadow-md transition enabled:hover:bg-[#43507F]/5 disabled:opacity-0"
             >
@@ -137,7 +138,7 @@ export default function DividendTimeline() {
             <button
               type="button"
               disabled={yearIdx >= years.length - 1}
-              onClick={() => setYear(years[yearIdx + 1])}
+              onClick={() => setViewedYear(years[yearIdx + 1])}
               aria-label="ปีถัดไป"
               className="absolute top-1/2 right-2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white text-[#43507F] shadow-md transition enabled:hover:bg-[#43507F]/5 disabled:opacity-0"
             >
@@ -154,7 +155,7 @@ export default function DividendTimeline() {
                   <button
                     key={y}
                     type="button"
-                    onClick={() => setYear(y)}
+                    onClick={() => setViewedYear(y)}
                     aria-label={`ปี ${y}`}
                     className={`h-1.5 rounded-full transition-all ${
                       y === activeYear ? "w-4 bg-[#43507F]" : "w-1.5 bg-black/15 hover:bg-black/30"

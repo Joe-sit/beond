@@ -191,8 +191,18 @@ export async function createTaxDocument(patch: TaxDocPatch): Promise<SaveResult>
 // Load a saved tax document as SlipFields for the OCR-review screen — used by the
 // LINE "แก้ไข" deep link (?review=<id>) so a pending slip can be reviewed/edited
 // in the web app before confirming. RLS scopes it to the caller's own rows.
-export async function getReviewSlip(id: string): Promise<SlipFields | null> {
-  if (!supabaseEnabled || !supabase) return null;
+// Result carries an on-screen debug string so the LIFF review flow is testable
+// on a phone without a console: open LINE → tap แก้ไข → read the line on screen.
+export interface ReviewSlipResult {
+  slip: SlipFields | null;
+  debug: string;
+}
+
+export async function getReviewSlip(id: string): Promise<ReviewSlipResult> {
+  if (!supabaseEnabled || !supabase) return { slip: null, debug: "supabase off" };
+  const { data: sess } = await supabase.auth.getSession();
+  const puid = sess.session?.user.app_metadata?.public_user_id as string | undefined;
+  const dbg = `session=${!!sess.session} puid=${puid ? puid.slice(0, 8) : "none"}`;
   const { data, error } = await supabase
     .from("tax_documents")
     .select(
@@ -201,8 +211,7 @@ export async function getReviewSlip(id: string): Promise<SlipFields | null> {
     .eq("id", id)
     .maybeSingle();
   if (error || !data) {
-    console.error("getReviewSlip failed:", error?.message);
-    return null;
+    return { slip: null, debug: `${dbg} rows=0 err=${error?.message ?? "none"}` };
   }
   // Resolve the bond code separately (avoid an embed that can fail on relationship
   // inference); net_amount isn't stored, so derive it from gross − wht.
@@ -216,17 +225,20 @@ export async function getReviewSlip(id: string): Promise<SlipFields | null> {
       ? Math.round((data.gross_amount - data.wht_amount) * 100) / 100
       : null;
   return {
-    payer_name: data.payer_name,
-    payer_tax_id: data.payer_tax_id,
-    income_subtype: data.income_subtype,
-    gross_amount: data.gross_amount,
-    net_amount: net,
-    wht_amount: data.wht_amount,
-    wht_rate: data.wht_rate,
-    pay_date: data.pay_date,
-    doc_ref: data.doc_ref,
-    tax_year: data.tax_year,
-    bond_symbol: bondSymbol,
+    slip: {
+      payer_name: data.payer_name,
+      payer_tax_id: data.payer_tax_id,
+      income_subtype: data.income_subtype,
+      gross_amount: data.gross_amount,
+      net_amount: net,
+      wht_amount: data.wht_amount,
+      wht_rate: data.wht_rate,
+      pay_date: data.pay_date,
+      doc_ref: data.doc_ref,
+      tax_year: data.tax_year,
+      bond_symbol: bondSymbol,
+    },
+    debug: `${dbg} rows=1`,
   };
 }
 

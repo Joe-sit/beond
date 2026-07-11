@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import {
   allocationHoldings as mockHoldings,
@@ -445,22 +445,50 @@ export function currentTaxYearBE(): number {
   return new Date().getFullYear() + 543;
 }
 
-// Total coupon income received/scheduled in the current calendar year — the
-// headline number in the hero. Live-refreshes on payout changes.
-function mockAnnualIncome(): number {
-  const y = new Date().getFullYear();
+// The timeline year (BE string, e.g. "2568") the user is currently viewing in
+// the interest chart, shared with the hero income header so its headline total
+// tracks whichever year the chart shows. The timeline owns writes; the header
+// reads. Module-level so the two sibling components stay in sync without a
+// provider wrapping them.
+let viewedYearBE: string | null = null;
+const viewedYearListeners = new Set<() => void>();
+
+export function setViewedYear(year: string | null): void {
+  if (year === viewedYearBE) return;
+  viewedYearBE = year;
+  viewedYearListeners.forEach((l) => l());
+}
+
+export function useViewedYear(): string | null {
+  return useSyncExternalStore(
+    (cb) => {
+      viewedYearListeners.add(cb);
+      return () => viewedYearListeners.delete(cb);
+    },
+    () => viewedYearBE,
+    () => viewedYearBE,
+  );
+}
+
+// Total coupon income received/scheduled in a given calendar year — the
+// headline number in the hero. Defaults to the current year; the hero passes
+// the year the user is viewing in the timeline. Live-refreshes on payout changes.
+function mockAnnualIncome(yearCE: number): number {
   return mockTimeline
     .flatMap((m) => m.payouts)
-    .filter((p) => new Date(p.payoutDate).getFullYear() === y)
+    .filter((p) => new Date(p.payoutDate).getFullYear() === yearCE)
     .reduce((s, p) => s + p.amount, 0);
 }
 
-export function useAnnualIncome(): { total: number } {
-  const [total, setTotal] = useState(supabaseEnabled ? 0 : mockAnnualIncome());
+export function useAnnualIncome(yearCE?: number): { total: number } {
+  const year = yearCE ?? new Date().getFullYear();
+  const [total, setTotal] = useState(supabaseEnabled ? 0 : mockAnnualIncome(year));
 
   const load = useCallback(async () => {
-    if (!supabaseEnabled || !supabase) return;
-    const year = new Date().getFullYear();
+    if (!supabaseEnabled || !supabase) {
+      setTotal(mockAnnualIncome(year));
+      return;
+    }
     const { data, error } = await supabase
       .from("payouts")
       .select("amount")
@@ -468,7 +496,7 @@ export function useAnnualIncome(): { total: number } {
       .lte("payout_date", `${year}-12-31`);
     if (error) return;
     setTotal((data as { amount: number }[]).reduce((s, p) => s + Number(p.amount), 0));
-  }, []);
+  }, [year]);
 
   useEffect(() => {
     load();
