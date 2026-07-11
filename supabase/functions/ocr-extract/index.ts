@@ -9,17 +9,15 @@
 // Auth: caller must present a valid Supabase session JWT (logged-in user) since
 // this spends Typhoon credits.
 //
-// Env: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (auto), TYPHOON_API_KEY.
+// Env: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (auto), GEMINI_API_KEY.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const TYPHOON_KEY = Deno.env.get("TYPHOON_API_KEY")!;
-const TYPHOON_URL = "https://api.opentyphoon.ai/v1/chat/completions";
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
-const GEMINI_MODEL = "gemini-flash-latest";
+const GEMINI_MODEL = "gemini-flash-lite-latest";
 const GEMINI_URL =
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
@@ -47,72 +45,14 @@ interface SlipFields {
   bond_symbol: string | null;
 }
 
-const OCR_PROMPT =
-  "Below is an image of a document page along with its dimensions. " +
-  "Simply return the markdown representation of this document, presenting tables in markdown format as they naturally appear.\n" +
-  "If the document contains images, use a placeholder like dummy.png for each image.\n" +
-  "Your final output must be in JSON format with a single key `natural_text` containing the response.\n" +
-  "RAW_TEXT_START\n\nRAW_TEXT_END";
-
-async function typhoonOcr(bytes: Uint8Array, contentType: string): Promise<string> {
-  const mime = contentType.includes("png") ? "image/png" : "image/jpeg";
-  const dataUri = `data:${mime};base64,${encodeBase64(bytes)}`;
-  const res = await fetch(TYPHOON_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TYPHOON_KEY}` },
-    body: JSON.stringify({
-      model: "typhoon-ocr",
-      max_tokens: 16000,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: OCR_PROMPT },
-            { type: "image_url", image_url: { url: dataUri } },
-          ],
-        },
-      ],
-      repetition_penalty: 1.2,
-      temperature: 0.1,
-      top_p: 0.6,
-    }),
-  });
-  if (!res.ok) throw new Error(`typhoon-ocr ${res.status}: ${await res.text()}`);
-  const json = await res.json();
-  const content: string = json.choices?.[0]?.message?.content ?? "";
-  try {
-    return JSON.parse(content).natural_text ?? content;
-  } catch {
-    return content;
-  }
-}
-
-const EXTRACT_SYS =
-  "คุณเป็นผู้ช่วยสกัดข้อมูลจาก 'หนังสือรับรองการหักภาษี ณ ที่จ่าย (50 ทวิ)' ของดอกเบี้ยหุ้นกู้/พันธบัตร\n" +
-  "กติกาสำคัญ:\n" +
-  "- คัดลอกเฉพาะข้อความ/ตัวเลขที่ปรากฏจริงในเอกสาร ห้ามเดาหรือแต่งชื่อขึ้นเอง ถ้าไม่พบให้เป็น null\n" +
-  "- ห้ามดึงเลขประจำตัวประชาชนของผู้ถูกหักภาษี (payee) เด็ดขาด — ไม่ต้องอ่าน ไม่ต้องส่งกลับ\n" +
-  "- payer_name = ชื่อ 'ผู้มีหน้าที่หักภาษี ณ ที่จ่าย' (บริษัทผู้ออกหุ้นกู้/ผู้จ่ายดอกเบี้ย) ที่อยู่ส่วนหัวเอกสาร\n" +
-  "- payer_tax_id = เลขประจำตัวผู้เสียภาษีของบริษัทผู้จ่าย (นิติบุคคล 13 หลัก)\n" +
-  "- bond_symbol = รหัสหุ้นกู้รูปแบบ ตัวอักษร+ตัวเลข+ตัวอักษร เช่น BRI275A, ORI288B\n" +
-  "- gross_amount = ยอด 'จำนวนเงิน (บาท) / Total' ของแถวดอกเบี้ย, net_amount = 'คงเหลือจ่ายจริง / Net balance', " +
-  "wht_amount = 'จำนวนเงินภาษีที่หักไว้ / Less income tax'. ต้องสอดคล้อง: gross = net + tax (ถ้าขัดกันยึด net + tax)\n" +
-  "- wht_rate = อัตราภาษีหัก ณ ที่จ่าย (%) ปกติ 15 (อย่าสับสนกับอัตราดอกเบี้ยต่อปี)\n" +
-  "- pay_date = วันที่จ่ายดอกเบี้ยจริง, tax_year = ปีภาษี (พ.ศ.) = ปีของ pay_date, แปลง pay_date เป็น 'YYYY-MM-DD' แบบ ค.ศ. (พ.ศ. - 543)\n" +
-  "ตอบกลับเป็น JSON อย่างเดียว ตาม schema:\n" +
-  '{"payer_name":string,"payer_tax_id":string,"income_subtype":string,' +
-  '"gross_amount":number,"net_amount":number,"wht_amount":number,' +
-  '"wht_rate":number,"pay_date":string,"doc_ref":string,"tax_year":number,"bond_symbol":string}';
-
 // ── Gemini: image → structured fields in one call ──────────────────────────
-// Gemini 2.5 Flash reads Thai + numbers reliably and returns strict JSON via a
-// responseSchema, so we skip the OCR→markdown→LLM two-step (which hallucinated).
+// Reads Thai + numbers reliably and returns strict JSON via a responseSchema.
 const GEMINI_PROMPT =
   "รูปนี้คือ 'หนังสือรับรองการหักภาษี ณ ที่จ่าย (50 ทวิ)' ของดอกเบี้ยหุ้นกู้/พันธบัตร " +
   "สกัดข้อมูลตาม schema. กติกา:\n" +
   "- คัดเฉพาะที่ปรากฏจริง ห้ามเดา ถ้าไม่พบให้เป็น null\n" +
   "- ห้ามอ่าน/ส่งเลขบัตรประชาชนของผู้ถูกหักภาษี (payee) เด็ดขาด\n" +
-  "- payer_tax_id = เลขประจำตัวผู้เสียภาษีของบริษัทผู้จ่ายดอกเบี้ย (นิติบุคคล 13 หลัก)\n" +
+  "- payer_tax_id = เลขประจำตัวผู้เสียภาษี 13 หลัก ของบริษัทผู้จ่ายดอกเบี้ย (อยู่ติด/ใต้ชื่อบริษัทผู้จ่ายในตารางรายละเอียด) — ห้ามใช้เลขทะเบียนหัวกระดาษ ห้ามใช้เลขของธนาคาร/นายทะเบียน\n" +
   "- payer_name = ชื่อบริษัทผู้จ่าย (ผู้มีหน้าที่หักภาษี ณ ที่จ่าย)\n" +
   "- bond_symbol = รหัสหุ้นกู้ เช่น BRI275A, ORI288B (อักษร+เลข+อักษร) ถ้าไม่มีให้ null\n" +
   "- gross_amount = จำนวนเงินที่จ่าย, wht_amount = ภาษีที่หักไว้, net_amount = คงเหลือจ่ายจริง (gross = net + wht)\n" +
@@ -138,114 +78,47 @@ const GEMINI_SCHEMA = {
 
 async function geminiExtract(bytes: Uint8Array, contentType: string): Promise<SlipFields> {
   const mime = contentType.includes("png") ? "image/png" : "image/jpeg";
-  const res = await fetch(GEMINI_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { inline_data: { mime_type: mime, data: encodeBase64(bytes) } },
-            { text: GEMINI_PROMPT },
-          ],
+  // Abort if Gemini stalls so the request fails fast instead of hanging.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 45_000);
+  let res: Response;
+  try {
+    res = await fetch(GEMINI_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inline_data: { mime_type: mime, data: encodeBase64(bytes) } },
+              { text: GEMINI_PROMPT },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: "application/json",
+          responseSchema: GEMINI_SCHEMA,
         },
-      ],
-      generationConfig: {
-        temperature: 0,
-        responseMimeType: "application/json",
-        responseSchema: GEMINI_SCHEMA,
-      },
-    }),
-  });
+      }),
+    });
+  } catch (e) {
+    throw new Error(ctrl.signal.aborted ? "gemini timeout (45s)" : `gemini fetch: ${(e as Error).message}`);
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) throw new Error(`gemini ${res.status}: ${await res.text()}`);
   const json = await res.json();
   const text: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
   return JSON.parse(text) as SlipFields;
 }
 
-async function typhoonExtract(markdown: string): Promise<SlipFields> {
-  const res = await fetch(TYPHOON_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TYPHOON_KEY}` },
-    body: JSON.stringify({
-      model: "typhoon-v2.5-30b-a3b-instruct",
-      max_tokens: 1024,
-      temperature: 0,
-      messages: [
-        { role: "system", content: EXTRACT_SYS },
-        { role: "user", content: markdown },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`typhoon-extract ${res.status}: ${await res.text()}`);
-  const json = await res.json();
-  let content: string = json.choices?.[0]?.message?.content ?? "{}";
-  content = content.replace(/```json\s*|\s*```/g, "").trim();
-  const start = content.indexOf("{");
-  const end = content.lastIndexOf("}");
-  if (start >= 0 && end > start) content = content.slice(start, end + 1);
-  return JSON.parse(content) as SlipFields;
-}
-
 function num(v: unknown): number | null {
   if (v === null || v === undefined) return null;
   const n = typeof v === "number" ? v : Number(String(v).replace(/[, ]/g, ""));
   return Number.isFinite(n) ? n : null;
-}
-
-// ── Deterministic parse of the OCR markdown ─────────────────────────────────
-// The Typhoon LLM extractor hallucinates on messy slips (trillion-baht gross,
-// invented payer names), so for rule-derivable fields we parse the markdown
-// directly and override the LLM. Mirrors line-webhook.
-const MONEY_RE = /\d{1,3}(?:,\d{3})*\.\d{2}(?!\d)/g;
-
-function parseMoneyTriple(text: string): { gross: number; net: number; wht: number; rate: number } | null {
-  const vals = [...new Set((text.match(MONEY_RE) ?? []).map((s) => Number(s.replace(/,/g, ""))))].filter((v) => v > 0);
-  let best: { gross: number; net: number; wht: number; rate: number; err: number } | null = null;
-  for (const g of vals) for (const n of vals) for (const t of vals) {
-    if (g === n || g === t || n === t) continue;
-    if (Math.abs(g - (n + t)) > 1 || g < n || g < t) continue;
-    const [net, wht] = n >= t ? [n, t] : [t, n];
-    const rate = wht / g;
-    if (rate < 0.05 || rate > 0.3) continue;
-    const err = Math.abs(rate - 0.15);
-    if (!best || err < best.err) best = { gross: g, net, wht, rate: Math.round(rate * 100), err };
-  }
-  return best ? { gross: best.gross, net: best.net, wht: best.wht, rate: best.rate } : null;
-}
-
-function parsePayerName(text: string): string | null {
-  const m = [...text.matchAll(/บริษัท\s+[^\n|]+?จำกัด\s*\(มหาชน\)/g)].map((x) => x[0].trim());
-  return m.find((s) => !/ธนาคาร/.test(s)) ?? null;
-}
-
-function parsePayerTaxId(text: string, payer: string | null): string | null {
-  if (payer) {
-    const i = text.indexOf(payer);
-    if (i >= 0) {
-      const after = text.slice(i, i + 200).match(/0\d{12}(?!\d)/);
-      if (after) return after[0];
-    }
-  }
-  const ids = [...text.matchAll(/0\d{12}(?!\d)/g)].map((m) => m[0]);
-  return ids.length ? ids[ids.length - 1] : null;
-}
-
-// Override the LLM's hallucination-prone fields with the deterministic parse.
-function applyDeterministic(f: SlipFields, markdown: string): SlipFields {
-  const triple = parseMoneyTriple(markdown);
-  if (triple) {
-    f.gross_amount = triple.gross;
-    f.net_amount = triple.net;
-    f.wht_amount = triple.wht;
-    f.wht_rate = triple.rate;
-  }
-  const payer = parsePayerName(markdown);
-  if (payer) f.payer_name = payer;
-  const tid = parsePayerTaxId(markdown, payer ?? f.payer_name);
-  if (tid) f.payer_tax_id = tid;
-  return f;
 }
 
 // Reconcile amounts using the slip's own arithmetic (net + tax = gross).
@@ -310,15 +183,8 @@ Deno.serve(async (req) => {
     const bytes = Uint8Array.from(atob(image), (c) => c.charCodeAt(0));
     const ct = contentType ?? "image/jpeg";
 
-    let fields: SlipFields;
-    if (GEMINI_KEY) {
-      // Primary: Gemini vision → structured JSON (one call, reads Thai reliably).
-      fields = reconcile(await geminiExtract(bytes, ct));
-    } else {
-      // Fallback: Typhoon OCR → markdown → deterministic parse.
-      const markdown = await typhoonOcr(bytes, ct);
-      fields = reconcile(applyDeterministic(await typhoonExtract(markdown), markdown));
-    }
+    // Gemini vision → structured JSON (one call, reads Thai reliably).
+    const fields = reconcile(await geminiExtract(bytes, ct));
     await bumpScanQuota(userId);
     return json({ ok: true, fields });
   } catch (e) {

@@ -445,6 +445,20 @@ function DetectingStep({ shot, fields }: { shot: string | null; fields: SlipFiel
     return () => clearInterval(id);
   }, [found.length]);
 
+  // Elapsed-time sub-message while scanning, so a slow OCR still feels alive.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!scanning) return;
+    const id = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [scanning]);
+  const scanHint =
+    elapsed < 6
+      ? "ระบบกำลังตรวจจับตัวเลขและรายละเอียด"
+      : elapsed < 15
+        ? "ใช้เวลาสักครู่นะ กำลังอ่านให้แม่นที่สุด…"
+        : "ยังอ่านอยู่ ⏳ ถ้าไม่ขึ้นผลลองถ่ายใหม่ให้ชัดขึ้น";
+
   return (
     <div className="relative flex flex-1 flex-col items-center justify-center px-6">
       {shot && (
@@ -454,7 +468,7 @@ function DetectingStep({ shot, fields }: { shot: string | null; fields: SlipFiel
         <div className="relative flex flex-col items-center gap-4">
           <IconLoader2 size={44} className="animate-spin text-white" />
           <p className="text-sm font-medium">กำลังอ่านข้อมูลจากสลิป…</p>
-          <p className="text-xs text-white/60">ระบบกำลังตรวจจับตัวเลขและรายละเอียด</p>
+          <p className="min-h-4 text-center text-xs text-white/60">{scanHint}</p>
         </div>
       ) : (
         <div className="relative w-full max-w-xs">

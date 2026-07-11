@@ -9,7 +9,7 @@
 //   • text     → short instructions
 //
 // Env (Supabase Dashboard → Edge Function Secrets):
-//   LINE_MESSAGING_ACCESS_TOKEN, LINE_MESSAGING_CHANNEL_SECRET, TYPHOON_API_KEY
+//   LINE_MESSAGING_ACCESS_TOKEN, LINE_MESSAGING_CHANNEL_SECRET, GEMINI_API_KEY
 //   SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are injected automatically.
 //   service_role needs table grants (migration 0008).
 
@@ -18,13 +18,11 @@ import { encodeBase64 } from "jsr:@std/encoding/base64";
 
 const LINE_TOKEN = Deno.env.get("LINE_MESSAGING_ACCESS_TOKEN")!;
 const LINE_SECRET = Deno.env.get("LINE_MESSAGING_CHANNEL_SECRET")!;
-const TYPHOON_KEY = Deno.env.get("TYPHOON_API_KEY")!;
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-const TYPHOON_URL = "https://api.opentyphoon.ai/v1/chat/completions";
-const GEMINI_MODEL = "gemini-flash-latest";
+const GEMINI_MODEL = "gemini-flash-lite-latest";
 const GEMINI_URL =
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 // LIFF entry for the "แก้ไข" deep link → opens the web OCR-review screen. The
@@ -49,15 +47,6 @@ async function verifySignature(body: string, signature: string | null): Promise<
   return expected === signature;
 }
 
-// Chunked base64 (spread on a big Uint8Array overflows the call stack).
-function toBase64(bytes: Uint8Array): string {
-  let bin = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(bin);
-}
 
 // ── LINE API ────────────────────────────────────────────────────────────────
 async function lineReply(replyToken: string, messages: unknown[]): Promise<void> {
@@ -95,49 +84,7 @@ async function lineImageContent(messageId: string): Promise<{ bytes: Uint8Array;
   return { bytes: new Uint8Array(await res.arrayBuffer()), contentType };
 }
 
-// ── Typhoon OCR + extraction ────────────────────────────────────────────────
-// Prompt from the typhoon-ocr SDK: returns JSON {"natural_text": "<markdown>"}.
-const OCR_PROMPT =
-  "Below is an image of a document page along with its dimensions. " +
-  "Simply return the markdown representation of this document, presenting tables in markdown format as they naturally appear.\n" +
-  "If the document contains images, use a placeholder like dummy.png for each image.\n" +
-  "Your final output must be in JSON format with a single key `natural_text` containing the response.\n" +
-  "RAW_TEXT_START\n\nRAW_TEXT_END";
-
-async function typhoonOcr(bytes: Uint8Array, contentType: string): Promise<string> {
-  const mime = contentType.includes("png") ? "image/png" : "image/jpeg";
-  const dataUri = `data:${mime};base64,${toBase64(bytes)}`;
-  const res = await fetch(TYPHOON_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TYPHOON_KEY}` },
-    body: JSON.stringify({
-      model: "typhoon-ocr",
-      max_tokens: 16000,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: OCR_PROMPT },
-            { type: "image_url", image_url: { url: dataUri } },
-          ],
-        },
-      ],
-      repetition_penalty: 1.2,
-      temperature: 0.1,
-      top_p: 0.6,
-    }),
-  });
-  if (!res.ok) throw new Error(`typhoon-ocr ${res.status}: ${await res.text()}`);
-  const json = await res.json();
-  const content: string = json.choices?.[0]?.message?.content ?? "";
-  // content is itself JSON: {"natural_text": "..."}. Fall back to raw content.
-  try {
-    return JSON.parse(content).natural_text ?? content;
-  } catch {
-    return content;
-  }
-}
-
+// ── OCR: Gemini vision ──────────────────────────────────────────────────────
 interface SlipFields {
   payer_name: string | null;
   payer_tax_id: string | null;
@@ -152,41 +99,13 @@ interface SlipFields {
   bond_symbol: string | null;
 }
 
-// Privacy: beond is only a middleman for bond/tax-credit tracking, so we never
-// ask the model for — and never store — the investor's national ID (payee tax
-// id). We keep only what a 40(4) filing needs: the payer + amounts + dates.
-const EXTRACT_SYS =
-  "คุณเป็นผู้ช่วยสกัดข้อมูลจาก 'หนังสือรับรองการหักภาษี ณ ที่จ่าย (50 ทวิ)' ของดอกเบี้ยหุ้นกู้/พันธบัตร\n" +
-  "กติกาสำคัญ:\n" +
-  "- คัดลอกเฉพาะข้อความ/ตัวเลขที่ปรากฏจริงในเอกสาร ห้ามเดาหรือแต่งชื่อขึ้นเอง ถ้าไม่พบให้เป็น null\n" +
-  "- ห้ามดึงเลขประจำตัวประชาชนของผู้ถูกหักภาษี (payee) เด็ดขาด — ไม่ต้องอ่าน ไม่ต้องส่งกลับ\n" +
-  "- payer_name = ชื่อ 'ผู้มีหน้าที่หักภาษี ณ ที่จ่าย' (บริษัทผู้ออกหุ้นกู้/ผู้จ่ายดอกเบี้ย) ที่อยู่ส่วนหัวเอกสาร " +
-  "เช่น 'บริษัท บริทาเนีย จำกัด (มหาชน)' ไม่ใช่ชื่อธนาคารหรือนายทะเบียน\n" +
-  "- payer_tax_id = เลขประจำตัวผู้เสียภาษีของบริษัทผู้จ่าย (นิติบุคคล 13 หลัก) — ไม่ใช่บัตรประชาชนบุคคล\n" +
-  "- bond_symbol = รหัสหุ้นกู้รูปแบบ ตัวอักษร+ตัวเลข+ตัวอักษร เช่น BRI275A, ORI288B ที่มักอยู่หน้า 'หุ้นกู้ของบริษัท...'\n" +
-  "- gross_amount = ยอด 'จำนวนเงิน (บาท) / Total' ของแถวดอกเบี้ย (เงินได้ก่อนหักภาษี), " +
-  "net_amount = 'คงเหลือจ่ายจริง / Net balance', wht_amount = 'จำนวนเงินภาษีที่หักไว้ / Less income tax'. " +
-  "ต้องสอดคล้องกัน: gross_amount = net_amount + wht_amount (ถ้าอ่านขัดกันให้ยึด net + tax)\n" +
-  "- wht_rate = อัตราภาษีหัก ณ ที่จ่าย (%) โดยปกติดอกเบี้ยหุ้นกู้บุคคลธรรมดา = 15 " +
-  "(อย่าสับสนกับ 'อัตราร้อยละ x ต่อปี' ซึ่งเป็นอัตราดอกเบี้ย ไม่ใช่อัตราภาษี)\n" +
-  "- pay_date = วันที่จ่ายดอกเบี้ยจริง (เช่น 'จ่าย ณ วันที่ 30 เมษายน 2569' หรือวันสิ้นงวด) " +
-  "ห้ามใช้วันที่ในข้อความอ้างอิงกฎหมาย เช่น 'ตามหนังสือที่ กค 0809/5220 ลงวันที่ 12 มิถุนายน 2545'\n" +
-  "- tax_year = ปีภาษี (พ.ศ.) = ปีของ pay_date\n" +
-  "- แปลง pay_date เป็น 'YYYY-MM-DD' แบบ ค.ศ. (พ.ศ. - 543)\n" +
-  "ตอบกลับเป็น JSON อย่างเดียว ห้ามมีข้อความอื่น ตาม schema:\n" +
-  '{"payer_name":string,"payer_tax_id":string(นิติบุคคล 13 หลัก),' +
-  '"income_subtype":string(เช่น "ดอกเบี้ยหุ้นกู้"),' +
-  '"gross_amount":number,"net_amount":number,"wht_amount":number,' +
-  '"wht_rate":number,"pay_date":string,"doc_ref":string(เลขที่/ลำดับที่เอกสาร),' +
-  '"tax_year":number,"bond_symbol":string}';
-
-// Gemini vision — image → structured fields in one call (reads Thai reliably,
-// no OCR→markdown→LLM hallucination). Primary path when GEMINI_API_KEY is set.
+// Gemini vision — image → structured fields in one call. Privacy: we never ask
+// for (nor store) the payee's national ID — only 40(4) filing fields.
 const GEMINI_PROMPT =
   "รูปนี้คือ 'หนังสือรับรองการหักภาษี ณ ที่จ่าย (50 ทวิ)' ของดอกเบี้ยหุ้นกู้/พันธบัตร สกัดข้อมูลตาม schema. กติกา:\n" +
   "- คัดเฉพาะที่ปรากฏจริง ห้ามเดา ถ้าไม่พบให้เป็น null\n" +
   "- ห้ามอ่าน/ส่งเลขบัตรประชาชนของผู้ถูกหักภาษี (payee) เด็ดขาด\n" +
-  "- payer_tax_id = เลขประจำตัวผู้เสียภาษีของบริษัทผู้จ่ายดอกเบี้ย (นิติบุคคล 13 หลัก)\n" +
+  "- payer_tax_id = เลขประจำตัวผู้เสียภาษี 13 หลัก ของบริษัทผู้จ่ายดอกเบี้ย (อยู่ติด/ใต้ชื่อบริษัทผู้จ่ายในตารางรายละเอียด) — ห้ามใช้เลขทะเบียนหัวกระดาษ ห้ามใช้เลขของธนาคาร/นายทะเบียน\n" +
   "- payer_name = ชื่อบริษัทผู้จ่าย (ไม่ใช่ธนาคาร/นายทะเบียน)\n" +
   "- bond_symbol = รหัสหุ้นกู้ เช่น BRI275A, ORI288B ถ้าไม่มีให้ null\n" +
   "- gross_amount = จำนวนเงินที่จ่าย, wht_amount = ภาษีที่หักไว้, net_amount = คงเหลือจ่ายจริง (gross = net + wht)\n" +
@@ -212,50 +131,42 @@ const GEMINI_SCHEMA = {
 
 async function geminiExtract(bytes: Uint8Array, contentType: string): Promise<SlipFields> {
   const mime = contentType.includes("png") ? "image/png" : "image/jpeg";
-  const res = await fetch(GEMINI_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { inline_data: { mime_type: mime, data: encodeBase64(bytes) } },
-            { text: GEMINI_PROMPT },
-          ],
+  // Abort if Gemini stalls so the flow fails fast (→ user-visible error) instead
+  // of hanging the background task silently.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 45_000);
+  let res: Response;
+  try {
+    res = await fetch(GEMINI_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inline_data: { mime_type: mime, data: encodeBase64(bytes) } },
+              { text: GEMINI_PROMPT },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: "application/json",
+          responseSchema: GEMINI_SCHEMA,
         },
-      ],
-      generationConfig: { temperature: 0, responseMimeType: "application/json", responseSchema: GEMINI_SCHEMA },
-    }),
-  });
+      }),
+    });
+  } catch (e) {
+    throw new Error(ctrl.signal.aborted ? "gemini timeout (45s)" : `gemini fetch: ${(e as Error).message}`);
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) throw new Error(`gemini ${res.status}: ${await res.text()}`);
   const json = await res.json();
   const text: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
   return JSON.parse(text) as SlipFields;
-}
-
-async function typhoonExtract(markdown: string): Promise<SlipFields> {
-  const res = await fetch(TYPHOON_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TYPHOON_KEY}` },
-    body: JSON.stringify({
-      model: "typhoon-v2.5-30b-a3b-instruct",
-      max_tokens: 1024,
-      temperature: 0,
-      messages: [
-        { role: "system", content: EXTRACT_SYS },
-        { role: "user", content: markdown },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`typhoon-extract ${res.status}: ${await res.text()}`);
-  const json = await res.json();
-  let content: string = json.choices?.[0]?.message?.content ?? "{}";
-  content = content.replace(/```json\s*|\s*```/g, "").trim();
-  const start = content.indexOf("{");
-  const end = content.lastIndexOf("}");
-  if (start >= 0 && end > start) content = content.slice(start, end + 1);
-  return JSON.parse(content) as SlipFields;
 }
 
 function num(v: unknown): number | null {
@@ -267,51 +178,6 @@ function num(v: unknown): number | null {
 // Canonicalize a bond code so OCR's O↔0 / I↔1 confusions still match the
 // catalog. Mirrors the web scan flow's canonSym.
 const canonSym = (s: string) => s.replace(/O/g, "0").replace(/I/g, "1");
-
-// ── Deterministic parse of the OCR markdown ─────────────────────────────────
-// The Typhoon LLM extractor hallucinates on messy slips (e.g. gross of a
-// trillion baht, invented payer names), so for the fields we can derive by rule
-// we parse the OCR markdown directly and override the LLM. Amounts and the
-// payer are far more reliable this way; only the bond code, which the OCR
-// sometimes drops entirely, still leans on the LLM (validated against catalog).
-const MONEY_RE = /\d{1,3}(?:,\d{3})*\.\d{2}(?!\d)/g;
-
-// gross = net + wht with a plausible ~15% withholding rate. Returns the triple
-// whose rate is closest to 15%, or null if none is sane.
-function parseMoneyTriple(text: string): { gross: number; net: number; wht: number; rate: number } | null {
-  const vals = [...new Set((text.match(MONEY_RE) ?? []).map((s) => Number(s.replace(/,/g, ""))))].filter((v) => v > 0);
-  let best: { gross: number; net: number; wht: number; rate: number; err: number } | null = null;
-  for (const g of vals) for (const n of vals) for (const t of vals) {
-    if (g === n || g === t || n === t) continue;
-    if (Math.abs(g - (n + t)) > 1 || g < n || g < t) continue;
-    const [net, wht] = n >= t ? [n, t] : [t, n];
-    const rate = wht / g;
-    if (rate < 0.05 || rate > 0.3) continue;
-    const err = Math.abs(rate - 0.15);
-    if (!best || err < best.err) best = { gross: g, net, wht, rate: Math.round(rate * 100), err };
-  }
-  return best ? { gross: best.gross, net: best.net, wht: best.wht, rate: best.rate } : null;
-}
-
-// The issuing company: "บริษัท … จำกัด (มหาชน)" that is not a bank.
-function parsePayerName(text: string): string | null {
-  const m = [...text.matchAll(/บริษัท\s+[^\n|]+?จำกัด\s*\(มหาชน\)/g)].map((x) => x[0].trim());
-  return m.find((s) => !/ธนาคาร/.test(s)) ?? null;
-}
-
-// The payer's juristic tax id (leading 0) sits right after its name; fall back
-// to the last leading-0 id (a bank letterhead reg tends to appear first).
-function parsePayerTaxId(text: string, payer: string | null): string | null {
-  if (payer) {
-    const i = text.indexOf(payer);
-    if (i >= 0) {
-      const after = text.slice(i, i + 200).match(/0\d{12}(?!\d)/);
-      if (after) return after[0];
-    }
-  }
-  const ids = [...text.matchAll(/0\d{12}(?!\d)/g)].map((m) => m[0]);
-  return ids.length ? ids[ids.length - 1] : null;
-}
 
 // ── Slip processing (background) ────────────────────────────────────────────
 async function processSlip(documentId: string, lineUserId: string): Promise<void> {
@@ -327,26 +193,16 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const contentType = blob.type || "image/jpeg";
 
+    // Reassure the user if OCR runs long (usually ~5s). Cleared once it lands.
+    const slow = setTimeout(() => {
+      linePush(lineUserId, [{ type: "text", text: "ยังอ่านข้อมูลอยู่นะครับ ⏳ อีกสักครู่" }]).catch(() => {});
+    }, 12_000);
+    // Gemini vision reads the slip directly (accurate on Thai + skew).
     let f: SlipFields;
-    if (GEMINI_KEY) {
-      // Primary: Gemini vision reads the slip directly (accurate on Thai + skew).
+    try {
       f = await geminiExtract(bytes, contentType);
-    } else {
-      // Fallback: Typhoon OCR → markdown → LLM, then override the LLM's
-      // hallucination-prone fields with a deterministic parse of the markdown.
-      const markdown = await typhoonOcr(bytes, contentType);
-      f = await typhoonExtract(markdown);
-      const triple = parseMoneyTriple(markdown);
-      if (triple) {
-        f.gross_amount = triple.gross;
-        f.net_amount = triple.net;
-        f.wht_amount = triple.wht;
-        f.wht_rate = triple.rate;
-      }
-      const parsedPayer = parsePayerName(markdown);
-      if (parsedPayer) f.payer_name = parsedPayer;
-      const parsedTaxId = parsePayerTaxId(markdown, parsedPayer ?? f.payer_name);
-      if (parsedTaxId) f.payer_tax_id = parsedTaxId;
+    } finally {
+      clearTimeout(slow);
     }
 
     // Cross-check amounts: the slip's own arithmetic (net + tax = gross) is more
@@ -514,20 +370,30 @@ const SCAN_DAILY_LIMIT = 5;
 const today = () => new Date().toISOString().slice(0, 10);
 
 // True when the user has hit the daily scan cap (exempt accounts never do).
+// Fail-open: any error (e.g. quota tables not yet migrated) must NOT block OCR.
 async function scanQuotaExceeded(userId: string): Promise<boolean> {
-  const { data: u } = await admin.from("users").select("scan_unlimited").eq("id", userId).maybeSingle();
-  if (u?.scan_unlimited) return false;
-  const { data: row } = await admin
-    .from("scan_usage").select("count").eq("user_id", userId).eq("day", today()).maybeSingle();
-  return (row?.count ?? 0) >= SCAN_DAILY_LIMIT;
+  try {
+    const { data: u } = await admin.from("users").select("scan_unlimited").eq("id", userId).maybeSingle();
+    if (u?.scan_unlimited) return false;
+    const { data: row } = await admin
+      .from("scan_usage").select("count").eq("user_id", userId).eq("day", today()).maybeSingle();
+    return (row?.count ?? 0) >= SCAN_DAILY_LIMIT;
+  } catch (e) {
+    console.error("scanQuotaExceeded (fail-open):", (e as Error).message);
+    return false;
+  }
 }
 
-// Count one scan against today's quota.
+// Count one scan against today's quota. Best-effort — never throws.
 async function bumpScanQuota(userId: string): Promise<void> {
-  const day = today();
-  const { data: row } = await admin
-    .from("scan_usage").select("count").eq("user_id", userId).eq("day", day).maybeSingle();
-  await admin.from("scan_usage").upsert({ user_id: userId, day, count: (row?.count ?? 0) + 1 });
+  try {
+    const day = today();
+    const { data: row } = await admin
+      .from("scan_usage").select("count").eq("user_id", userId).eq("day", day).maybeSingle();
+    await admin.from("scan_usage").upsert({ user_id: userId, day, count: (row?.count ?? 0) + 1 });
+  } catch (e) {
+    console.error("bumpScanQuota (skip):", (e as Error).message);
+  }
 }
 
 // ── Event handlers ──────────────────────────────────────────────────────────
