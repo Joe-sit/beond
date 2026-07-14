@@ -8,6 +8,7 @@ export interface TimelinePayout {
   symbol: string;
   installment: string;
   payoutDate: string;
+  payoutISO?: string; // YYYY-MM-DD — for matching against tax_documents
   amount: number;
   color?: string; // sector hue, for the stacked bar chart
   completed?: boolean; // final coupon already paid — bond fully redeemed

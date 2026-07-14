@@ -34,6 +34,13 @@ function App() {
   // Deep link → open the OCR review screen for that saved slip. Cleared when the
   // sheet closes.
   const [reviewId, setReviewId] = useState<string | null>(() => readReviewId());
+  // True when this page load is a return from the LINE OAuth redirect (fresh
+  // ?code/?state or a bundled liff.state). While this is set we keep showing the
+  // Home skeleton instead of bouncing to the landing page, and give the session
+  // exchange a few retries — isLoggedIn() can lag a tick right after liff.init().
+  const [returningFromLine] = useState(
+    () => /[?&](code|state|liff\.state)=/.test(window.location.search),
+  );
 
   const closeReview = () => {
     setReviewId(null);
@@ -43,16 +50,34 @@ function App() {
   };
 
   useEffect(() => {
-    initAuth()
-      .then((p) => {
+    let cancelled = false;
+    const resolveAuth = async (attempt = 0): Promise<void> => {
+      const p = await initAuth().catch((err) => {
+        console.error("LIFF init failed:", err);
+        return null;
+      });
+      if (cancelled) return;
+      if (p) {
         setProfile(p);
         // liff.init() (inside initAuth) unpacks liff.state → the review param may
         // only be readable now; keep an already-resolved id.
         setReviewId((cur) => cur ?? readReviewId());
-      })
-      .catch((err) => console.error("LIFF init failed:", err))
-      .finally(() => setReady(true));
-  }, []);
+        setReady(true);
+        return;
+      }
+      // Just came back from LINE but the session isn't ready yet → retry a few
+      // times (staying on the skeleton) before falling back to the landing page.
+      if (returningFromLine && attempt < 3) {
+        setTimeout(() => resolveAuth(attempt + 1), 600);
+        return;
+      }
+      setReady(true);
+    };
+    resolveAuth();
+    return () => {
+      cancelled = true;
+    };
+  }, [returningFromLine]);
 
   const handleLogout = () => {
     logout();

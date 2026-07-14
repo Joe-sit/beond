@@ -12,11 +12,20 @@ export interface HealthService {
 
 export interface HealthStats {
   users: number;
+  users7d: number;
+  usersWithHoldings: number;
+  usersWithTaxRate: number;
   holdings: number;
-  taxDocs: { pending: number; confirmed: number; rejected: number; total: number };
+  bonds: number;
+  payouts: number;
+  totalFaceValue: number;
+  taxDocs: { pending: number; confirmed: number; rejected: number; total: number; pendingOver24h: number };
+  whtConfirmedTotal: number;
+  docsBySource: { line: number; web: number };
   ocrSuccessRate: number | null;
   docs24h: number;
-  users7d: number;
+  scansToday: number;
+  scans7d: number;
 }
 
 export interface HealthReport {
@@ -45,16 +54,25 @@ function mockReport(): HealthReport {
       { id: "db", label: "Supabase DB", status: "up", latencyMs: j(42, 20), detail: "OK" },
       { id: "line", label: "LINE Messaging", status: "up", latencyMs: j(118, 50), detail: "HTTP 200" },
       { id: "sec", label: "SEC API", status: "degraded", latencyMs: j(3120, 600), detail: "HTTP 204" },
-      { id: "typhoon", label: "Typhoon OCR", status: "up", latencyMs: j(240, 90), detail: "HTTP 200" },
+      { id: "gemini", label: "Gemini OCR", status: "up", latencyMs: j(210, 90), detail: "HTTP 200" },
       { id: "logodev", label: "logo.dev", status: "up", latencyMs: j(88, 40), detail: "HTTP 200" },
     ],
     stats: {
       users: 128,
+      users7d: 11,
+      usersWithHoldings: 74,
+      usersWithTaxRate: 38,
       holdings: 412,
-      taxDocs: { pending: 9, confirmed: 63, rejected: 4, total: 76 },
+      bonds: 1840,
+      payouts: 3120,
+      totalFaceValue: 84_500_000,
+      taxDocs: { pending: 9, confirmed: 63, rejected: 4, total: 76, pendingOver24h: 2 },
+      whtConfirmedTotal: 512_340,
+      docsBySource: { line: 58, web: 18 },
       ocrSuccessRate: 95,
       docs24h: 7,
-      users7d: 11,
+      scansToday: 14,
+      scans7d: 63,
     },
   };
 }

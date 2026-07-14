@@ -100,16 +100,47 @@ async function stats() {
     const { count: c } = await q;
     return c ?? 0;
   };
+  // Sum a numeric column across rows (admin-scale, so a plain select is fine).
+  const sumCol = async (table: string, col: string, filter?: (q: any) => any) => {
+    let q = admin.from(table).select(col);
+    if (filter) q = filter(q);
+    const { data } = await q;
+    return (data ?? []).reduce((s: number, r: any) => s + Number(r[col] ?? 0), 0);
+  };
+  const distinctCount = async (table: string, col: string, filter?: (q: any) => any) => {
+    let q = admin.from(table).select(col);
+    if (filter) q = filter(q);
+    const { data } = await q;
+    return new Set((data ?? []).map((r: any) => r[col])).size;
+  };
   const since = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const day = (d = 0) => new Date(Date.now() - d * 24 * 3600e3).toISOString().slice(0, 10);
 
-  const [users, holdings, pending, confirmed, rejected, docs24h, users7d] = await Promise.all([
+  const [
+    users, users7d, usersWithHoldings, usersWithTaxRate,
+    holdings, bonds, payouts, totalFaceValue,
+    pending, confirmed, rejected, pendingOver24h, docs24h,
+    whtConfirmedTotal, sourceLine, sourceWeb,
+    scansToday, scans7d,
+  ] = await Promise.all([
     count("users"),
+    count("users", (q) => q.gte("created_at", since(7 * 24 * 3600e3))),
+    distinctCount("holdings", "user_id"),
+    count("users", (q) => q.not("marginal_tax_rate", "is", null)),
     count("holdings"),
+    count("bonds"),
+    count("payouts"),
+    sumCol("holdings", "face_value"),
     count("tax_documents", (q) => q.eq("status", "pending")),
     count("tax_documents", (q) => q.eq("status", "confirmed")),
     count("tax_documents", (q) => q.eq("status", "rejected")),
+    count("tax_documents", (q) => q.eq("status", "pending").lt("created_at", since(24 * 3600e3))),
     count("tax_documents", (q) => q.gte("created_at", since(24 * 3600e3))),
-    count("users", (q) => q.gte("created_at", since(7 * 24 * 3600e3))),
+    sumCol("tax_documents", "wht_amount", (q) => q.eq("status", "confirmed")),
+    count("tax_documents", (q) => q.eq("source", "line_ocr")),
+    count("tax_documents", (q) => q.neq("source", "line_ocr")),
+    sumCol("scan_usage", "count", (q) => q.eq("day", day(0))),
+    sumCol("scan_usage", "count", (q) => q.gte("day", day(7))),
   ]);
 
   const totalDocs = pending + confirmed + rejected;
@@ -119,11 +150,20 @@ async function stats() {
 
   return {
     users,
+    users7d,
+    usersWithHoldings,
+    usersWithTaxRate,
     holdings,
-    taxDocs: { pending, confirmed, rejected, total: totalDocs },
+    bonds,
+    payouts,
+    totalFaceValue,
+    taxDocs: { pending, confirmed, rejected, total: totalDocs, pendingOver24h },
+    whtConfirmedTotal,
+    docsBySource: { line: sourceLine, web: sourceWeb },
     ocrSuccessRate,
     docs24h,
-    users7d,
+    scansToday,
+    scans7d,
   };
 }
 
@@ -143,7 +183,7 @@ Deno.serve(async (req) => {
 
   const LINE_TOKEN = Deno.env.get("LINE_MESSAGING_ACCESS_TOKEN");
   const SEC_KEY = Deno.env.get("SEC_API_KEY");
-  const TYPHOON_KEY = Deno.env.get("TYPHOON_API_KEY");
+  const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY");
   const LOGODEV = Deno.env.get("LOGODEV_TOKEN") ?? Deno.env.get("VITE_LOGODEV_TOKEN");
 
   const skipped = (id: string, label: string): Service => ({
@@ -154,7 +194,7 @@ Deno.serve(async (req) => {
     detail: "no key configured",
   });
 
-  const [db, line, sec, typhoon, logodev] = await Promise.all([
+  const [db, line, sec, gemini, logodev] = await Promise.all([
     dbService(),
     LINE_TOKEN
       ? probe("line", "LINE Messaging", "https://api.line.me/v2/bot/info", {
@@ -170,11 +210,11 @@ Deno.serve(async (req) => {
           (s) => s === 200 || s === 204 || s === 404, // reachable = healthy
         )
       : Promise.resolve(skipped("sec", "SEC API")),
-    TYPHOON_KEY
-      ? probe("typhoon", "Typhoon OCR", "https://api.opentyphoon.ai/v1/models", {
-          headers: { Authorization: `Bearer ${TYPHOON_KEY}` },
+    GEMINI_KEY
+      ? probe("gemini", "Gemini OCR", "https://generativelanguage.googleapis.com/v1beta/models", {
+          headers: { "x-goog-api-key": GEMINI_KEY },
         })
-      : Promise.resolve(skipped("typhoon", "Typhoon OCR")),
+      : Promise.resolve(skipped("gemini", "Gemini OCR")),
     LOGODEV
       ? probe("logodev", "logo.dev", "https://img.logo.dev/google.com?token=" + LOGODEV, {})
       : Promise.resolve(skipped("logodev", "logo.dev")),
@@ -185,7 +225,7 @@ Deno.serve(async (req) => {
   return json({
     ok: true,
     generatedAt: new Date().toISOString(),
-    services: [db, line, sec, typhoon, logodev],
+    services: [db, line, sec, gemini, logodev],
     stats: s,
   });
 });

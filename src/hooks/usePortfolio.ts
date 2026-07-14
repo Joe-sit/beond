@@ -346,6 +346,7 @@ export function useTimeline(): {
           month: "short",
           year: "numeric",
         }),
+        payoutISO: row.payout_date.slice(0, 10),
         amount: Number(row.amount),
         color: bond.sectors?.color ?? undefined,
         // Bond fully redeemed once its last coupon has been paid.

@@ -8,6 +8,14 @@ import {
   IconScan,
   IconLock,
   IconAlertTriangle,
+  IconUserCheck,
+  IconLibrary,
+  IconCalendarDollar,
+  IconCoin,
+  IconAdjustmentsDollar,
+  IconBrandLine,
+  IconWorld,
+  IconClockExclamation,
 } from "@tabler/icons-react";
 import {
   fetchHealth,
@@ -56,6 +64,13 @@ function Sparkline({ values, color }: { values: (number | null)[]; color: string
 
 function fmt(n: number): string {
   return new Intl.NumberFormat("th-TH").format(n);
+}
+
+// Compact THB for large money figures (฿84.5M, ฿512.3K).
+function fmtBaht(n: number): string {
+  if (n >= 1e6) return `฿${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `฿${(n / 1e3).toFixed(1)}K`;
+  return `฿${fmt(Math.round(n))}`;
 }
 
 function timeAgo(iso: string): string {
@@ -216,47 +231,41 @@ export default function AdminDashboard() {
               })}
             </div>
 
-            {/* Metrics */}
-            <h2 className="mt-6 mb-2 text-sm font-bold text-[#43507F]">ตัวเลขภาพรวม</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <StatTile
-                icon={<IconUsers size={16} />}
-                label="ผู้ใช้ทั้งหมด"
-                value={fmt(result.report.stats.users)}
-                sub={`+${fmt(result.report.stats.users7d)} ใน 7 วัน`}
-              />
-              <StatTile
-                icon={<IconBriefcase size={16} />}
-                label="หุ้นกู้ที่ track"
-                value={fmt(result.report.stats.holdings)}
-              />
-              <StatTile
-                icon={<IconScan size={16} />}
-                label="OCR สำเร็จ"
-                value={
-                  result.report.stats.ocrSuccessRate === null
-                    ? "—"
-                    : `${result.report.stats.ocrSuccessRate}%`
-                }
-                sub={`${fmt(result.report.stats.docs24h)} สลิปใน 24 ชม.`}
-              />
-              <StatTile
-                icon={<IconReceiptTax size={16} />}
-                label="สลิปทั้งหมด"
-                value={fmt(result.report.stats.taxDocs.total)}
-              />
-              <StatTile
-                icon={<IconReceiptTax size={16} />}
-                label="รอยืนยัน"
-                value={fmt(result.report.stats.taxDocs.pending)}
-                sub={`ยืนยันแล้ว ${fmt(result.report.stats.taxDocs.confirmed)}`}
-              />
-              <StatTile
-                icon={<IconReceiptTax size={16} />}
-                label="ถูกปฏิเสธ"
-                value={fmt(result.report.stats.taxDocs.rejected)}
-              />
-            </div>
+            {(() => {
+              const st = result.report.stats;
+              return (
+                <>
+                  {/* Users */}
+                  <h2 className="mt-6 mb-2 text-sm font-bold text-[#43507F]">ผู้ใช้</h2>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <StatTile icon={<IconUsers size={16} />} label="ผู้ใช้ทั้งหมด" value={fmt(st.users)} sub={`+${fmt(st.users7d)} ใน 7 วัน`} />
+                    <StatTile icon={<IconUserCheck size={16} />} label="มีหุ้นกู้ในพอร์ต" value={fmt(st.usersWithHoldings)} sub={st.users ? `${Math.round((st.usersWithHoldings / st.users) * 100)}% ของผู้ใช้` : undefined} />
+                    <StatTile icon={<IconAdjustmentsDollar size={16} />} label="ตั้งฐานภาษีแล้ว" value={fmt(st.usersWithTaxRate)} />
+                    <StatTile icon={<IconScan size={16} />} label="สแกนวันนี้" value={fmt(st.scansToday)} sub={`7 วัน ${fmt(st.scans7d)} ครั้ง`} />
+                  </div>
+
+                  {/* Portfolio + catalog */}
+                  <h2 className="mt-6 mb-2 text-sm font-bold text-[#43507F]">พอร์ต & แคตตาล็อก</h2>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <StatTile icon={<IconBriefcase size={16} />} label="หุ้นกู้ที่ถือ (holdings)" value={fmt(st.holdings)} />
+                    <StatTile icon={<IconCoin size={16} />} label="มูลค่าหน้าตั๋วรวม" value={fmtBaht(st.totalFaceValue)} />
+                    <StatTile icon={<IconLibrary size={16} />} label="แคตตาล็อกหุ้นกู้" value={fmt(st.bonds)} />
+                    <StatTile icon={<IconCalendarDollar size={16} />} label="งวดดอกเบี้ย (payouts)" value={fmt(st.payouts)} />
+                  </div>
+
+                  {/* Tax / OCR pipeline */}
+                  <h2 className="mt-6 mb-2 text-sm font-bold text-[#43507F]">ภาษี & OCR</h2>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <StatTile icon={<IconReceiptTax size={16} />} label="เครดิตภาษีรวม (confirmed)" value={fmtBaht(st.whtConfirmedTotal)} />
+                    <StatTile icon={<IconScan size={16} />} label="OCR สำเร็จ" value={st.ocrSuccessRate === null ? "—" : `${st.ocrSuccessRate}%`} sub={`${fmt(st.docs24h)} สลิปใน 24 ชม.`} />
+                    <StatTile icon={<IconReceiptTax size={16} />} label="สลิปทั้งหมด" value={fmt(st.taxDocs.total)} sub={`ยืนยัน ${fmt(st.taxDocs.confirmed)} · ปฏิเสธ ${fmt(st.taxDocs.rejected)}`} />
+                    <StatTile icon={<IconClockExclamation size={16} />} label="รอยืนยัน" value={fmt(st.taxDocs.pending)} sub={st.taxDocs.pendingOver24h > 0 ? `⚠ ค้าง >24 ชม. ${fmt(st.taxDocs.pendingOver24h)}` : "ไม่มีค้างนาน"} />
+                    <StatTile icon={<IconBrandLine size={16} />} label="จาก LINE OCR" value={fmt(st.docsBySource.line)} />
+                    <StatTile icon={<IconWorld size={16} />} label="จาก Web / จดเอง" value={fmt(st.docsBySource.web)} />
+                  </div>
+                </>
+              );
+            })()}
           </>
         )}
       </div>

@@ -11,9 +11,10 @@ import {
   IconPlus,
   IconList,
   IconSearch,
+  IconHelpCircle,
+  IconArrowRight,
 } from "@tabler/icons-react";
 import slipArt from "../assets/review-slip.png";
-import taxArt from "../assets/review-tax.png";
 import { EMPTY_SLIP, type SlipFields } from "../lib/scanTypes";
 import { ensureCatalog, searchBonds, type BondCandidate } from "../lib/secApi";
 import { extractSlip, saveTaxDocument, getReviewSlip, confirmReviewedSlip } from "../lib/taxDocuments";
@@ -88,9 +89,12 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
     setStep("camera");
   }, [open, reviewDocId]);
 
-  // Start/stop the rear camera alongside the camera step.
+  // Start/stop the rear camera alongside the camera step. Never on the deep-link
+  // review path (reviewDocId) — the initial step is "camera" for one render
+  // before the open-effect switches to "detecting", and without this guard that
+  // window fires getUserMedia and pops the camera-permission prompt.
   useEffect(() => {
-    if (!open || step !== "camera") return;
+    if (!open || step !== "camera" || reviewDocId) return;
     let cancelled = false;
 
     (async () => {
@@ -123,7 +127,7 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
-  }, [open, step]);
+  }, [open, step, reviewDocId]);
 
   if (!open) return null;
 
@@ -537,6 +541,49 @@ function ReviewStep({
   const [addOpen, setAddOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
 
+  // First-visit walkthrough: spotlight each field in business-flow order so the
+  // user knows what to review before saving. Replayable via the header "?" button.
+  const bondRef = useRef<HTMLDivElement>(null);
+  const taxIdRef = useRef<HTMLDivElement>(null);
+  const netRef = useRef<HTMLDivElement>(null);
+  const derivedRef = useRef<HTMLDivElement>(null);
+  const saveRef = useRef<HTMLButtonElement>(null);
+  const [coach, setCoach] = useState(false);
+  useEffect(() => {
+    if (!localStorage.getItem(TUTORIAL_KEY)) setCoach(true);
+  }, []);
+  const closeCoach = () => {
+    localStorage.setItem(TUTORIAL_KEY, "1");
+    setCoach(false);
+  };
+  const coachSteps: CoachStep[] = [
+    {
+      ref: bondRef,
+      title: "รหัสหุ้นกู้",
+      body: "ตรวจว่าตรงกับหุ้นกู้ที่คุณถือ ถ้า OCR อ่านผิดหรือยังไม่มีในพอร์ต แตะ “เลือกจากพอร์ต” หรือเพิ่มเข้าพอร์ตได้",
+    },
+    {
+      ref: taxIdRef,
+      title: "เลขผู้เสียภาษีของผู้จ่าย",
+      body: "เลข 13 หลักของบริษัทผู้จ่ายดอกเบี้ย ใช้อ้างอิงผู้จ่ายตอนยื่นภาษี ตรวจให้ครบถ้วน",
+    },
+    {
+      ref: netRef,
+      title: "คงเหลือจ่ายจริง",
+      body: "กรอกยอดเงินที่ได้รับจริงหลังหักภาษี — ช่องเดียวที่ต้องกรอก ระบบคำนวณที่เหลือให้อัตโนมัติ",
+    },
+    {
+      ref: derivedRef,
+      title: "เงินได้ & ภาษีหัก 15%",
+      body: "คำนวณจากยอดคงเหลือให้อัตโนมัติ (เงินได้ = คงเหลือ ÷ 0.85) แก้เองไม่ได้ — นี่คือเครดิตภาษีของคุณ",
+    },
+    {
+      ref: saveRef,
+      title: "บันทึก",
+      body: "ถูกต้องแล้วกดบันทึก ข้อมูลจะเข้า “จัดการภาษี” เป็นเครดิตหัก ณ ที่จ่าย พร้อมใช้ยื่น e-Filing",
+    },
+  ];
+
   // Pick a bond from the sheet (portfolio or SEC search) → set the code and,
   // when the payer is blank, its issuer name.
   const pickBondFromSheet = (symbol: string, name?: string) => {
@@ -553,8 +600,7 @@ function ReviewStep({
     <div className="flex flex-1 flex-col overflow-hidden bg-[#779BC6] text-[#1B1C1D]">
       {/* Header — fixed */}
       <div className="relative shrink-0 px-4 pt-5 pb-3">
-        <img src={slipArt} alt="" className="pointer-events-none absolute top-2 right-3 h-20 w-28 object-contain" />
-        <div className="relative flex items-center gap-2">
+        <div className="relative z-10 flex items-center gap-2">
           <button
             onClick={onRetake}
             className="flex size-10 items-center justify-center rounded-full bg-white/10 text-white"
@@ -563,10 +609,14 @@ function ReviewStep({
             <IconChevronLeft size={22} />
           </button>
           <h2 className="text-base font-bold text-white">ตรวจสอบข้อมูล</h2>
+          <button
+            onClick={() => setCoach(true)}
+            className="ml-auto flex items-center gap-1 rounded-full bg-white/15 py-1.5 pr-3 pl-2 text-xs font-bold text-white ring-1 ring-white/25 backdrop-blur active:scale-95"
+            aria-label="ดูวิธีตรวจสอบข้อมูลอีกครั้ง"
+          >
+            <IconHelpCircle size={16} /> วิธีดู
+          </button>
         </div>
-        <p className="relative mt-2 max-w-[230px] text-xs leading-normal font-medium text-white/80">
-          กรุณาตรวจสอบข้อมูลการได้รับดอกเบี้ยก่อนทำการบันทึก
-        </p>
         {loadError && (
           <div className="relative mt-3 flex items-center gap-1.5 rounded-xl bg-amber-500/20 px-3 py-2 text-xs font-medium text-white">
             <IconAlertTriangle size={14} className="shrink-0" /> {loadError} — ลองเปิดลิงก์ใหม่อีกครั้ง
@@ -578,7 +628,7 @@ function ReviewStep({
       <div className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain rounded-t-3xl">
         {/* Bond + payer */}
         <div className="flex flex-col gap-4 rounded-t-3xl bg-[#F6F4F1] px-4 pt-5 pb-11">
-          <div>
+          <div ref={bondRef}>
             <SlipField
               label="รหัสหุ้นกู้"
               value={fields.bond_symbol ?? ""}
@@ -603,20 +653,22 @@ function ReviewStep({
               </button>
             )}
           </div>
-          <SlipField
-            label="เลขประจำตัวผู้เสียภาษีของผู้จ่าย"
-            value={fields.payer_tax_id ?? ""}
-            onChange={(v) => set("payer_tax_id", v.replace(/[^\d]/g, "") || null)}
-            onFocus={scrollIntoFocus}
-            inputMode="numeric"
-            placeholder="เลข 13 หลัก"
-          />
+          <div ref={taxIdRef}>
+            <SlipField
+              label="เลขประจำตัวผู้เสียภาษีของผู้จ่าย"
+              value={fields.payer_tax_id ?? ""}
+              onChange={(v) => set("payer_tax_id", v.replace(/[^\d]/g, "") || null)}
+              onFocus={scrollIntoFocus}
+              inputMode="numeric"
+              placeholder="เลข 13 หลัก"
+            />
+          </div>
         </div>
 
         {/* Tax banner — overlaps the card above so the rounded corners cut into
             it (no page-color gap at the corners) */}
         <div className="relative -mt-6 rounded-t-3xl bg-[#2968A5] px-6 pt-5 pb-10">
-          <img src={taxArt} alt="" className="pointer-events-none absolute top-3 right-4 h-14 w-24 object-contain" />
+          <img src={slipArt} alt="" className="pointer-events-none absolute top-3 right-4 h-14 w-24 object-contain" />
           <p className="relative text-base font-bold text-white">การหักภาษี ณ ที่จ่าย</p>
           <p className="relative mt-1 text-xs font-medium text-white/80">
             ภาษีหัก ณ ที่จ่าย 15% · ปีภาษี <span className="font-nunito">{fields.tax_year ?? "-"}</span>
@@ -626,16 +678,18 @@ function ReviewStep({
         {/* Amounts — user enters the amount actually received (net); gross and the
             15% tax are back-calculated (gross = net / 0.85) */}
         <div className="relative -mt-6 flex-1 rounded-t-3xl bg-[#F6F4F1] px-4 pt-5 pb-5">
-          <SlipField
-            label="คงเหลือจ่ายจริง"
-            value={fields.net_amount ?? ""}
-            onChange={setNet}
-            onFocus={scrollIntoFocus}
-            inputMode="decimal"
-            placeholder="0.00"
-            suffix={baht}
-          />
-          <div className="grid grid-cols-2 gap-x-4">
+          <div ref={netRef}>
+            <SlipField
+              label="คงเหลือจ่ายจริง"
+              value={fields.net_amount ?? ""}
+              onChange={setNet}
+              onFocus={scrollIntoFocus}
+              inputMode="decimal"
+              placeholder="0.00"
+              suffix={baht}
+            />
+          </div>
+          <div ref={derivedRef} className="grid grid-cols-2 gap-x-4">
             <SlipField label="จำนวนเงินที่จ่าย" value={fields.gross_amount ?? ""} disabled placeholder="0.00" suffix={baht} />
             <SlipField label="ภาษีหัก 15%" value={fields.wht_amount ?? ""} disabled placeholder="0.00" suffix={baht} />
           </div>
@@ -650,6 +704,7 @@ function ReviewStep({
           </p>
         )}
         <button
+          ref={saveRef}
           onClick={onSubmit}
           disabled={saving}
           className="flex h-14 w-full items-center justify-center gap-2 rounded-[14px] bg-[#2968A5]/10 text-sm font-bold text-[#2968A5] disabled:opacity-60"
@@ -682,6 +737,116 @@ function ReviewStep({
           setAddOpen(false);
         }}
       />
+
+      {coach && <Coachmark steps={coachSteps} onDone={closeCoach} />}
+    </div>
+  );
+}
+
+const TUTORIAL_KEY = "beond_scan_tutorial_v1";
+
+interface CoachStep {
+  ref: React.RefObject<HTMLElement | null>;
+  title: string;
+  body: string;
+}
+
+// Spotlight walkthrough over the review fields. Dims the screen, cuts a hole
+// around the current target (box-shadow spread), and pins a tip card near it.
+// Tapping the dim area or "ถัดไป" advances; the last step ends the tour.
+function Coachmark({ steps, onDone }: { steps: CoachStep[]; onDone: () => void }) {
+  const [i, setI] = useState(0);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const step = steps[i];
+  const last = i === steps.length - 1;
+
+  // Scroll the target into view, then measure it (after the smooth scroll settles).
+  useEffect(() => {
+    const el = step?.ref.current;
+    if (!el) {
+      setRect(null);
+      return;
+    }
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    const t = setTimeout(() => setRect(el.getBoundingClientRect()), 320);
+    return () => clearTimeout(t);
+  }, [step]);
+
+  const next = () => (last ? onDone() : setI((n) => n + 1));
+  const back = () => setI((n) => Math.max(0, n - 1));
+
+  const pad = 8;
+  // Place the tip card below the target when it sits in the top half, else above.
+  const below = !rect || rect.top < window.innerHeight * 0.5;
+  const cardStyle: React.CSSProperties = rect
+    ? below
+      ? { top: rect.bottom + pad + 12 }
+      : { bottom: window.innerHeight - rect.top + pad + 12 }
+    : { top: "50%", transform: "translateY(-50%)" };
+
+  return (
+    <div className="fixed inset-0 z-[120]">
+      {/* Dim + spotlight hole (a huge box-shadow around the cutout) */}
+      {rect ? (
+        <div
+          className="pointer-events-none absolute rounded-xl transition-all duration-300"
+          style={{
+            top: rect.top - pad,
+            left: rect.left - pad,
+            width: rect.width + pad * 2,
+            height: rect.height + pad * 2,
+            boxShadow: "0 0 0 9999px rgba(11,18,32,.78)",
+          }}
+        />
+      ) : (
+        <div className="absolute inset-0 bg-[#0B1220]/80" />
+      )}
+
+      {/* Tap anywhere on the dim to advance */}
+      <div className="absolute inset-0" onClick={next} />
+
+      {/* Tip card */}
+      <div
+        className="absolute inset-x-4 rounded-2xl bg-white p-4 shadow-xl"
+        style={cardStyle}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-1.5 flex items-center gap-2">
+          <span className="grid size-6 place-items-center rounded-full bg-[#2968A5] text-[11px] font-bold text-white">
+            {i + 1}
+          </span>
+          <p className="text-sm font-bold text-[#1B1C1D]">{step.title}</p>
+          <span className="ml-auto text-[11px] font-medium text-black/35">
+            {i + 1}/{steps.length}
+          </span>
+        </div>
+        <p className="text-xs leading-relaxed text-black/60">{step.body}</p>
+        <div className="mt-3 flex items-center justify-between">
+          <button
+            onClick={onDone}
+            className="text-xs font-medium text-black/40"
+          >
+            ข้าม
+          </button>
+          <div className="flex items-center gap-2">
+            {i > 0 && (
+              <button
+                onClick={back}
+                className="rounded-full px-3 py-1.5 text-xs font-bold text-[#2968A5]"
+              >
+                ย้อนกลับ
+              </button>
+            )}
+            <button
+              onClick={next}
+              className="flex items-center gap-1 rounded-full bg-[#2968A5] px-4 py-1.5 text-xs font-bold text-white"
+            >
+              {last ? "เริ่มตรวจสอบ" : "ถัดไป"}
+              {!last && <IconArrowRight size={14} />}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

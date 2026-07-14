@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { toast, AlertDialog, Dropdown } from "@heroui/react";
+import { toast, AlertDialog } from "@heroui/react";
 import {
   IconClockHour4,
   IconCircleCheck,
@@ -8,17 +8,16 @@ import {
   IconAlertTriangle,
   IconLoader2,
   IconPuzzle,
-  IconScan,
   IconPlus,
   IconTrash,
-  IconChevronDown,
 } from "@tabler/icons-react";
 import { IconPencil } from "@tabler/icons-react";
-import { useTaxCredits, currentTaxYearBE, notifyPortfolioChanged, type TaxDoc } from "../hooks/usePortfolio";
+import { useTaxCredits, currentTaxYearBE, type TaxDoc } from "../hooks/usePortfolio";
 import { deleteTaxDocument } from "../lib/taxDocuments";
 import IssuerLogo from "./IssuerLogo";
 import TaxCard from "./TaxCard";
-import ScanFlow from "./ScanFlow";
+import TaxSettingCard from "./TaxSettingCard";
+import CouponSyncCard from "./CouponSyncCard";
 import EditTaxDocModal from "./EditTaxDocModal";
 import { issuerName, issuerTicker, issuerTickerFromName, issuerTickerFromTaxId, cleanCompanyName } from "../lib/issuerLogo";
 import {
@@ -154,7 +153,6 @@ export default function TaxManagePanel() {
   const { docs, loading } = useTaxCredits();
   const groups = groupByYear(docs);
   const year = currentTaxYearBE();
-  const [scanOpen, setScanOpen] = useState(false);
   const [editDoc, setEditDoc] = useState<TaxDoc | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -182,45 +180,23 @@ export default function TaxManagePanel() {
             เครดิตภาษีหัก ณ ที่จ่าย (15%) สำหรับยื่น ภ.ง.ด. ปี <span className="font-nunito">{year}</span>
           </p>
         </div>
-        {/* Split button — one joined pill: primary action + divider + chevron
-            menu (ButtonGroup can't join a Dropdown-wrapped button via its
-            first/last-child CSS, so the pill is composed directly). */}
-        <div className="flex shrink-0 items-stretch overflow-hidden rounded-full bg-[#43507F] text-white">
-          <button
-            onClick={() => setScanOpen(true)}
-            className="flex items-center gap-1.5 py-2.5 pr-3 pl-4 text-xs font-semibold transition-colors hover:bg-white/10"
-          >
-            <IconScan size={18} />
-            สแกนใบ 50 ทวิ
-          </button>
-          <span className="my-2 w-px bg-white/25" />
-          <Dropdown>
-            <Dropdown.Trigger>
-              <button
-                aria-label="ตัวเลือกเพิ่ม"
-                className="flex items-center px-2.5 transition-colors hover:bg-white/10"
-              >
-                <IconChevronDown size={16} />
-              </button>
-            </Dropdown.Trigger>
-            <Dropdown.Popover placement="bottom end">
-              <Dropdown.Menu>
-                <Dropdown.Item onAction={() => setScanOpen(true)}>
-                  <IconScan size={16} /> สแกนใบ 50 ทวิ
-                </Dropdown.Item>
-                <Dropdown.Item onAction={() => openEditor(null)}>
-                  <IconPlus size={16} /> เพิ่มเอง
-                </Dropdown.Item>
-              </Dropdown.Menu>
-            </Dropdown.Popover>
-          </Dropdown>
-        </div>
+        {/* Scanning a 50-ทวิ now happens in the LINE chat (send the photo there);
+            the web panel keeps only manual entry. */}
+        <button
+          onClick={() => openEditor(null)}
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-[#43507F] px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-[#43507F]/90"
+        >
+          <IconPlus size={18} /> เพิ่มเอง
+        </button>
       </div>
 
-      <ScanFlow open={scanOpen} onClose={() => setScanOpen(false)} onSubmit={notifyPortfolioChanged} />
       <EditTaxDocModal doc={editDoc} open={editorOpen} onClose={() => setEditorOpen(false)} />
 
       <TaxCard />
+
+      <CouponSyncCard />
+
+      <TaxSettingCard />
 
       {loading ? (
         <ul className="flex flex-col gap-2">

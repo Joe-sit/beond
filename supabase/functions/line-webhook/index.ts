@@ -179,12 +179,45 @@ function num(v: unknown): number | null {
 // catalog. Mirrors the web scan flow's canonSym.
 const canonSym = (s: string) => s.replace(/O/g, "0").replace(/I/g, "1");
 
+// A coupon is uniquely one (bond, pay_date) per user. Return an already-saved
+// (confirmed) doc for the same coupon so we never add it twice. Needs both keys
+// to be sure — without them we can't tell duplicates apart, so let the user decide.
+async function findDuplicateCoupon(
+  userId: string,
+  bondId: string | null,
+  payDate: string | null,
+  excludeId: string,
+): Promise<{ id: string } | null> {
+  if (!userId || !bondId || !payDate) return null;
+  const { data } = await admin
+    .from("tax_documents")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("bond_id", bondId)
+    .eq("pay_date", payDate)
+    .eq("status", "confirmed")
+    .neq("id", excludeId)
+    .limit(1)
+    .maybeSingle();
+  return data ?? null;
+}
+
+// Message shown when a scanned coupon was already saved.
+function duplicateMsg(f: SlipFields): unknown {
+  const sym = f.bond_symbol ?? f.payer_name ?? "หุ้นกู้";
+  const date = f.pay_date ?? "-";
+  return {
+    type: "text",
+    text: `งวดนี้บันทึกไว้แล้ว ✅\n${sym} · จ่าย ${date}\nไม่ต้องเพิ่มซ้ำนะครับ ดูสรุปได้ในแอป beond`,
+  };
+}
+
 // ── Slip processing (background) ────────────────────────────────────────────
 async function processSlip(documentId: string, lineUserId: string): Promise<void> {
   let imagePath: string | null = null;
   try {
     const { data: doc, error } = await admin
-      .from("tax_documents").select("image_path").eq("id", documentId).single();
+      .from("tax_documents").select("image_path, user_id").eq("id", documentId).single();
     if (error || !doc?.image_path) throw new Error(`load doc: ${error?.message}`);
     imagePath = doc.image_path;
 
@@ -220,6 +253,25 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
 
     const taxYear = f.tax_year ?? (f.pay_date ? new Date(f.pay_date).getFullYear() + 543 : null);
 
+    // Unreadable image (blur / poor light / not a 50-ทวิ). A real slip always
+    // carries a money figure — if OCR found none, don't show an empty confirm
+    // card; guide the user to reshoot. (Gemini returns nulls, not an error, on a
+    // bad image, so the try/catch above won't catch this case.)
+    if (gross === null && wht === null && net === null) {
+      await admin.from("tax_documents")
+        .update({ status: "rejected", image_path: null }).eq("id", documentId);
+      await deleteSlipImage(imagePath);
+      imagePath = null;
+      await linePush(lineUserId, [{
+        type: "text",
+        text:
+          "อ่านข้อมูลจากรูปไม่ได้ครับ 😅\n" +
+          "อาจเพราะภาพเบลอ แสงน้อย หรือไม่ใช่ใบ 50 ทวิ\n\n" +
+          "📸 ถ่ายใหม่ให้ชัด แสงพอ เห็นทั้งใบ แล้วส่งมาอีกครั้งนะครับ",
+      }]);
+      return;
+    }
+
     // Best-effort link to a known bond by its symbol. OCR routinely confuses
     // O↔0 and I↔1 inside a bond code, so if the exact symbol misses we retry on
     // a canonical form against the catalog and adopt the catalog's true spelling.
@@ -242,6 +294,18 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
       // Not in the catalog → the LLM likely guessed (OCR often drops the bond
       // line). Blank it rather than show a wrong code; the user picks on confirm.
       if (!bondId) f.bond_symbol = null;
+    }
+
+    // A coupon is one (bond, pay_date) per user. If it's already been saved,
+    // don't offer to add it again — reject this scan and tell the user.
+    const dup = await findDuplicateCoupon(doc.user_id, bondId, f.pay_date, documentId);
+    if (dup) {
+      await admin.from("tax_documents")
+        .update({ status: "rejected", image_path: null }).eq("id", documentId);
+      await deleteSlipImage(imagePath);
+      imagePath = null;
+      await linePush(lineUserId, [duplicateMsg(f)]);
+      return;
     }
 
     // Store only the fields a filing needs. No raw markdown (it contains the
@@ -298,6 +362,13 @@ async function deleteSlipImage(path: string | null): Promise<void> {
   if (error) console.error("deleteSlipImage failed:", error.message);
 }
 
+// คงเหลือจ่ายจริง = gross − wht (fall back to the OCR'd net if arithmetic can't).
+function netOf(f: SlipFields): number | null {
+  const g = num(f.gross_amount), w = num(f.wht_amount);
+  if (g !== null && w !== null) return Math.round((g - w) * 100) / 100;
+  return num(f.net_amount);
+}
+
 function fmtTHB(n: number | null): string {
   return n === null ? "-" : new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2 }).format(n);
 }
@@ -330,6 +401,7 @@ function buildConfirmFlex(documentId: string, f: SlipFields): unknown {
           row("หุ้นกู้", f.bond_symbol ?? "-"),
           row("ดอกเบี้ย", `฿${fmtTHB(num(f.gross_amount))}`),
           row("ภาษีหัก", `฿${fmtTHB(num(f.wht_amount))} (${f.wht_rate ?? "-"}%)`),
+          row("คงเหลือจ่ายจริง", `฿${fmtTHB(netOf(f))}`),
           row("วันที่จ่าย", f.pay_date ?? "-"),
           row("ปีภาษี", f.tax_year ? String(f.tax_year) : "-"),
         ],
@@ -490,6 +562,26 @@ async function handlePostback(event: LineEvent): Promise<void> {
   if (!id) return;
 
   if (action === "confirm") {
+    // Guard stale cards: an old bubble stays in the chat forever (LINE can't
+    // recall a sent message), so a second tap must not double-add the coupon.
+    const { data: docRow } = await admin
+      .from("tax_documents").select("status, user_id, bond_id, pay_date").eq("id", id).maybeSingle();
+    if (!docRow) {
+      await lineReply(event.replyToken, [{ type: "text", text: "ไม่พบรายการนี้แล้วครับ 🙏" }]);
+      return;
+    }
+    if (docRow.status === "confirmed") {
+      await lineReply(event.replyToken, [{ type: "text", text: "รายการนี้บันทึกไปแล้ว ✅ ดูได้ในแอป beond" }]);
+      return;
+    }
+    const dup = await findDuplicateCoupon(docRow.user_id, docRow.bond_id, docRow.pay_date, id);
+    if (dup) {
+      await admin.from("tax_documents").update({ status: "rejected" }).eq("id", id);
+      await lineReply(event.replyToken, [
+        { type: "text", text: "งวดนี้บันทึกไปแล้ว รายการนี้หมดอายุครับ ⏳ ไม่ได้เพิ่มซ้ำนะครับ" },
+      ]);
+      return;
+    }
     await admin.from("tax_documents").update({ status: "confirmed" }).eq("id", id);
     await lineReply(event.replyToken, [
       { type: "text", text: "บันทึกเครดิตภาษีเรียบร้อย ✅ ดูสรุปทั้งหมดได้ในแอป beond" },
@@ -502,11 +594,218 @@ async function handlePostback(event: LineEvent): Promise<void> {
   }
 }
 
+const HELP_TEXT =
+  "วิธีใช้งาน beond 📘\n\n" +
+  "1️⃣ ส่งรูปใบ 50 ทวิ (หนังสือรับรองหักภาษี ณ ที่จ่าย) เข้ามาในแชท\n" +
+  "2️⃣ ระบบอ่านข้อมูลให้อัตโนมัติ แล้วส่งสรุปให้ตรวจสอบ\n" +
+  "3️⃣ กด “ยืนยัน” เพื่อบันทึกเป็นเครดิตภาษี (หรือ “แก้ไข” เพื่อปรับก่อนบันทึก)\n\n" +
+  "📊 ดูพอร์ต · ปฏิทินดอกเบี้ย · เครดิตภาษี ได้จากเมนูด้านล่าง\n" +
+  "พร้อมใช้ยื่น e-Filing ได้เลย";
+
+const SCAN_PROMPT =
+  "ส่งรูปหนังสือรับรองการหักภาษี ณ ที่จ่าย (50 ทวิ) เข้ามาในแชทได้เลยครับ 📄\n" +
+  "ระบบจะอ่านข้อมูลให้อัตโนมัติ แล้วส่งสรุปให้ยืนยัน\n\n" +
+  "📸 ถ่ายให้อ่านง่าย จะแม่นสุด:\n" +
+  "• วางใบบนพื้นเรียบ สีพื้นตัดกับกระดาษ\n" +
+  "• แสงสว่างพอ เลี่ยงเงามือ/แสงสะท้อน\n" +
+  "• ถือกล้องตรง ๆ เหนือใบ ไม่เอียง\n" +
+  "• ให้เห็นทั้งใบเต็มกรอบ ไม่มีส่วนขาด\n" +
+  "• โฟกัสให้ตัวเลข/ตัวหนังสือคมชัด ไม่เบลอ\n\n" +
+  "พร้อมแล้วส่งรูปมาได้เลยครับ 👍";
+
+const TH_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+
+// Footer "ดูทั้งหมดในแอป" button, shared by the data cards.
+const openAppFooter = (label: string) => ({
+  type: "box",
+  layout: "vertical",
+  contents: [
+    {
+      type: "button",
+      style: "primary",
+      color: "#43507F",
+      height: "sm",
+      action: { type: "uri", label, uri: LIFF_REVIEW_URL },
+    },
+  ],
+});
+
+// Friendly empty-state card (new user, nothing in portfolio yet) with a CTA to
+// open the app and add a bond.
+const emptyCard = (title: string, subtitle: string) => ({
+  type: "flex",
+  altText: title,
+  contents: {
+    type: "bubble",
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "sm",
+      contents: [
+        { type: "text", text: "📭", size: "xxl", align: "center" },
+        { type: "text", text: title, weight: "bold", size: "md", align: "center", color: "#43507F", margin: "md", wrap: true },
+        { type: "text", text: subtitle, size: "xs", align: "center", color: "#8A8A8A", wrap: true },
+      ],
+    },
+    footer: openAppFooter("เพิ่มหุ้นกู้ในแอป"),
+  },
+});
+
+// Chat card: the user's bond portfolio (holdings + total face value).
+async function buildPortfolioMessage(userId: string): Promise<unknown> {
+  const { data } = await admin
+    .from("holdings")
+    .select("face_value, bonds(symbol, coupon_rate)")
+    .eq("user_id", userId);
+  const rows = (data ?? []) as { face_value: number; bonds: { symbol: string; coupon_rate: number } | null }[];
+  if (!rows.length) return emptyCard("ยังไม่มีหุ้นกู้ในพอร์ต", "เพิ่มหุ้นกู้ที่คุณถือ เพื่อดูพอร์ตและเครดิตภาษี");
+
+  rows.sort((a, b) => Number(b.face_value) - Number(a.face_value));
+  const total = rows.reduce((s, r) => s + Number(r.face_value), 0);
+  const line = (sym: string, rate: string, amount: string) => ({
+    type: "box",
+    layout: "horizontal",
+    contents: [
+      {
+        type: "box",
+        layout: "vertical",
+        flex: 1,
+        contents: [
+          { type: "text", text: sym, weight: "bold", size: "sm", color: "#111111" },
+          { type: "text", text: rate, size: "xxs", color: "#8A8A8A" },
+        ],
+      },
+      { type: "text", text: amount, size: "sm", weight: "bold", align: "end", gravity: "center", color: "#111111", flex: 0 },
+    ],
+  });
+  const body: unknown[] = [];
+  rows.forEach((r, i) => {
+    if (i) body.push({ type: "separator", margin: "md" });
+    const rate = r.bonds?.coupon_rate ? `คูปอง ${r.bonds.coupon_rate}%` : "หุ้นกู้";
+    body.push({ margin: i ? "md" : "none", ...line(r.bonds?.symbol ?? "-", rate, `฿${fmtTHB(Number(r.face_value))}`) });
+  });
+  body.push({ type: "separator", margin: "md" });
+  body.push({
+    type: "box",
+    layout: "horizontal",
+    margin: "md",
+    contents: [
+      { type: "text", text: "รวมมูลค่าหน้าตั๋ว", size: "sm", color: "#8A8A8A" },
+      { type: "text", text: `฿${fmtTHB(total)}`, size: "sm", weight: "bold", align: "end", color: "#12BC59" },
+    ],
+  });
+
+  return {
+    type: "flex",
+    altText: "พอร์ตหุ้นกู้ของคุณ",
+    contents: {
+      type: "bubble",
+      header: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          { type: "text", text: "พอร์ตหุ้นกู้ของคุณ", weight: "bold", size: "lg", color: "#43507F" },
+          { type: "text", text: `${rows.length} รุ่น`, size: "xs", color: "#8A8A8A" },
+        ],
+      },
+      body: { type: "box", layout: "vertical", spacing: "none", contents: body },
+      footer: openAppFooter("ดูพอร์ตในแอป"),
+    },
+  };
+}
+
+// Chat card: the next upcoming coupon payouts across the user's holdings.
+async function buildCalendarMessage(userId: string): Promise<unknown> {
+  const { data } = await admin
+    .from("payouts")
+    .select("amount, payout_date, installment, holdings!inner(user_id, bonds(symbol, total_installments))")
+    .eq("holdings.user_id", userId)
+    .gte("payout_date", today())
+    .order("payout_date")
+    .limit(6);
+  const rows = (data ?? []) as {
+    amount: number;
+    payout_date: string;
+    installment: number;
+    holdings: { bonds: { symbol: string; total_installments: number | null } | null } | null;
+  }[];
+  if (!rows.length) return emptyCard("ยังไม่มีกำหนดรับดอกเบี้ย", "เพิ่มหุ้นกู้ที่คุณถือ เพื่อดูปฏิทินรับดอกเบี้ย");
+
+  // Only month-level precision: the exact payout DAY is derived (stepped from
+  // maturity), not from SEC — so we show เดือน/ปี, never a specific date.
+  const body: unknown[] = [];
+  rows.forEach((r, i) => {
+    if (i) body.push({ type: "separator", margin: "md" });
+    const d = new Date(r.payout_date);
+    body.push({
+      type: "box",
+      layout: "horizontal",
+      margin: i ? "md" : "none",
+      spacing: "md",
+      contents: [
+        {
+          type: "box",
+          layout: "vertical",
+          flex: 0,
+          width: "52px",
+          justifyContent: "center",
+          contents: [
+            { type: "text", text: TH_MONTHS[d.getMonth()], weight: "bold", size: "md", align: "center", color: "#2968A5" },
+            { type: "text", text: String(d.getFullYear() + 543), size: "xxs", align: "center", color: "#8A8A8A" },
+          ],
+        },
+        {
+          type: "box",
+          layout: "vertical",
+          flex: 1,
+          justifyContent: "center",
+          contents: [
+            { type: "text", text: r.holdings?.bonds?.symbol ?? "-", weight: "bold", size: "sm", color: "#111111" },
+            { type: "text", text: `งวด ${r.installment}/${r.holdings?.bonds?.total_installments ?? "-"}`, size: "xxs", color: "#8A8A8A" },
+          ],
+        },
+        { type: "text", text: `฿${fmtTHB(Number(r.amount))}`, size: "sm", weight: "bold", align: "end", gravity: "center", color: "#12BC59", flex: 0 },
+      ],
+    });
+  });
+
+  return {
+    type: "flex",
+    altText: "ปฏิทินรายรับดอกเบี้ย",
+    contents: {
+      type: "bubble",
+      header: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          { type: "text", text: "ปฏิทินรายรับดอกเบี้ย", weight: "bold", size: "lg", color: "#43507F" },
+          { type: "text", text: "งวดถัดไป · ประมาณการรายเดือน", size: "xs", color: "#8A8A8A" },
+        ],
+      },
+      body: { type: "box", layout: "vertical", spacing: "none", contents: body },
+      footer: openAppFooter("ดูปฏิทินในแอป"),
+    },
+  };
+}
+
 async function handleText(event: LineEvent): Promise<void> {
   if (!event.replyToken) return;
-  await lineReply(event.replyToken, [
-    { type: "text", text: "ส่งรูปหนังสือรับรองการหักภาษี ณ ที่จ่าย (50 ทวิ) เข้ามาได้เลยครับ ระบบจะอ่านข้อมูลให้อัตโนมัติ 📄" },
-  ]);
+  const lineUserId = event.source?.userId;
+  // Rich-menu buttons send keywords; route each to its own reply.
+  const text = (event.message?.text ?? "").trim();
+
+  if (lineUserId && /พอร์ต|portfolio|หุ้นกู้ของ/i.test(text)) {
+    const userId = await ensureUser(lineUserId);
+    await lineReply(event.replyToken, [await buildPortfolioMessage(userId)]);
+    return;
+  }
+  if (lineUserId && /ปฏิทิน|calendar|รายรับ|ดอกเบี้ย/i.test(text)) {
+    const userId = await ensureUser(lineUserId);
+    await lineReply(event.replyToken, [await buildCalendarMessage(userId)]);
+    return;
+  }
+  const reply = /วิธีใช้|วิธีการใช้|help|how/i.test(text) ? HELP_TEXT : SCAN_PROMPT;
+  await lineReply(event.replyToken, [{ type: "text", text: reply }]);
 }
 
 interface LineEvent {

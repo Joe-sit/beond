@@ -17,7 +17,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-interface Draft {
+export interface Draft {
   payer_name: string;
   payer_tax_id: string;
   bond_symbol: string;
@@ -62,25 +62,28 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onSaved?: () => void;
+  // Create-mode prefill (e.g. the coupon-sync reminder seeds bond/payer/amount).
+  initial?: Partial<Draft>;
 }
 
 // Edit a saved 50-ทวิ record — or add one by hand (doc === null). Used from the
 // จัดการภาษี ledger for correcting OCR misses and manual entry.
-export default function EditTaxDocModal({ doc, open, onClose, onSaved }: Props) {
+export default function EditTaxDocModal({ doc, open, onClose, onSaved, initial }: Props) {
   const { holdings } = useHoldings();
   const creating = doc === null;
   const [draft, setDraft] = useState<Draft>(() => (doc ? fromDoc(doc) : emptyDraft()));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset the form whenever the modal opens (edit → from the doc, create → blank).
+  // Reset the form whenever the modal opens (edit → from the doc, create →
+  // blank or seeded from `initial`).
   useEffect(() => {
     if (open) {
-      setDraft(doc ? fromDoc(doc) : emptyDraft());
+      setDraft(doc ? fromDoc(doc) : { ...emptyDraft(), ...initial });
       setError(null);
       setSaving(false);
     }
-  }, [open, doc]);
+  }, [open, doc, initial]);
 
   const set = (k: keyof Draft, v: string) => setDraft((d) => ({ ...d, [k]: v }));
 
