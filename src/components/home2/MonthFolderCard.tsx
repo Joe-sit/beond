@@ -86,7 +86,7 @@ export default function MonthFolderCard({
           <button onClick={onPrev} aria-label="เดือนก่อน" className="flex size-8 shrink-0 items-center justify-center rounded-full border border-black/10 bg-white text-ink transition hover:bg-black/5">
             <IconChevronLeft size={24} />
           </button>
-          <span className="flex-1 text-center text-base text-ink/80">{monthLabel}</span>
+          <span className="flex-1 truncate whitespace-nowrap text-center text-base text-ink/80">{monthLabel}</span>
           <button onClick={onNext} aria-label="เดือนถัดไป" className="flex size-8 shrink-0 items-center justify-center rounded-full border border-black/10 bg-white text-ink transition hover:bg-black/5">
             <IconChevronRight size={24} />
           </button>
