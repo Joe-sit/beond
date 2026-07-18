@@ -1,13 +1,11 @@
 import { useEffect, useState } from "react";
 import { Toast } from "@heroui/react";
-import DashboardLayout from "./components/DashboardLayout";
-import BrandHeader from "./components/BrandHeader";
-import PortfolioHeader from "./components/PortfolioHeader";
-import DividendTimeline from "./components/DividendTimeline";
-import RightPanel from "./components/RightPanel";
+import DashboardShell from "./components/home/DashboardShell";
 import LoginPage from "./components/LoginPage";
 import AdminDashboard from "./components/AdminDashboard";
 import DashboardSkeleton from "./components/DashboardSkeleton";
+import SidebarRail from "./components/home/SidebarRail";
+import HomeRework from "./components/home2/HomeRework";
 import ScanFlow from "./components/ScanFlow";
 import { notifyPortfolioChanged } from "./hooks/usePortfolio";
 import { initAuth, login, logout, liffEnabled, type AuthProfile } from "./lib/auth";
@@ -92,8 +90,22 @@ function App() {
     }
   };
 
-  if (!ready) {
-    return <DashboardSkeleton />;
+  // `?v2` — preview the reworked full-viewport home (works pre-auth with a
+  // placeholder profile). It owns its own loading skeleton, so this must come
+  // before the shared skeleton gate below.
+  if (new URLSearchParams(window.location.search).has("v2")) {
+    return <HomeRework profile={profile ?? { displayName: "beond" }} />;
+  }
+
+  // `?skeleton` — preview the loading skeleton without auth. Show the real
+  // sidebar rail alongside it (the rail is never skeletonised).
+  if (!ready || new URLSearchParams(window.location.search).has("skeleton")) {
+    return (
+      <>
+        <SidebarRail view="home" onSelect={() => {}} />
+        <DashboardSkeleton railSpace />
+      </>
+    );
   }
 
   if (!profile) {
@@ -108,16 +120,7 @@ function App() {
 
   return (
     <>
-      <DashboardLayout
-        hero={
-          <>
-            <BrandHeader profile={profile} onLogout={handleLogout} />
-            <PortfolioHeader />
-            <DividendTimeline />
-          </>
-        }
-        panel={<RightPanel profile={profile} onLogout={handleLogout} />}
-      />
+      <DashboardShell profile={profile} onLogout={handleLogout} />
       {reviewId && (
         <ScanFlow
           open

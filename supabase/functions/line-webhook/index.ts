@@ -373,7 +373,21 @@ function fmtTHB(n: number | null): string {
   return n === null ? "-" : new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2 }).format(n);
 }
 
-// Flex bubble summarising the extracted slip with confirm / reject postbacks.
+// Required fields for a coupon to be saveable. Without a resolved bond it can't
+// be mapped to a payout (the web app would show an orphan slip), and without a
+// pay_date / amount it isn't a usable tax record — so these gate the confirm.
+function missingFields(f: SlipFields): string[] {
+  const miss: string[] = [];
+  if (!f.bond_symbol) miss.push("รหัสหุ้นกู้");
+  if (!f.pay_date) miss.push("วันที่จ่าย");
+  if (num(f.gross_amount) === null) miss.push("ดอกเบี้ย");
+  if (num(f.wht_amount) === null) miss.push("ภาษีหัก");
+  return miss;
+}
+
+// Flex bubble summarising the extracted slip. Confirm is only offered when the
+// data is complete; otherwise the user is sent to edit (add the missing bond
+// code etc.) so an incomplete coupon can never be saved.
 function buildConfirmFlex(documentId: string, f: SlipFields): unknown {
   const row = (label: string, value: string) => ({
     type: "box",
@@ -384,49 +398,65 @@ function buildConfirmFlex(documentId: string, f: SlipFields): unknown {
       { type: "text", text: value || "-", wrap: true, color: "#111111", size: "sm", flex: 6 },
     ],
   });
+  const miss = missingFields(f);
+  const complete = miss.length === 0;
+
+  const body: Record<string, unknown>[] = [
+    { type: "text", text: "หัก ณ ที่จ่าย 50 ทวิ", weight: "bold", size: "lg", color: "#43507F" },
+    {
+      type: "text",
+      text: complete ? "ตรวจสอบข้อมูลก่อนบันทึกนะครับ" : "ข้อมูลไม่ครบ กรุณากด “แก้ไข” เพิ่มก่อนบันทึก",
+      size: "xs",
+      color: complete ? "#8A8A8A" : "#C0563B",
+      wrap: true,
+    },
+    { type: "separator", margin: "md" },
+    row("ผู้จ่าย", f.payer_name ?? "-"),
+    row("หุ้นกู้", f.bond_symbol ?? "-"),
+    row("ดอกเบี้ย", `฿${fmtTHB(num(f.gross_amount))}`),
+    row("ภาษีหัก", `฿${fmtTHB(num(f.wht_amount))} (${f.wht_rate ?? "-"}%)`),
+    row("คงเหลือจ่ายจริง", `฿${fmtTHB(netOf(f))}`),
+    row("วันที่จ่าย", f.pay_date ?? "-"),
+    row("ปีภาษี", f.tax_year ? String(f.tax_year) : "-"),
+  ];
+  if (!complete) {
+    body.push({
+      type: "text",
+      text: `⚠️ ยังขาด: ${miss.join(", ")}`,
+      size: "xs",
+      color: "#C0563B",
+      wrap: true,
+      margin: "md",
+    });
+  }
+
+  const editButton = {
+    type: "button",
+    style: "secondary",
+    height: "sm",
+    // Open the web app's OCR-review screen (LIFF) for this pending slip.
+    action: { type: "uri", label: "แก้ไข", uri: `${LIFF_REVIEW_URL}?review=${documentId}` },
+  };
+  const footerContents = complete
+    ? [
+        editButton,
+        {
+          type: "button",
+          style: "primary",
+          height: "sm",
+          color: "#43507F",
+          action: { type: "postback", label: "ยืนยัน", data: `action=confirm&id=${documentId}` },
+        },
+      ]
+    : [{ ...editButton, style: "primary", color: "#43507F", action: { ...editButton.action, label: "แก้ไขข้อมูล" } }];
+
   return {
     type: "flex",
     altText: "สรุปข้อมูลหนังสือรับรองหักภาษี ณ ที่จ่าย",
     contents: {
       type: "bubble",
-      body: {
-        type: "box",
-        layout: "vertical",
-        spacing: "md",
-        contents: [
-          { type: "text", text: "หัก ณ ที่จ่าย 50 ทวิ", weight: "bold", size: "lg", color: "#43507F" },
-          { type: "text", text: "ตรวจสอบข้อมูลก่อนบันทึกนะครับ", size: "xs", color: "#8A8A8A" },
-          { type: "separator", margin: "md" },
-          row("ผู้จ่าย", f.payer_name ?? "-"),
-          row("หุ้นกู้", f.bond_symbol ?? "-"),
-          row("ดอกเบี้ย", `฿${fmtTHB(num(f.gross_amount))}`),
-          row("ภาษีหัก", `฿${fmtTHB(num(f.wht_amount))} (${f.wht_rate ?? "-"}%)`),
-          row("คงเหลือจ่ายจริง", `฿${fmtTHB(netOf(f))}`),
-          row("วันที่จ่าย", f.pay_date ?? "-"),
-          row("ปีภาษี", f.tax_year ? String(f.tax_year) : "-"),
-        ],
-      },
-      footer: {
-        type: "box",
-        layout: "horizontal",
-        spacing: "sm",
-        contents: [
-          {
-            type: "button",
-            style: "secondary",
-            height: "sm",
-            // Open the web app's OCR-review screen (LIFF) for this pending slip.
-            action: { type: "uri", label: "แก้ไข", uri: `${LIFF_REVIEW_URL}?review=${documentId}` },
-          },
-          {
-            type: "button",
-            style: "primary",
-            height: "sm",
-            color: "#43507F",
-            action: { type: "postback", label: "ยืนยัน", data: `action=confirm&id=${documentId}` },
-          },
-        ],
-      },
+      body: { type: "box", layout: "vertical", spacing: "md", contents: body },
+      footer: { type: "box", layout: "horizontal", spacing: "sm", contents: footerContents },
     },
   };
 }
@@ -565,13 +595,30 @@ async function handlePostback(event: LineEvent): Promise<void> {
     // Guard stale cards: an old bubble stays in the chat forever (LINE can't
     // recall a sent message), so a second tap must not double-add the coupon.
     const { data: docRow } = await admin
-      .from("tax_documents").select("status, user_id, bond_id, pay_date").eq("id", id).maybeSingle();
+      .from("tax_documents").select("status, user_id, bond_id, pay_date, gross_amount, wht_amount").eq("id", id).maybeSingle();
     if (!docRow) {
       await lineReply(event.replyToken, [{ type: "text", text: "ไม่พบรายการนี้แล้วครับ 🙏" }]);
       return;
     }
     if (docRow.status === "confirmed") {
       await lineReply(event.replyToken, [{ type: "text", text: "รายการนี้บันทึกไปแล้ว ✅ ดูได้ในแอป beond" }]);
+      return;
+    }
+    // Never save an incomplete coupon — without a bond it can't be mapped to a
+    // payout (orphan slip). Guards a stale card whose confirm is tapped even
+    // though the data is missing.
+    const incomplete: string[] = [];
+    if (!docRow.bond_id) incomplete.push("รหัสหุ้นกู้");
+    if (!docRow.pay_date) incomplete.push("วันที่จ่าย");
+    if (docRow.gross_amount === null) incomplete.push("ดอกเบี้ย");
+    if (docRow.wht_amount === null) incomplete.push("ภาษีหัก");
+    if (incomplete.length) {
+      await lineReply(event.replyToken, [
+        {
+          type: "text",
+          text: `ยังบันทึกไม่ได้ครับ ข้อมูลไม่ครบ (ขาด: ${incomplete.join(", ")})\nกด “แก้ไข” ที่การ์ดเพื่อเพิ่มข้อมูลก่อนนะครับ 🙏`,
+        },
+      ]);
       return;
     }
     const dup = await findDuplicateCoupon(docRow.user_id, docRow.bond_id, docRow.pay_date, id);

@@ -441,6 +441,71 @@ export function useTaxCredits(): { docs: TaxDoc[]; loading: boolean; refetch: ()
   return { docs, loading, refetch: load };
 }
 
+// Detects coupon payouts that flipped to "confirmed" since the previous docs
+// snapshot and returns their payoutIds for a one-shot animation. Keyed by the
+// *matched* payout (not the slip's raw date) so the cube pop + card glow land on
+// the right month. Keys stay set ~1s, then clear; the initial load is skipped so
+// existing confirmations don't all animate on mount.
+export function useJustConfirmed(timeline: TimelineMonth[], docs: TaxDoc[]): Set<string> {
+  const prev = useRef<Set<string> | null>(null);
+  // Data (docs + timeline) arrives async after mount, so the first populated
+  // snapshot would otherwise look "all new". Ignore matches during the initial
+  // settle window; only animate confirmations that land mid-session.
+  const mountedAt = useRef(Date.now());
+  const [fresh, setFresh] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    const now = new Set(matchConfirmedPayouts(timeline, docs).keys());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (prev.current && Date.now() - mountedAt.current > 5000) {
+      const added: string[] = [];
+      now.forEach((k) => {
+        if (!prev.current!.has(k)) added.push(k);
+      });
+      if (added.length) {
+        setFresh(new Set(added));
+        timer = setTimeout(() => setFresh(new Set()), 1000);
+      }
+    }
+    prev.current = now;
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [timeline, docs]);
+  return fresh;
+}
+
+// Matches confirmed 50-ทวิ slips to the coupon payouts they belong to. A slip's
+// pay_date can drift from the scheduled payout_date by a couple of weeks (coupon
+// accrues end-of-month, is paid early next month), so we match on symbol +
+// nearest payout date within a 45-day window rather than exact month. Coupons
+// are ≥ ~1 quarter apart, so the window maps unambiguously; each payout takes at
+// most one slip. Returns payoutId → the matched doc.
+export function matchConfirmedPayouts(timeline: TimelineMonth[], docs: TaxDoc[]): Map<string, TaxDoc> {
+  const WINDOW = 45 * 86_400_000;
+  const all = timeline.flatMap((m) =>
+    m.payouts
+      .filter((p) => p.payoutISO)
+      .map((p) => ({ id: p.id, symbol: p.symbol, t: new Date(p.payoutISO as string).getTime() })),
+  );
+  const map = new Map<string, TaxDoc>();
+  const claimed = new Set<string>();
+  for (const d of docs) {
+    if (d.status !== "confirmed" || !d.symbol || !d.payDate) continue;
+    const dt = new Date(d.payDate).getTime();
+    let best: { id: string; diff: number } | null = null;
+    for (const p of all) {
+      if (p.symbol !== d.symbol || claimed.has(p.id)) continue;
+      const diff = Math.abs(p.t - dt);
+      if (diff <= WINDOW && (!best || diff < best.diff)) best = { id: p.id, diff };
+    }
+    if (best) {
+      claimed.add(best.id);
+      map.set(best.id, d);
+    }
+  }
+  return map;
+}
+
 // Current Thai tax year in the Buddhist calendar (พ.ศ.).
 export function currentTaxYearBE(): number {
   return new Date().getFullYear() + 543;

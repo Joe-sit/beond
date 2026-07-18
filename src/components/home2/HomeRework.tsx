@@ -1,0 +1,167 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { IconSmartHome, IconChartBar, IconWallet } from "@tabler/icons-react";
+import type { AuthProfile } from "../../lib/auth";
+import { useTimeline, useTaxCredits, matchConfirmedPayouts, currentTaxYearBE } from "../../hooks/usePortfolio";
+import wordmark from "../../assets/landing-logo.svg?raw";
+import HomeReworkSkeleton from "./HomeReworkSkeleton";
+import MonthFolderCard, { type FolderSlip } from "./MonthFolderCard";
+import BondScanStack, { type SlipPaperData } from "./BondScanStack";
+
+const WHT = 0.15;
+
+const SECTIONS = [
+  { id: "home", icon: IconSmartHome, label: "หน้าหลัก" },
+  { id: "portfolio", icon: IconChartBar, label: "พอร์ตโฟลิโอ" },
+  { id: "tax", icon: IconWallet, label: "ภาษี" },
+] as const;
+
+// Reworked home — full-viewport scroll-snap sections with a sticky brand (top
+// left), LINE avatar (top right), and a left anchor-nav rail whose active icon
+// tracks the section in view. Figma node 846:2596.
+export default function HomeRework({ profile }: { profile: AuthProfile }) {
+  const { months, loading } = useTimeline();
+  const { docs } = useTaxCredits();
+  const matched = useMemo(() => matchConfirmedPayouts(months, docs), [months, docs]);
+
+  const forceSkeleton = new URLSearchParams(window.location.search).has("skeleton");
+  const showSkeleton = loading || forceSkeleton;
+
+  // Months that actually pay coupons, of the current tax year first.
+  const payoutMonths = useMemo(() => {
+    const yearBE = String(currentTaxYearBE());
+    const withYear = months.filter((m) => m.payouts.length > 0);
+    const thisYear = withYear.filter((m) => m.year === yearBE);
+    return thisYear.length ? thisYear : withYear;
+  }, [months]);
+
+  const [monthIdx, setMonthIdx] = useState(0);
+  // Slip id focused by hovering its row in the folder list — drives the stack.
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const month = payoutMonths[Math.min(monthIdx, Math.max(0, payoutMonths.length - 1))];
+
+  const { folderSlips, certSlips, totalInterest, monthLabel } = useMemo(() => {
+    if (!month) return { folderSlips: [] as FolderSlip[], certSlips: [] as SlipPaperData[], totalInterest: 0, monthLabel: "" };
+    const folder: FolderSlip[] = [];
+    const certs: SlipPaperData[] = [];
+    let total = 0;
+    for (const p of month.payouts) {
+      const confirmed = matched.has(p.id);
+      const wht = Math.round(p.amount * WHT);
+      total += p.amount;
+      folder.push({ id: p.id, symbol: p.symbol, issuer: p.issuer, installment: p.installment, confirmed });
+      if (!confirmed) certs.push({ id: p.id, symbol: p.symbol, issuer: p.issuer, installment: p.installment, wht, net: p.amount - wht });
+    }
+    return { folderSlips: folder, certSlips: certs, totalInterest: total, monthLabel: `${month.month} ${month.year}` };
+  }, [month, matched]);
+
+  // Anchor-nav active section via IntersectionObserver on the scroll wrapper.
+  const [active, setActive] = useState(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const els = SECTIONS.map((s) => root.querySelector(`#sec-${s.id}`)).filter(Boolean) as Element[];
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            const i = SECTIONS.findIndex((s) => `sec-${s.id}` === e.target.id);
+            if (i >= 0) setActive(i);
+          }
+        }
+      },
+      { root, threshold: 0.55 },
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, []);
+
+  const scrollTo = (id: string) => {
+    scrollRef.current?.querySelector(`#sec-${id}`)?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  if (showSkeleton) return <HomeReworkSkeleton profile={profile} />;
+
+  return (
+    <div ref={scrollRef} className="relative h-dvh overflow-y-auto bg-surface font-kanit">
+      {/* Sticky brand — top left. Wordmark is the real asset, tinted navy via
+          its --fill-0 CSS var (defaults to white in the SVG). */}
+      <div className="pointer-events-none fixed top-8 left-10 z-30 flex items-center gap-2">
+        <div className="leading-tight text-[#43507F]">
+          <span
+            className="block h-4 w-auto [&_svg]:h-full [&_svg]:w-auto"
+            style={{ ["--fill-0" as string]: "#43507F" }}
+            aria-label="beond"
+            dangerouslySetInnerHTML={{ __html: wordmark }}
+          />
+          <p className="mt-0.5 text-[10px] font-medium text-[#43507F]/60">Bring Your Bonds Beyond</p>
+        </div>
+      </div>
+
+      {/* User avatar (LINE) — top right */}
+      <div className="fixed top-8 right-10 z-30">
+        {profile.pictureUrl ? (
+          <img src={profile.pictureUrl} alt={profile.displayName ?? "profile"} className="size-14 rounded-full border border-black/10 object-cover" />
+        ) : (
+          <div className="flex size-14 items-center justify-center rounded-full border border-black/10 bg-white text-lg font-bold text-[#43507F]">
+            {(profile.displayName ?? "?").slice(0, 1)}
+          </div>
+        )}
+      </div>
+
+      {/* Left anchor nav */}
+      <nav className="fixed top-1/2 left-10 z-30 flex -translate-y-1/2 flex-col items-center gap-6 rounded-full border border-black/10 bg-white px-4 py-8">
+        {SECTIONS.map((s, i) => {
+          const on = i === active;
+          return (
+            <button
+              key={s.id}
+              onClick={() => scrollTo(s.id)}
+              aria-label={s.label}
+              aria-current={on}
+              className={`flex size-14 items-center justify-center rounded-full transition-colors ${
+                on ? "bg-[#43507F] text-white" : "bg-[#43507F]/10 text-[#43507F]/60 hover:bg-[#43507F]/20"
+              }`}
+            >
+              <s.icon size={24} />
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* Section: หน้าหลัก */}
+      <section id="sec-home" className="flex min-h-dvh items-center px-6 lg:pl-40 lg:pr-24">
+        <div className="mx-auto grid w-full max-w-6xl grid-cols-1 items-center gap-10 lg:grid-cols-2">
+          <div className="flex flex-col gap-6">
+            <div>
+              <h1 className="text-2xl font-medium text-ink">หน้าหลัก</h1>
+              <p className="mt-1 text-base text-ink/60">ตรวจสอบสลิปการได้รับดอกเบี้ยหุ้นกู้ของเดือน</p>
+            </div>
+            <MonthFolderCard
+              monthLabel={monthLabel}
+              totalInterest={totalInterest}
+              slips={folderSlips}
+              onPrev={() => setMonthIdx((i) => (i - 1 + payoutMonths.length) % payoutMonths.length)}
+              onNext={() => setMonthIdx((i) => (i + 1) % payoutMonths.length)}
+              onRowHover={setFocusId}
+            />
+          </div>
+
+          <div className="flex justify-center lg:translate-x-24 lg:translate-y-10">
+            <BondScanStack key={monthLabel} slips={certSlips} focusId={focusId} />
+          </div>
+        </div>
+      </section>
+
+      {/* Section: พอร์ตโฟลิโอ (placeholder — built next) */}
+      <section id="sec-portfolio" className="flex min-h-dvh items-center justify-center px-6 lg:pl-40">
+        <p className="text-sm text-ink/40">พอร์ตโฟลิโอ — เร็วๆ นี้</p>
+      </section>
+
+      {/* Section: ภาษี (placeholder) */}
+      <section id="sec-tax" className="flex min-h-dvh items-center justify-center px-6 lg:pl-40">
+        <p className="text-sm text-ink/40">ภาษี — เร็วๆ นี้</p>
+      </section>
+    </div>
+  );
+}

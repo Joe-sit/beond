@@ -17,18 +17,47 @@ html {
   /* No rubber-band overscroll — stops the white gutter appearing past the
      page ends when the user scrolls beyond the content. */
   overscroll-behavior: none;
-  font-size: 18px;
+  font-size: 17px;
 }
 
 @media (min-width: 1024px) {
   html {
-    font-size: clamp(14px, 0.7vw + 5px, 16px);
+    font-size: clamp(13px, 0.65vw + 4px, 15px);
   }
 }
 
 @theme {
   --font-sukhumvit: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-nunito: "Nunito", "Noto Sans Thai", system-ui, sans-serif;
+  --font-kanit: "Kanit", "Noto Sans Thai", system-ui, sans-serif;
+
+  /* ── beond design tokens ──────────────────────────────────────────────
+     Tailwind v4 turns each --color-* into utilities (bg-brand, text-ink,
+     border-line, from-success-soft, …). Values come from the Figma design.
+     See DESIGN.md for the full system + usage. */
+
+  /* Brand */
+  --color-brand: #43507f;        /* primary navy — headings, nav, primary buttons */
+  --color-brand-blue: #2968a5;   /* accent blue — links, secondary actions */
+  --color-sky: #779bc6;          /* hero sky gradient top */
+
+  /* Surfaces */
+  --color-surface: #f6f4f1;      /* app background (cream) */
+  --color-card: #ffffff;         /* card surface */
+  --color-line: #e7e7e7;         /* hairline border */
+  --color-line-soft: #f0f0f0;    /* softer divider */
+
+  /* Ink (text) */
+  --color-ink: #222222;          /* primary text */
+  --color-ink-soft: #8a8a8a;     /* secondary / muted text */
+
+  /* Semantic */
+  --color-success: #12bc59;      /* confirmed / positive */
+  --color-success-soft: #69e889; /* gradient start */
+  --color-success-mid: #00c732;  /* gradient mid */
+  --color-success-strong: #00b12d; /* gradient end */
+  --color-warning: #c0563b;      /* final-tax / owe-more */
+  --color-pending: #d97706;      /* awaiting confirmation (amber) */
 }
 
 /* Scroll without a visible scrollbar */
@@ -154,6 +183,161 @@ html {
   }
   to {
     transform: scaleY(1);
+  }
+}
+
+/* Coupon confirmed (slip matched via LINE OCR) — the cube pops as it flips to
+   green, and the matching month card pulses a green glow. Plays once. */
+@keyframes confirm-pop {
+  0% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.16);
+  }
+  55% {
+    transform: scale(0.96);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.animate-confirm-pop {
+  animation: confirm-pop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform-origin: bottom center;
+  will-change: transform;
+}
+@keyframes confirm-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(18, 188, 89, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 16px rgba(18, 188, 89, 0);
+  }
+}
+.animate-confirm-glow {
+  animation: confirm-glow 1s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-confirm-pop,
+  .animate-confirm-glow {
+    animation: none;
+  }
+}
+
+/* ── Match celebration overlay ─────────────────────────────────────────────
+   When a slip matches its coupon, the cube flies to centre-screen and a slip
+   paper is tossed into it, which then flips the cube green. */
+@keyframes celebrate-backdrop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-celebrate-backdrop {
+  animation: celebrate-backdrop 0.35s ease-out both;
+}
+@keyframes celebrate-cube-in {
+  0% {
+    transform: scale(0.2) translateY(-30px);
+    opacity: 0;
+  }
+  55% {
+    transform: scale(1.12) translateY(0);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(0.97);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.animate-celebrate-cube-in {
+  animation: celebrate-cube-in 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+/* Slip paper: rises from below-left, arcs up, then dives shrinking into the
+   cube's front face and vanishes. */
+@keyframes celebrate-slip {
+  0% {
+    transform: translate(-90px, 150px) rotate(-24deg) scale(1);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  50% {
+    transform: translate(0, -70px) rotate(10deg) scale(1.05);
+    opacity: 1;
+  }
+  78% {
+    transform: translate(0, 4px) rotate(0deg) scale(0.32);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(0, 10px) rotate(0deg) scale(0.08);
+    opacity: 0;
+  }
+}
+.animate-celebrate-slip {
+  animation: celebrate-slip 1.3s cubic-bezier(0.5, 0, 0.4, 1) 0.5s both;
+}
+/* Green cube revealed just as the slip lands (~1.5s in). */
+@keyframes celebrate-green {
+  0%,
+  62% {
+    opacity: 0;
+  }
+  78%,
+  100% {
+    opacity: 1;
+  }
+}
+.animate-celebrate-green {
+  animation: celebrate-green 1.9s ease-out both;
+}
+/* Impact pop on the whole cube when the slip lands. */
+@keyframes celebrate-impact {
+  0%,
+  70% {
+    transform: scale(1);
+  }
+  80% {
+    transform: scale(1.16);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.animate-celebrate-impact {
+  animation: celebrate-impact 1.9s ease-out both;
+}
+@keyframes celebrate-caption {
+  0%,
+  60% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  85%,
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-celebrate-caption {
+  animation: celebrate-caption 2s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-celebrate-backdrop,
+  .animate-celebrate-cube-in,
+  .animate-celebrate-slip,
+  .animate-celebrate-green,
+  .animate-celebrate-impact,
+  .animate-celebrate-caption {
+    animation: none;
   }
 }
 
