@@ -82,11 +82,18 @@ export default function MonthFolderCard({
           block animates height on month change, so the ‹ › cursor never moves. */}
       <div className="relative">
         {/* Month selector tab */}
-        <div className="absolute right-8 bottom-full z-10 flex w-[190px] items-center gap-2 rounded-t-2xl border border-b-0 border-black/10 bg-white p-2">
+        <div className="absolute right-8 bottom-full z-10 flex items-center gap-2 rounded-t-2xl border border-b-0 border-black/10 bg-white p-2">
           <button onClick={onPrev} aria-label="เดือนก่อน" className="flex size-8 shrink-0 items-center justify-center rounded-full border border-black/10 bg-white text-ink transition hover:bg-black/5">
             <IconChevronLeft size={24} />
           </button>
-          <span className="flex-1 truncate whitespace-nowrap text-center text-base text-ink/80">{monthLabel}</span>
+          {/* Reserve width for the widest possible month label so the tab never
+              resizes and the text always fits on one line. The sizer (widest
+              Thai month + a 4-digit BE year) sits invisible; the real label
+              overlays it, centred. */}
+          <span className="relative grid justify-items-center whitespace-nowrap text-base text-ink/80">
+            <span aria-hidden className="invisible col-start-1 row-start-1 px-1">พฤศจิกายน 2568</span>
+            <span className="col-start-1 row-start-1">{monthLabel}</span>
+          </span>
           <button onClick={onNext} aria-label="เดือนถัดไป" className="flex size-8 shrink-0 items-center justify-center rounded-full border border-black/10 bg-white text-ink transition hover:bg-black/5">
             <IconChevronRight size={24} />
           </button>
