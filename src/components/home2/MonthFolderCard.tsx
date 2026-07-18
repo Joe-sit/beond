@@ -1,4 +1,4 @@
-import { IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
+import { IconChevronLeft, IconChevronRight, IconRestore } from "@tabler/icons-react";
 import { motion, AnimatePresence } from "motion/react";
 import { issuerName } from "../../lib/issuerLogo";
 import IssuerLogo from "../IssuerLogo";
@@ -23,6 +23,8 @@ export default function MonthFolderCard({
   slips,
   onPrev,
   onNext,
+  onCurrent,
+  isCurrent,
   onRowHover,
 }: {
   monthLabel: string;
@@ -30,6 +32,8 @@ export default function MonthFolderCard({
   slips: FolderSlip[];
   onPrev?: () => void;
   onNext?: () => void;
+  onCurrent?: () => void;
+  isCurrent?: boolean;
   onRowHover?: (id: string | null) => void;
 }) {
   const remaining = slips.filter((s) => !s.confirmed).length;
@@ -85,6 +89,19 @@ export default function MonthFolderCard({
           <button onClick={onNext} aria-label="เดือนถัดไป" className="flex size-8 shrink-0 items-center justify-center rounded-full border border-black/10 bg-white text-ink transition hover:bg-black/5">
             <IconChevronRight size={24} />
           </button>
+
+          {/* Jump back to the current month — hidden while already there. */}
+          {!isCurrent && (
+            <button
+              onClick={onCurrent}
+              aria-label="กลับสู่เดือนปัจจุบัน"
+              className="absolute right-full bottom-0 mr-2 flex items-center justify-center rounded-t-2xl border border-b-0 border-black/10 bg-white p-2 text-ink/80 transition hover:bg-black/5"
+            >
+              <span className="flex size-8 items-center justify-center">
+                <IconRestore size={22} />
+              </span>
+            </button>
+          )}
         </div>
 
         <motion.div

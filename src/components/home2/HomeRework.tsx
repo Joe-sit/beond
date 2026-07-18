@@ -31,27 +31,37 @@ export default function HomeRework({ profile }: { profile: AuthProfile }) {
   const forceSkeleton = new URLSearchParams(window.location.search).has("skeleton");
   const showSkeleton = loading || forceSkeleton;
 
-  // Every month that pays a coupon, across the whole timeline (chronological)
-  // — so the tab can page all the way to the bond's final installment.
-  const payoutMonths = useMemo(() => months.filter((m) => m.payouts.length > 0), [months]);
+  // Navigate the whole continuous timeline (every month, chronological), not
+  // just months with coupons — so the current month is always selectable (even
+  // when it pays nothing) and the tab can still page to the final installment.
+  // Empty months simply read as 0 ใบ / dotted.
+  const payoutMonths = months;
 
-  const [monthIdx, setMonthIdx] = useState(0);
-  // Start on the nearest upcoming payout month (today or later), not the first
-  // historical one. Runs once, when the payout months first arrive.
-  const didInitMonth = useRef(false);
-  useEffect(() => {
-    if (didInitMonth.current || !payoutMonths.length) return;
-    didInitMonth.current = true;
+  // Index of the current month in payoutMonths — exact if it pays a coupon,
+  // else the nearest upcoming payout month. Drives the default tab and the
+  // "back to current month" button.
+  const currentIdx = useMemo(() => {
     const now = new Date();
     const beYear = now.getFullYear() + 543;
     const mIdx = now.getMonth();
-    const idx = payoutMonths.findIndex((m) => {
+    const exact = payoutMonths.findIndex((m) => Number(m.year) === beYear && THAI_MONTHS.indexOf(m.month) === mIdx);
+    if (exact >= 0) return exact;
+    const upcoming = payoutMonths.findIndex((m) => {
       const y = Number(m.year);
       const mi = THAI_MONTHS.indexOf(m.month);
       return y > beYear || (y === beYear && mi >= mIdx);
     });
-    setMonthIdx(idx >= 0 ? idx : 0);
+    return upcoming >= 0 ? upcoming : 0;
   }, [payoutMonths]);
+
+  const [monthIdx, setMonthIdx] = useState(0);
+  // Start on the current month. Runs once, when the payout months first arrive.
+  const didInitMonth = useRef(false);
+  useEffect(() => {
+    if (didInitMonth.current || !payoutMonths.length) return;
+    didInitMonth.current = true;
+    setMonthIdx(currentIdx);
+  }, [payoutMonths, currentIdx]);
   // Slip id focused by hovering its row in the folder list — drives the stack.
   const [focusId, setFocusId] = useState<string | null>(null);
   const month = payoutMonths[Math.min(monthIdx, Math.max(0, payoutMonths.length - 1))];
@@ -164,6 +174,8 @@ export default function HomeRework({ profile }: { profile: AuthProfile }) {
               slips={folderSlips}
               onPrev={() => setMonthIdx((i) => (i - 1 + payoutMonths.length) % payoutMonths.length)}
               onNext={() => setMonthIdx((i) => (i + 1) % payoutMonths.length)}
+              onCurrent={() => setMonthIdx(currentIdx)}
+              isCurrent={monthIdx === currentIdx}
               onRowHover={setFocusId}
             />
           </div>
