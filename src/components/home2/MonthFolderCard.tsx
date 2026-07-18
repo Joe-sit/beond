@@ -1,4 +1,4 @@
-import { IconCheck, IconCircleDotted, IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
+import { IconChevronLeft, IconChevronRight } from "@tabler/icons-react";
 import { motion, AnimatePresence } from "motion/react";
 import { issuerName } from "../../lib/issuerLogo";
 import IssuerLogo from "../IssuerLogo";
@@ -9,6 +9,7 @@ export interface FolderSlip {
   issuer: string;
   installment: string;
   confirmed: boolean;
+  amount: number;
 }
 
 const fmtTHB = (n: number) => new Intl.NumberFormat("th-TH").format(Math.round(n));
@@ -51,19 +52,6 @@ export default function MonthFolderCard({
             <span className="text-4xl font-medium text-ink">
               <span>{remaining}</span> ใบ
             </span>
-            {/* One status pip per slip — green check if its 50-ทวิ is confirmed,
-                dotted grey while still pending. */}
-            {slips.map((s) =>
-              s.confirmed ? (
-                <span key={s.id} className="flex size-10 items-center justify-center rounded-full border border-black/10 bg-[#80BA44] text-white">
-                  <IconCheck size={24} />
-                </span>
-              ) : (
-                <span key={s.id} className="flex size-10 items-center justify-center rounded-full border border-black/10 bg-[#F5F5F5] text-ink/40">
-                  <IconCircleDotted size={24} />
-                </span>
-              ),
-            )}
           </div>
           <p className="mt-2 text-sm text-ink/80">
             ดอกเบี้ยรวม ฿<span>{fmtTHB(totalInterest)}</span>
@@ -139,11 +127,7 @@ export default function MonthFolderCard({
                     <p className="text-sm text-white/80">งวดที่ {s.installment}</p>
                   </div>
                 </div>
-                {s.confirmed ? (
-                  <span className="rounded-xl bg-white/25 px-2 py-1 text-sm text-white">ยืนยันแล้ว</span>
-                ) : (
-                  <span className="rounded-xl bg-[#2968A5] px-2 py-1 text-sm text-white">รอยืนยัน</span>
-                )}
+                <span className="text-lg font-medium text-white">฿{fmtTHB(s.amount)}</span>
               </motion.div>
             ))}
             {slips.length === 0 && (

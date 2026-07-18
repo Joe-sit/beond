@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconSmartHome, IconChartBar, IconWallet } from "@tabler/icons-react";
 import type { AuthProfile } from "../../lib/auth";
-import { useTimeline, useTaxCredits, matchConfirmedPayouts, currentTaxYearBE } from "../../hooks/usePortfolio";
+import { useTimeline, useTaxCredits, matchConfirmedPayouts } from "../../hooks/usePortfolio";
 import wordmark from "../../assets/landing-logo.svg?raw";
 import HomeReworkSkeleton from "./HomeReworkSkeleton";
 import MonthFolderCard, { type FolderSlip } from "./MonthFolderCard";
 import BondScanStack, { type SlipPaperData } from "./BondScanStack";
 
 const WHT = 0.15;
+
+const THAI_MONTHS = [
+  "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+];
 
 const SECTIONS = [
   { id: "home", icon: IconSmartHome, label: "หน้าหลัก" },
@@ -26,15 +31,27 @@ export default function HomeRework({ profile }: { profile: AuthProfile }) {
   const forceSkeleton = new URLSearchParams(window.location.search).has("skeleton");
   const showSkeleton = loading || forceSkeleton;
 
-  // Months that actually pay coupons, of the current tax year first.
-  const payoutMonths = useMemo(() => {
-    const yearBE = String(currentTaxYearBE());
-    const withYear = months.filter((m) => m.payouts.length > 0);
-    const thisYear = withYear.filter((m) => m.year === yearBE);
-    return thisYear.length ? thisYear : withYear;
-  }, [months]);
+  // Every month that pays a coupon, across the whole timeline (chronological)
+  // — so the tab can page all the way to the bond's final installment.
+  const payoutMonths = useMemo(() => months.filter((m) => m.payouts.length > 0), [months]);
 
   const [monthIdx, setMonthIdx] = useState(0);
+  // Start on the nearest upcoming payout month (today or later), not the first
+  // historical one. Runs once, when the payout months first arrive.
+  const didInitMonth = useRef(false);
+  useEffect(() => {
+    if (didInitMonth.current || !payoutMonths.length) return;
+    didInitMonth.current = true;
+    const now = new Date();
+    const beYear = now.getFullYear() + 543;
+    const mIdx = now.getMonth();
+    const idx = payoutMonths.findIndex((m) => {
+      const y = Number(m.year);
+      const mi = THAI_MONTHS.indexOf(m.month);
+      return y > beYear || (y === beYear && mi >= mIdx);
+    });
+    setMonthIdx(idx >= 0 ? idx : 0);
+  }, [payoutMonths]);
   // Slip id focused by hovering its row in the folder list — drives the stack.
   const [focusId, setFocusId] = useState<string | null>(null);
   const month = payoutMonths[Math.min(monthIdx, Math.max(0, payoutMonths.length - 1))];
@@ -44,12 +61,16 @@ export default function HomeRework({ profile }: { profile: AuthProfile }) {
     const folder: FolderSlip[] = [];
     const certs: SlipPaperData[] = [];
     let total = 0;
+    // Only slips still TO COLLECT (unconfirmed) drive the card — the folder
+    // list, status pips, ดอกเบี้ยรวม and ภาษีที่จะสะสมได้ all reflect this same
+    // set, matching the slip stack. A confirmed slip is collected → it drops
+    // out of every count, so a fully-collected month reads as 0 / empty.
     for (const p of month.payouts) {
-      const confirmed = matched.has(p.id);
+      if (matched.has(p.id)) continue;
       const wht = Math.round(p.amount * WHT);
       total += p.amount;
-      folder.push({ id: p.id, symbol: p.symbol, issuer: p.issuer, installment: p.installment, confirmed });
-      if (!confirmed) certs.push({ id: p.id, symbol: p.symbol, issuer: p.issuer, installment: p.installment, wht, net: p.amount - wht });
+      folder.push({ id: p.id, symbol: p.symbol, issuer: p.issuer, installment: p.installment, confirmed: false, amount: p.amount });
+      certs.push({ id: p.id, symbol: p.symbol, issuer: p.issuer, installment: p.installment, wht, net: p.amount - wht });
     }
     return { folderSlips: folder, certSlips: certs, totalInterest: total, monthLabel: `${month.month} ${month.year}` };
   }, [month, matched]);

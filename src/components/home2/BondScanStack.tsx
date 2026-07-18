@@ -1,5 +1,6 @@
 import { type MouseEvent, useRef, useState } from "react";
 import { motion } from "motion/react";
+import { IconCircleDotted } from "@tabler/icons-react";
 import { issuerName } from "../../lib/issuerLogo";
 import IssuerLogo from "../IssuerLogo";
 
@@ -32,10 +33,23 @@ export default function BondScanStack({ slips, focusId }: { slips: SlipPaperData
     setHovered(i);
   };
 
+  // No slips to collect this month → a single dotted placeholder slip in the
+  // front slot instead of the stack, so the layout stays put.
   if (!slips.length) {
     return (
-      <div className="flex h-[470px] items-center justify-center text-sm text-ink-soft">
-        เดือนนี้ไม่มีใบหุ้นกู้ให้สแกน
+      <div className="relative mx-auto h-[600px] w-[520px]" style={{ perspective: 2800, transformStyle: "preserve-3d" }}>
+        {/* Same motion.div + animate object as a real front slip, so framer
+            emits the exact same transform order (translate→rotateX→rotateY) and
+            the placeholder sits at the identical 3D angle. */}
+        <motion.div
+          className="absolute top-28 left-6 w-[310px] [transform-style:preserve-3d]"
+          animate={{ x: 0, y: 0, z: 0, rotateY: -22, rotateX: 6, scale: 1 }}
+        >
+          <div className="flex aspect-[210/297] w-[310px] flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-black/20 bg-white/50 text-ink-soft">
+            <IconCircleDotted size={44} className="text-black/25" />
+            <p className="text-sm">เดือนนี้ไม่มีสลิปต้องสะสม</p>
+          </div>
+        </motion.div>
       </div>
     );
   }
