@@ -479,6 +479,13 @@ function BuildingChart({
   matched: ReturnType<typeof matchConfirmedPayouts>;
   onSelect: (i: number) => void;
 }) {
+  // Intro storytelling (plays once): bars grow out of the ground in the iso view
+  // — you feel the 3D dimension — then the camera turns them face-on into a flat
+  // bar chart (the resting state), and finally the ฿ amounts fade up.
+  const [grown, setGrown] = useState(false); // false → collapsed on the ground
+  const [faced, setFaced] = useState(false); // false → iso 3D, true → front-on
+  const [tourIdx, setTourIdx] = useState<number | null>(null); // camera visiting ordered[i]
+  const introDone = useRef(false);
   // 3D transforms need pixel heights, so measure the stage.
   const stageRef = useRef<HTMLDivElement>(null);
   const [stageH, setStageH] = useState(0);
@@ -492,6 +499,7 @@ function BuildingChart({
     return () => ro.disconnect();
   }, []);
 
+
   // All months of the focused month's year, positioned by distance (d) from the
   // focused one so the whole year recedes into depth around the centre.
   const focusYear = months[activeIdx]?.year;
@@ -502,6 +510,38 @@ function BuildingChart({
 
   // Render far→near so DOM order matches stacking (zIndex still set explicitly).
   const ordered = [...items].sort((a, b) => a.d - b.d);
+
+  // Horizontal fan offset for a given distance (shared by the layout + the
+  // camera tour, which slides the deck to centre each building it visits).
+  const xOf = (d: number) => (d === 0 ? 0 : Math.sign(d) * XUNIT * ((1 - Math.pow(XFALLOFF, Math.abs(d))) / (1 - XFALLOFF)));
+
+  // Intro storytelling (once): bars rise in iso → the camera tours each cube
+  // left→right (turns it front, centres + spotlights it) → pulls back to the
+  // full front-on bar chart with every amount revealed.
+  const orderedRef = useRef(ordered);
+  orderedRef.current = ordered;
+  // No cleanup that clears the timers: under React StrictMode the effect is
+  // mounted → unmounted → remounted, and clearing on the throwaway cleanup would
+  // cancel the whole sequence before it runs. introDone guards against a double
+  // schedule instead; the chart lives for the session so the timers are safe.
+  useEffect(() => {
+    if (stageH <= 0 || introDone.current || orderedRef.current.length === 0) return;
+    introDone.current = true;
+    const n = orderedRef.current.length;
+    setTimeout(() => setGrown(true), 350); // beat, then rise from the ground
+    let t = 1100; // after the grow settles
+    for (let i = 0; i < n; i++) {
+      setTimeout(() => setTourIdx(i), t);
+      t += 380;
+    }
+    setTimeout(() => {
+      setTourIdx(null);
+      setFaced(true); // pull back to the flat bar chart, reveal all amounts
+    }, t + 150);
+  }, [stageH]);
+
+  // Slide the whole deck so the currently-toured building sits at centre.
+  const deckShift = faced || tourIdx == null || !ordered[tourIdx] ? 0 : -xOf(ordered[tourIdx].d);
 
   // Fit-to-height: one cube unit is CUBE_H, but if the busiest month of the year
   // would overflow the stage, shrink the unit so its tower fills ~85% instead.
@@ -530,12 +570,20 @@ function BuildingChart({
       {/* Baseline stage — buildings scaled down with distance (past AND future),
           future painted in front (zIndex), past behind. */}
       <div ref={stageRef} className="absolute inset-x-0 -bottom-10 top-2">
+        {/* Deck — slides horizontally so the camera-toured building sits centre. */}
+        <div
+          className="absolute inset-0"
+          style={{ transform: `translateX(${deckShift}px)`, transition: "transform 340ms cubic-bezier(.4,0,.2,1)" }}
+        >
         {stageH > 0 &&
-          ordered.map(({ d, g, m }) => {
+          ordered.map(({ d, g, m }, oi) => {
             // Farther month → smaller (both directions), fan bunching outward.
-            const t = d === 0 ? 0 : (1 - Math.pow(XFALLOFF, Math.abs(d))) / (1 - XFALLOFF);
-            const x = Math.sign(d) * XUNIT * t;
+            const x = xOf(d);
             const scale = Math.pow(SCALE_FALLOFF, Math.abs(d));
+            // Camera-tour state for this building.
+            const onTour = !faced && tourIdx != null; // a visit is in progress
+            const isVisited = !faced && tourIdx === oi; // the one being looked at
+            const showFront = faced || isVisited;
             // Largest payout at the base, smaller ones stacked on top.
             const segs: Seg[] = [...m.payouts]
               .sort((a, b) => b.amount - a.amount)
@@ -544,6 +592,7 @@ function BuildingChart({
             // so every cube is the same real size; only distance shrinks it.
             const nCubes = Math.max(1, segs.length);
             const hpx = nCubes * cubeH;
+            const baseBlur = Math.max(0, Math.abs(d) - 2) * 6;
             return (
               <button
                 key={g}
@@ -553,18 +602,22 @@ function BuildingChart({
                 style={{
                   width: B_W,
                   height: hpx,
-                  transform: `translateX(calc(-50% + ${x}px)) scale(${scale})`,
-                  zIndex: 100 + d, // future in front, past behind
-                  // Core 5 (|d| ≤ 2) stay sharp; farther months blur + fade.
-                  filter: `brightness(${1 - 0.05 * Math.abs(d)}) blur(${Math.max(0, Math.abs(d) - 2) * 6}px)`,
-                  opacity: Math.abs(d) >= 3 ? 0.5 : 1,
-                  transition: "transform 520ms cubic-bezier(.22,.61,.36,1), filter 520ms ease, opacity 520ms ease",
+                  // scaleY grows the bar out of the ground; visited cube pops a touch.
+                  transform: `translateX(calc(-50% + ${x}px)) scale(${scale * (isVisited ? 1.08 : 1)}) scaleY(${grown ? 1 : 0.02})`,
+                  zIndex: isVisited ? 130 : 100 + d, // visited on top, else future in front
+                  // Sharp when visited; core 5 sharp; farther months blur.
+                  filter: `brightness(${1 - 0.05 * Math.abs(d)}) blur(${isVisited ? 0 : baseBlur}px)`,
+                  // During the tour, non-visited cubes dim so the camera's subject pops.
+                  opacity: onTour ? (isVisited ? 1 : 0.28) : Math.abs(d) >= 3 ? 0.5 : 1,
+                  transition: "transform 340ms cubic-bezier(.4,0,.2,1), filter 340ms ease, opacity 340ms ease",
+                  transitionDelay: faced || onTour ? "0ms" : `${Math.abs(d) * 70}ms`,
                 }}
               >
-                <Building3D hpx={hpx} segments={segs} label={m.month} />
+                <Building3D hpx={hpx} segments={segs} label={m.month} frontView={showFront} reveal={showFront} delay={isVisited ? 0 : Math.abs(d) * 70} />
               </button>
             );
           })}
+        </div>
       </div>
 
     </div>
@@ -574,14 +627,25 @@ function BuildingChart({
 // A building rendered as real 3D cuboids: one stacked box per payout (largest at
 // the base). Confirmed payouts are green, pending grey. Empty months render a
 // single faint translucent cuboid. hpx = the building's pixel height.
-function Building3D({ hpx, segments, label }: { hpx: number; segments: Seg[]; label?: string }) {
+function Building3D({ hpx, segments, label, frontView, reveal = true, delay = 0 }: { hpx: number; segments: Seg[]; label?: string; frontView?: boolean; reveal?: boolean; delay?: number }) {
+  // Camera pans between the iso VIEW and a straight-on front view (rotateX/Y 0).
+  const camera = frontView ? "rotateX(0deg) rotateY(0deg)" : VIEW;
+  const camStyle = { transformStyle: "preserve-3d" as const, transform: `translateX(-50%) ${camera}`, transition: `transform 420ms cubic-bezier(.4,0,.2,1) ${delay}ms` };
   // Month label floating above the cube, on the SAME plane as the front face
-  // (translateZ(S/2)) so it inherits the identical perspective skew.
+  // (translateZ(S/2)) so it inherits the identical perspective skew. Fades up
+  // with the amounts once the bar has turned front-on.
   const monthLabel = label ? (
     <div className="absolute bottom-0 left-1/2" style={{ transformStyle: "preserve-3d", transform: `translateY(${-(hpx + 12)}px)` }}>
       <div
         className="absolute bottom-0 left-0 text-center font-medium leading-none text-ink/80"
-        style={{ width: S, marginLeft: -S / 2, transform: `translateZ(${S / 2}px)`, fontSize: 20 }}
+        style={{
+          width: S,
+          marginLeft: -S / 2,
+          transform: `translateZ(${S / 2}px) translateY(${reveal ? 0 : 6}px)`,
+          fontSize: 20,
+          opacity: reveal ? 1 : 0,
+          transition: "opacity 500ms ease 350ms, transform 500ms ease 350ms",
+        }}
       >
         {label}
       </div>
@@ -591,7 +655,7 @@ function Building3D({ hpx, segments, label }: { hpx: number; segments: Seg[]; la
   if (segments.length === 0) {
     return (
       <div className="absolute inset-0" style={{ perspective: PERSP }}>
-        <div className="absolute bottom-0 left-1/2" style={{ transformStyle: "preserve-3d", transform: `translateX(-50%) ${VIEW}` }}>
+        <div className="absolute bottom-0 left-1/2" style={camStyle}>
           {monthLabel}
           <Cuboid y={hpx / 2} h={hpx} front="rgba(255,255,255,0.5)" right="rgba(255,255,255,0.32)" top="rgba(255,255,255,0.68)" dashed />
         </div>
@@ -604,7 +668,7 @@ function Building3D({ hpx, segments, label }: { hpx: number; segments: Seg[]; la
   let cum = 0; // running height from the base
   return (
     <div className="absolute inset-0" style={{ perspective: PERSP }}>
-      <div className="absolute bottom-0 left-1/2" style={{ transformStyle: "preserve-3d", transform: `translateX(-50%) ${VIEW}` }}>
+      <div className="absolute bottom-0 left-1/2" style={camStyle}>
         {monthLabel}
         {segments.map((s, i) => {
           const y = cum + h / 2;
@@ -620,6 +684,7 @@ function Building3D({ hpx, segments, label }: { hpx: number; segments: Seg[]; la
               top={FACE_T[pal]}
               showTop={i === segments.length - 1}
               seg={s}
+              reveal={reveal}
             />
           );
         })}
@@ -640,6 +705,7 @@ function Cuboid({
   seg,
   dashed,
   showTop = true,
+  reveal = true,
 }: {
   y: number;
   h: number;
@@ -649,6 +715,7 @@ function Cuboid({
   seg?: Seg;
   dashed?: boolean;
   showTop?: boolean;
+  reveal?: boolean;
 }) {
   const border = dashed ? "1px dashed rgba(255,255,255,0.7)" : undefined;
   return (
@@ -664,7 +731,10 @@ function Cuboid({
           if (box < 30) return null;
           const badge = Math.round(box * 0.4);
           return (
-            <div className="flex flex-col items-center gap-1.5">
+            <div
+              className="flex flex-col items-center gap-1.5"
+              style={{ opacity: reveal ? 1 : 0, transform: `translateY(${reveal ? 0 : 8}px)`, transition: "opacity 500ms ease 350ms, transform 500ms ease 350ms" }}
+            >
               <span className="font-medium leading-none text-white drop-shadow-sm" style={{ fontSize: Math.max(11, Math.round(box * 0.3)) }}>
                 ฿{fmtTHB(seg.amount)}
               </span>
