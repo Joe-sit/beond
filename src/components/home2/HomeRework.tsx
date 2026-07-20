@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { IconSmartHome, IconChartBar, IconWallet } from "@tabler/icons-react";
+import { motion, AnimatePresence } from "motion/react";
+import { IconSmartHome, IconChartBar, IconWallet, IconLogout } from "@tabler/icons-react";
 import type { AuthProfile } from "../../lib/auth";
 import { useTimeline, useTaxCredits, matchConfirmedPayouts } from "../../hooks/usePortfolio";
 import wordmark from "../../assets/landing-logo.svg?raw";
+import mascot from "../../assets/mascot-2d.png";
+import lineQr from "../../assets/line-qr.png";
 import HomeReworkSkeleton from "./HomeReworkSkeleton";
 import MonthFolderCard, { type FolderSlip } from "./MonthFolderCard";
 import BondScanStack, { type SlipPaperData } from "./BondScanStack";
+import PortfolioSection from "./PortfolioSection";
 
 const WHT = 0.15;
 
@@ -23,7 +27,7 @@ const SECTIONS = [
 // Reworked home — full-viewport scroll-snap sections with a sticky brand (top
 // left), LINE avatar (top right), and a left anchor-nav rail whose active icon
 // tracks the section in view. Figma node 846:2596.
-export default function HomeRework({ profile }: { profile: AuthProfile }) {
+export default function HomeRework({ profile, onLogout }: { profile: AuthProfile; onLogout?: () => void }) {
   const { months, loading } = useTimeline();
   const { docs } = useTaxCredits();
   const matched = useMemo(() => matchConfirmedPayouts(months, docs), [months, docs]);
@@ -64,6 +68,10 @@ export default function HomeRework({ profile }: { profile: AuthProfile }) {
   }, [payoutMonths, currentIdx]);
   // Slip id focused by hovering its row in the folder list — drives the stack.
   const [focusId, setFocusId] = useState<string | null>(null);
+  // Avatar hover card (name + logout).
+  const [userOpen, setUserOpen] = useState(false);
+  // Title card art swaps mascot → LINE add-friend QR while hovered.
+  const [showQr, setShowQr] = useState(false);
   const month = payoutMonths[Math.min(monthIdx, Math.max(0, payoutMonths.length - 1))];
 
   const { folderSlips, certSlips, totalInterest, monthLabel } = useMemo(() => {
@@ -84,6 +92,28 @@ export default function HomeRework({ profile }: { profile: AuthProfile }) {
     }
     return { folderSlips: folder, certSlips: certs, totalInterest: total, monthLabel: `${month.month} ${month.year}` };
   }, [month, matched]);
+
+  // For an empty month — the nearest FUTURE month that still has a slip to
+  // collect, so the folder can point the user at what's coming next.
+  const nextPayout = useMemo(() => {
+    for (let j = monthIdx + 1; j < payoutMonths.length; j++) {
+      const m = payoutMonths[j];
+      const pending = m.payouts.filter((p) => !matched.has(p.id));
+      if (pending.length) {
+        const p = pending[0];
+        return {
+          idx: j,
+          monthLabel: `${m.month} ${m.year}`,
+          symbol: p.symbol,
+          issuer: p.issuer,
+          payoutDate: p.payoutDate,
+          amount: p.amount,
+          count: pending.length,
+        };
+      }
+    }
+    return null;
+  }, [payoutMonths, monthIdx, matched]);
 
   // Anchor-nav active section via IntersectionObserver on the scroll wrapper.
   const [active, setActive] = useState(0);
@@ -129,15 +159,50 @@ export default function HomeRework({ profile }: { profile: AuthProfile }) {
         </div>
       </div>
 
-      {/* User avatar (LINE) — top right */}
-      <div className="fixed top-8 right-10 z-30">
-        {profile.pictureUrl ? (
-          <img src={profile.pictureUrl} alt={profile.displayName ?? "profile"} className="size-14 rounded-full border border-black/10 object-cover" />
-        ) : (
-          <div className="flex size-14 items-center justify-center rounded-full border border-black/10 bg-white text-lg font-bold text-[#43507F]">
-            {(profile.displayName ?? "?").slice(0, 1)}
-          </div>
-        )}
+      {/* User pill — top right. Collapsed = just the avatar; hovering expands
+          the pill leftward to reveal [avatar, username, logout] in one row. */}
+      <div
+        className="fixed top-8 right-10 z-30"
+        onMouseEnter={() => setUserOpen(true)}
+        onMouseLeave={() => setUserOpen(false)}
+      >
+        <div className="flex items-center rounded-full border border-black/10 bg-white p-1.5 shadow-sm">
+          {profile.pictureUrl ? (
+            <img src={profile.pictureUrl} alt={profile.displayName ?? "profile"} className="size-11 shrink-0 cursor-pointer rounded-full border border-black/10 object-cover" />
+          ) : (
+            <div className="flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-full border border-black/10 bg-[#43507F]/10 text-lg font-bold text-[#43507F]">
+              {(profile.displayName ?? "?").slice(0, 1)}
+            </div>
+          )}
+          <AnimatePresence initial={false}>
+            {userOpen && (
+              <motion.div
+                key="user-expand"
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: "auto", opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                transition={{
+                  width: { duration: 0.34, ease: [0.22, 1, 0.36, 1] },
+                  opacity: { duration: 0.22, ease: "easeOut" },
+                }}
+                className="overflow-hidden"
+              >
+                {/* Spacing lives INSIDE the clipped segment so the collapsed
+                    pill has no leftover gap to jump from. */}
+                <div className="flex items-center gap-3 whitespace-nowrap pl-3 pr-1">
+                  <span className="truncate text-sm font-medium text-ink">{profile.displayName ?? "ผู้ใช้"}</span>
+                  <button
+                    onClick={onLogout}
+                    aria-label="ออกจากระบบ"
+                    className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[#D64545]/10 text-[#D64545] transition-colors hover:bg-[#D64545]/20"
+                  >
+                    <IconLogout size={18} />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
 
       {/* Left anchor nav */}
@@ -164,9 +229,33 @@ export default function HomeRework({ profile }: { profile: AuthProfile }) {
       <section id="sec-home" className="flex min-h-dvh items-center px-6 lg:pl-40 lg:pr-24">
         <div className="mx-auto grid w-full max-w-6xl grid-cols-1 items-center gap-10 lg:grid-cols-2">
           <div className="flex flex-col gap-6">
-            <div>
-              <h1 className="text-2xl font-medium text-ink">หน้าหลัก</h1>
-              <p className="mt-1 text-base text-ink/60">ตรวจสอบสลิปการได้รับดอกเบี้ยหุ้นกู้ของเดือน</p>
+            {/* Title card — white rounded panel with a mascot poking out the
+                top-right. Figma node 904:2780. */}
+            <div
+              className="relative flex w-full max-w-[451px] flex-col items-start gap-2 rounded-3xl bg-white p-4"
+              onMouseEnter={() => setShowQr(true)}
+              onMouseLeave={() => setShowQr(false)}
+            >
+              <p className="self-stretch text-base font-medium leading-6 text-ink">
+                สแกนใบสลิปดอกเบี้ยหุ้นกู้ผ่าน LINE OA
+              </p>
+              <p className="self-stretch text-base leading-6 text-ink/60">แอดเพื่อน @beond</p>
+              {/* Mascot ⇄ LINE QR — rises up from below on each swap. */}
+              <div className="pointer-events-none absolute right-4 bottom-0 z-10 h-[124px] w-[88px] overflow-hidden">
+                <AnimatePresence initial={false}>
+                  <motion.img
+                    key={showQr ? "qr" : "mascot"}
+                    src={showQr ? lineQr : mascot}
+                    alt=""
+                    aria-hidden
+                    initial={{ y: "100%", opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: "-100%", opacity: 0 }}
+                    transition={{ y: { type: "spring", stiffness: 220, damping: 26 }, opacity: { duration: 0.25 } }}
+                    className={`absolute inset-0 h-full w-full object-contain ${showQr ? "object-center" : "object-bottom"}`}
+                  />
+                </AnimatePresence>
+              </div>
             </div>
             <MonthFolderCard
               monthLabel={monthLabel}
@@ -176,6 +265,8 @@ export default function HomeRework({ profile }: { profile: AuthProfile }) {
               onNext={() => setMonthIdx((i) => (i + 1) % payoutMonths.length)}
               onCurrent={() => setMonthIdx(currentIdx)}
               isCurrent={monthIdx === currentIdx}
+              nextPayout={nextPayout}
+              onGoNext={() => nextPayout && setMonthIdx(nextPayout.idx)}
               onRowHover={setFocusId}
             />
           </div>
@@ -186,9 +277,9 @@ export default function HomeRework({ profile }: { profile: AuthProfile }) {
         </div>
       </section>
 
-      {/* Section: พอร์ตโฟลิโอ (placeholder — built next) */}
-      <section id="sec-portfolio" className="flex min-h-dvh items-center justify-center px-6 lg:pl-40">
-        <p className="text-sm text-ink/40">พอร์ตโฟลิโอ — เร็วๆ นี้</p>
+      {/* Section: พอร์ตโฟลิโอ */}
+      <section id="sec-portfolio" className="flex min-h-dvh items-center justify-center px-6 py-16 lg:pl-40 lg:pr-24">
+        <PortfolioSection />
       </section>
 
       {/* Section: ภาษี (placeholder) */}

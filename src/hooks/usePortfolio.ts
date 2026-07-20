@@ -3,6 +3,7 @@ import { supabase, supabaseEnabled } from "../lib/supabase";
 import {
   allocationHoldings as mockHoldings,
   mockTimeline,
+  mockTaxDocs,
   type AllocationHolding,
   type TimelineMonth,
 } from "../data/mockData";
@@ -225,6 +226,15 @@ interface HoldingDetailRow {
   } | null;
 }
 
+// Offline sample holdings — same role as mockTimeline/allocation: a pure
+// fallback so the dashboard has data when Supabase is off (never on top of live).
+const mockHoldingsDetail: HoldingDetail[] = [
+  { id: "m1", faceValue: 3_000_000, symbol: "SIRI267A", issuer: "แสนสิริ", sectorId: "prop", rating: "BBB+", couponRate: 3.6, couponFreq: 2, issueDate: "2024-06-01", maturityDate: "2027-06-01", totalInstallments: 6 },
+  { id: "m2", faceValue: 3_000_000, symbol: "ORI288B", issuer: "ออริจิ้น พร็อพเพอร์ตี้", sectorId: "prop", rating: "BBB", couponRate: 5.5, couponFreq: 2, issueDate: "2023-08-01", maturityDate: "2028-08-01", totalInstallments: 10 },
+  { id: "m3", faceValue: 2_000_000, symbol: "BRI275A", issuer: "บริทาเนีย", sectorId: "prop", rating: "BBB", couponRate: 6.1, couponFreq: 2, issueDate: "2024-05-01", maturityDate: "2027-05-01", totalInstallments: 6 },
+  { id: "m4", faceValue: 2_000_000, symbol: "BTSG28OA", issuer: "บีทีเอส กรุ๊ป", sectorId: "trans", rating: "BBB+", couponRate: 3.6, couponFreq: 2, issueDate: "2023-10-01", maturityDate: "2028-10-01", totalInstallments: 10 },
+];
+
 // The signed-in user's holdings with their bond details; live-refreshes on any
 // portfolio change (add / edit / delete from web or the LINE bot).
 export function useHoldings(): {
@@ -232,7 +242,7 @@ export function useHoldings(): {
   loading: boolean;
   refetch: () => void;
 } {
-  const [holdings, setHoldings] = useState<HoldingDetail[]>([]);
+  const [holdings, setHoldings] = useState<HoldingDetail[]>(supabaseEnabled ? [] : mockHoldingsDetail);
   // Start loading only when Supabase drives the data; offline mock is instant.
   const [loading, setLoading] = useState(supabaseEnabled);
 
@@ -398,7 +408,7 @@ interface TaxDocRow {
 }
 
 export function useTaxCredits(): { docs: TaxDoc[]; loading: boolean; refetch: () => void } {
-  const [docs, setDocs] = useState<TaxDoc[]>([]);
+  const [docs, setDocs] = useState<TaxDoc[]>(supabaseEnabled ? [] : mockTaxDocs);
   const [loading, setLoading] = useState(supabaseEnabled);
 
   const load = useCallback(async () => {

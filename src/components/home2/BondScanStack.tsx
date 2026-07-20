@@ -1,10 +1,21 @@
-import { type MouseEvent, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { motion } from "motion/react";
 import { IconCircleDotted } from "@tabler/icons-react";
 import { issuerName } from "../../lib/issuerLogo";
 import IssuerLogo from "../IssuerLogo";
 
 const PEEL = 64; // px size of the folded corner when peeled
+
+// Messy-pile layout per slot — papers tossed on top of each other with uneven
+// offsets and a bit of rotation, rather than a tidy isometric staircase.
+const PILE = [
+  { x: 0, y: 0, z: 0, rz: -6, ry: 0, rx: 0 },
+  { x: 20, y: -12, z: -1, rz: 8, ry: 0, rx: 0 },
+  { x: 44, y: -24, z: -2, rz: -11, ry: 0, rx: 0 },
+];
+const pileAt = (slot: number) => PILE[Math.min(slot, PILE.length - 1)];
+// Show the pointer-x hit bands. Enable with ?hitdebug in the URL.
+const HIT_DEBUG = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("hitdebug");
 
 export interface SlipPaperData {
   id: string;
@@ -16,6 +27,17 @@ export interface SlipPaperData {
 }
 
 const fmtTHB = (n: number) => new Intl.NumberFormat("th-TH").format(Math.round(n));
+
+// Payer's 13-digit tax ID for the doc art. No real value in the payout feed, so
+// derive a stable juristic-person number (leading 0) from the symbol and format
+// it Thai-style: 0-0000-00000-00-0.
+function payerTaxId(symbol: string): string {
+  let h = 0;
+  for (let i = 0; i < symbol.length; i++) h = (h * 31 + symbol.charCodeAt(i)) >>> 0;
+  const rest = String(h).padStart(12, "0").slice(0, 12);
+  const d = "0" + rest;
+  return `${d[0]}-${d.slice(1, 5)}-${d.slice(5, 10)}-${d.slice(10, 12)}-${d[12]}`;
+}
 // Code128-style bar/gap widths (px): even index = black bar, odd = gap.
 const BARCODE = [3, 1, 1, 2, 2, 1, 3, 1, 1, 1, 2, 2, 1, 3, 2, 1, 1, 2, 3, 1, 2, 1, 1, 3, 1, 2, 2, 1, 1, 2, 3, 1, 1, 1, 2, 3, 1, 2];
 
@@ -65,34 +87,22 @@ export default function BondScanStack({ slips, focusId }: { slips: SlipPaperData
   // card travel the whole stack, which felt like too much motion.
   const slotOf = (i: number) => i;
 
-  // Hover detection from pointer-x, not per-card 3D hit boxes. The cards are a
-  // left→right staircase (base 24px, +84px per slot); each owns an 84px strip,
-  // the last extends to its right edge. Pure geometry → identical hit behaviour
-  // across browsers (the 3D-transformed hit divs picked wrong cards on Chrome).
-  const BASE = 24;
-  const STEP = 84;
-  const CARD_W = 310;
-  const rightEdge = BASE + (shown.length - 1) * STEP + CARD_W;
-  const onMove = (e: MouseEvent<HTMLDivElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - r.left;
-    const y = e.clientY - r.top;
-    if (x < BASE || x > rightEdge || y < 60 || y > 560) {
-      requestHover(null);
-      return;
-    }
-    requestHover(Math.min(shown.length - 1, Math.floor((x - BASE) / STEP)));
-  };
-
   return (
     <div
       className="relative mx-auto h-[600px] w-[520px]"
       style={{ perspective: 2800, transformStyle: "preserve-3d" }}
-      onMouseMove={onMove}
       onMouseLeave={() => requestHover(null)}
     >
       {shown.map((s, i) => (
-        <StackCard key={s.id} slip={s} slot={slotOf(i)} index={i} hovered={active === i} />
+        <StackCard
+          key={s.id}
+          slip={s}
+          slot={slotOf(i)}
+          index={i}
+          count={shown.length}
+          hovered={active === i}
+          onHover={() => requestHover(i)}
+        />
       ))}
     </div>
   );
@@ -105,31 +115,54 @@ function StackCard({
   slip,
   index,
   slot,
+  count,
   hovered,
+  onHover,
 }: {
   slip: SlipPaperData;
   index: number;
   slot: number;
+  count: number;
   hovered: boolean;
+  onHover: () => void;
 }) {
-  // Visual position comes from the slot; the hovered card flies flat to the
-  // front. Hover hit-testing is handled by the parent via pointer-x, so this is
-  // purely presentational (pointer-events-none).
-  const slotPos = { x: slot * 84, y: -slot * 52, z: -slot * 80, rotateY: -22, rotateX: 6, scale: 1, opacity: 1 };
+  const p = pileAt(slot);
+  const slotPos = { x: p.x, y: p.y, z: p.z, rotateY: p.ry, rotateX: p.rx, rotate: p.rz, scale: 1, opacity: 1 };
   const target = hovered
-    ? { x: 0, y: -20, z: 200, rotateY: 0, rotateX: 0, scale: 1.04, opacity: 1 }
+    ? { x: 0, y: -20, z: 200, rotateY: 0, rotateX: 0, rotate: 0, scale: 1.04, opacity: 1 }
     : slotPos;
 
+  // Hit zone stays parked at the card's RESTING slot transform (never follows
+  // the pop-forward), so it wraps the slip 1:1 and the pointer maps to the same
+  // card whatever the active one does. Under preserve-3d the nearest slot (0) is
+  // topmost, so overlaps resolve to the front card — exactly what's visible.
+  const restTransform = `translate3d(${p.x}px, ${p.y}px, ${p.z}px) rotateY(${p.ry}deg) rotateX(${p.rx}deg) rotate(${p.rz}deg)`;
+
   return (
-    // Wave entrance: rise from below + fade, staggered per card.
-    <motion.div
-      className="pointer-events-none absolute top-28 left-6 w-[310px] [transform-style:preserve-3d]"
-      initial={{ ...slotPos, y: slotPos.y + 80, opacity: 0 }}
-      animate={target}
-      transition={{ type: "spring", stiffness: 90, damping: 20, mass: 1.1, delay: index * 0.12 }}
-    >
-      <SlipPaper slip={slip} dimmed={slot > 0 && !hovered} peel={hovered} />
-    </motion.div>
+    <>
+      <div
+        className="absolute top-28 left-6 aspect-[210/297] w-[310px] cursor-pointer"
+        style={{
+          transform: restTransform,
+          zIndex: count - slot,
+          border: HIT_DEBUG ? `2px dashed ${hovered ? "#e11d48" : "#3b82f6"}` : undefined,
+          background: HIT_DEBUG ? (hovered ? "rgba(225,29,72,0.12)" : "rgba(59,130,246,0.06)") : undefined,
+        }}
+        onMouseEnter={onHover}
+      >
+        {HIT_DEBUG && <span className="absolute top-1 left-1 bg-black/70 px-1 text-[10px] text-white">{index}</span>}
+      </div>
+
+      {/* Wave entrance: rise from below + fade, staggered per card. */}
+      <motion.div
+        className="pointer-events-none absolute top-28 left-6 w-[310px] [transform-style:preserve-3d]"
+        initial={{ ...slotPos, y: slotPos.y + 80, opacity: 0 }}
+        animate={target}
+        transition={{ type: "spring", stiffness: 90, damping: 20, mass: 1.1, delay: index * 0.12 }}
+      >
+        <SlipPaper slip={slip} dimmed={slot > 0 && !hovered} peel={hovered} />
+      </motion.div>
+    </>
   );
 }
 
@@ -188,6 +221,12 @@ function SlipInner({ slip }: { slip: SlipPaperData }) {
           <Field label="ยอดหักภาษี ณ ที่จ่าย" value={slip.wht} />
           <span className="h-11 w-px rounded-full bg-black/20" />
           <Field label="คงเหลือจ่ายจริง" value={slip.net} />
+        </div>
+
+        {/* Payer's 13-digit tax ID */}
+        <div className="mt-3 flex items-center justify-between">
+          <span className="text-sm text-ink-soft">เลขผู้เสียภาษี (ผู้จ่าย)</span>
+          <span className="font-mono text-sm text-ink">{payerTaxId(slip.symbol)}</span>
         </div>
 
         {/* Document body — faux table + paragraph lines */}

@@ -6,6 +6,9 @@ import AdminDashboard from "./components/AdminDashboard";
 import DashboardSkeleton from "./components/DashboardSkeleton";
 import SidebarRail from "./components/home/SidebarRail";
 import HomeRework from "./components/home2/HomeRework";
+import HomeDashboard from "./components/home2/HomeDashboard";
+import MailboxFly from "./components/home2/MailboxFly";
+import CubePOC from "./components/home2/CubePOC";
 import ScanFlow from "./components/ScanFlow";
 import { notifyPortfolioChanged } from "./hooks/usePortfolio";
 import { initAuth, login, logout, liffEnabled, type AuthProfile } from "./lib/auth";
@@ -90,11 +93,30 @@ function App() {
     }
   };
 
+  // `?anim` — motion prototype playground (flying-paper mailbox).
+  if (new URLSearchParams(window.location.search).has("anim")) {
+    return <MailboxFly />;
+  }
+
+  // `?cube` — interactive 3D-cuboid tuner (orbit + dimension sliders).
+  if (new URLSearchParams(window.location.search).has("cube")) {
+    return <CubePOC />;
+  }
+
   // `?v2` — preview the reworked full-viewport home (works pre-auth with a
   // placeholder profile). It owns its own loading skeleton, so this must come
   // before the shared skeleton gate below.
   if (new URLSearchParams(window.location.search).has("v2")) {
-    return <HomeRework profile={profile ?? { displayName: "beond" }} />;
+    // v2 renders regardless of profile, so setProfile(null) alone wouldn't leave
+    // the page — clear the session then hard-navigate to the landing/login route.
+    const v2Logout = async () => {
+      await logout();
+      window.location.assign("/");
+    };
+    if (new URLSearchParams(window.location.search).has("old")) {
+      return <HomeRework profile={profile ?? { displayName: "beond" }} onLogout={v2Logout} />;
+    }
+    return <HomeDashboard profile={profile ?? { displayName: "beond" }} onLogout={v2Logout} />;
   }
 
   // `?skeleton` — preview the loading skeleton without auth. Show the real

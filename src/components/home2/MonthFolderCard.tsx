@@ -1,4 +1,4 @@
-import { IconChevronLeft, IconChevronRight, IconRestore } from "@tabler/icons-react";
+import { IconChevronLeft, IconChevronRight, IconRestore, IconCalendarClock, IconArrowRight, IconCheck, IconCircleDotted } from "@tabler/icons-react";
 import { motion, AnimatePresence } from "motion/react";
 import { issuerName } from "../../lib/issuerLogo";
 import IssuerLogo from "../IssuerLogo";
@@ -10,6 +10,16 @@ export interface FolderSlip {
   installment: string;
   confirmed: boolean;
   amount: number;
+}
+
+export interface NextPayout {
+  idx: number;
+  monthLabel: string;
+  symbol: string;
+  issuer: string;
+  payoutDate: string;
+  amount: number;
+  count: number;
 }
 
 const fmtTHB = (n: number) => new Intl.NumberFormat("th-TH").format(Math.round(n));
@@ -25,6 +35,8 @@ export default function MonthFolderCard({
   onNext,
   onCurrent,
   isCurrent,
+  nextPayout,
+  onGoNext,
   onRowHover,
 }: {
   monthLabel: string;
@@ -34,6 +46,8 @@ export default function MonthFolderCard({
   onNext?: () => void;
   onCurrent?: () => void;
   isCurrent?: boolean;
+  nextPayout?: NextPayout | null;
+  onGoNext?: () => void;
   onRowHover?: (id: string | null) => void;
 }) {
   const remaining = slips.filter((s) => !s.confirmed).length;
@@ -56,6 +70,19 @@ export default function MonthFolderCard({
             <span className="text-4xl font-medium text-ink">
               <span>{remaining}</span> ใบ
             </span>
+            {/* One status pip per slip — green check once its 50-ทวิ is
+                confirmed, dotted grey while still to collect. */}
+            {slips.map((s) =>
+              s.confirmed ? (
+                <span key={s.id} className="flex size-10 items-center justify-center rounded-full border border-black/10 bg-[#80BA44] text-white">
+                  <IconCheck size={24} />
+                </span>
+              ) : (
+                <span key={s.id} className="flex size-10 items-center justify-center rounded-full border border-black/10 bg-[#F5F5F5] text-ink/40">
+                  <IconCircleDotted size={24} />
+                </span>
+              ),
+            )}
           </div>
           <p className="mt-2 text-sm text-ink/80">
             ดอกเบี้ยรวม ฿<span>{fmtTHB(totalInterest)}</span>
@@ -90,24 +117,32 @@ export default function MonthFolderCard({
             <IconChevronRight size={24} />
           </button>
 
-          {/* Jump back to the current month — hidden while already there. */}
-          {!isCurrent && (
-            <button
-              onClick={onCurrent}
-              aria-label="กลับสู่เดือนปัจจุบัน"
-              className="absolute right-full bottom-0 mr-2 flex items-center justify-center rounded-t-2xl border border-b-0 border-black/10 bg-white p-2 text-ink/80 transition hover:bg-black/5"
-            >
-              <span className="flex size-8 items-center justify-center">
-                <IconRestore size={22} />
-              </span>
-            </button>
-          )}
+          {/* Jump back to the current month — hidden while already there. Rises
+              up from behind the folder when it appears, drops back on exit. */}
+          <AnimatePresence>
+            {!isCurrent && (
+              <motion.button
+                key="to-current"
+                onClick={onCurrent}
+                aria-label="กลับสู่เดือนปัจจุบัน"
+                initial={{ y: 56, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: 56, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 180, damping: 26, mass: 0.9 }}
+                className="absolute right-full bottom-0 mr-2 flex items-center justify-center rounded-t-2xl border border-b-0 border-black/10 bg-white p-2 text-ink/80 transition-colors hover:bg-black/5"
+              >
+                <span className="flex size-8 items-center justify-center">
+                  <IconRestore size={22} />
+                </span>
+              </motion.button>
+            )}
+          </AnimatePresence>
         </div>
 
         <motion.div
           layout
           transition={{ type: "spring", stiffness: 320, damping: 34 }}
-          className="relative min-h-[240px]"
+          className="relative z-20 min-h-[240px]"
         >
         {/* Orange pocket — rounded trapezoid: square top (flush to white),
             bottom corners rounded r=24 to match the white card radius, sides
@@ -148,16 +183,38 @@ export default function MonthFolderCard({
               </motion.div>
             ))}
             {slips.length === 0 && (
-              <motion.p
+              <motion.div
                 key="empty"
                 layout
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0 }}
-                className="py-6 text-center text-sm text-white/90"
+                className="py-4"
               >
-                เดือนนี้ไม่มีสลิปต้องสะสม
-              </motion.p>
+                {nextPayout ? (
+                  <button
+                    onClick={onGoNext}
+                    className="group -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-4 rounded-2xl px-3 py-2 text-left transition-colors hover:bg-white/15"
+                  >
+                    <span className="relative shrink-0">
+                      <IssuerLogo symbol={nextPayout.symbol} name={issuerName(nextPayout.symbol, nextPayout.issuer)} size={44} />
+                      <span className="absolute -right-1 -bottom-1 flex size-5 items-center justify-center rounded-full bg-[#FF8D27] text-white ring-2 ring-[#FF8D27]">
+                        <IconCalendarClock size={12} />
+                      </span>
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-white/80">งวดถัดไป · {nextPayout.payoutDate}</p>
+                      <p className="truncate text-lg font-medium text-white">{nextPayout.symbol}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1 text-white">
+                      <span className="text-lg font-medium">฿{fmtTHB(nextPayout.amount)}</span>
+                      <IconArrowRight size={20} className="transition-transform group-hover:translate-x-1" />
+                    </div>
+                  </button>
+                ) : (
+                  <p className="py-2 text-center text-sm text-white/90">ไม่มีงวดดอกเบี้ยที่ต้องสะสมแล้ว</p>
+                )}
+              </motion.div>
             )}
           </AnimatePresence>
         </motion.div>

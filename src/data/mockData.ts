@@ -37,6 +37,7 @@ export const mockTimeline: TimelineMonth[] = [
         symbol: "ORI288B",
         installment: "1/8",
         payoutDate: "28 Jan 2025",
+        payoutISO: "2025-01-28",
         amount: 70000,
       },
     ],
@@ -53,6 +54,7 @@ export const mockTimeline: TimelineMonth[] = [
         symbol: "SIRI266A",
         installment: "3/6",
         payoutDate: "15 Mar 2025",
+        payoutISO: "2025-03-15",
         amount: 45000,
       },
     ],
@@ -69,6 +71,7 @@ export const mockTimeline: TimelineMonth[] = [
         symbol: "ORI288B",
         installment: "2/8",
         payoutDate: "28 May 2025",
+        payoutISO: "2025-05-28",
         amount: 70000,
       },
       {
@@ -77,6 +80,7 @@ export const mockTimeline: TimelineMonth[] = [
         symbol: "GULF289A",
         installment: "1/4",
         payoutDate: "30 May 2025",
+        payoutISO: "2025-05-30",
         amount: 32500,
       },
     ],
@@ -93,6 +97,7 @@ export const mockTimeline: TimelineMonth[] = [
         symbol: "SIRI266A",
         installment: "4/6",
         payoutDate: "15 Jul 2025",
+        payoutISO: "2025-07-15",
         amount: 45000,
       },
     ],
@@ -109,6 +114,7 @@ export const mockTimeline: TimelineMonth[] = [
         symbol: "GULF289A",
         installment: "2/4",
         payoutDate: "30 Sep 2025",
+        payoutISO: "2025-09-30",
         amount: 32500,
       },
     ],
@@ -125,6 +131,7 @@ export const mockTimeline: TimelineMonth[] = [
         symbol: "ORI288B",
         installment: "3/8",
         payoutDate: "28 Nov 2025",
+        payoutISO: "2025-11-28",
         amount: 70000,
       },
     ],
@@ -140,6 +147,7 @@ export const mockTimeline: TimelineMonth[] = [
         symbol: "SIRI266A",
         installment: "5/6",
         payoutDate: "15 Dec 2025",
+        payoutISO: "2025-12-15",
         amount: 45000,
       },
     ],
@@ -183,3 +191,14 @@ export const taxCredit = {
   year: "2569",
   amount: 70000,
 };
+
+// ── Mock confirmed 50-ทวิ documents ──────────────────────────────────────
+// Offline sample so confirmation-driven UI (green buildings, check badges,
+// year progress bar) has data without Supabase. Matched to mockTimeline
+// payouts by symbol + payDate (within the 45-day window). Structural type only
+// to avoid a circular import with usePortfolio.
+export const mockTaxDocs = [
+  { id: "doc-jan-ori", status: "confirmed" as const, payerName: "บมจ. ออริจิ้น พร็อพเพอร์ตี้", payerTaxId: "0-1055-59000-12-3", symbol: "ORI288B", incomeSubtype: "4A", grossAmount: 70000, whtAmount: 10500, whtRate: 15, payDate: "2025-01-28", taxYear: 2025 },
+  { id: "doc-may-gulf", status: "confirmed" as const, payerName: "บมจ. กัลฟ์ เอ็นเนอร์จี", payerTaxId: "0-1055-58000-45-6", symbol: "GULF289A", incomeSubtype: "4A", grossAmount: 32500, whtAmount: 4875, whtRate: 15, payDate: "2025-05-30", taxYear: 2025 },
+  { id: "doc-jul-siri", status: "confirmed" as const, payerName: "บมจ. แสนสิริ", payerTaxId: "0-1055-57000-78-9", symbol: "SIRI266A", incomeSubtype: "4A", grossAmount: 45000, whtAmount: 6750, whtRate: 15, payDate: "2025-07-15", taxYear: 2025 },
+];
