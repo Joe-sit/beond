@@ -1,4 +1,5 @@
 // Company logo helpers using SET's public direct-link endpoint.
+import { DISCOVERED_DOMAINS } from "../data/issuerDomains";
 
 // Bond symbols are ISSUER_TICKER + numbers + optional series letters:
 //   BRI267A -> BRI, SIRI288B -> SIRI, CPALL266A -> CPALL.
@@ -27,6 +28,7 @@ const ISSUER_DOMAINS: Record<string, string> = {
   ORI: "origin.co.th", SIRI: "sansiri.com", AP: "apthai.com",
   SPALI: "supalai.com", QH: "qh.co.th", PSH: "psh.co.th",
   BRI: "britania.co.th", SC: "scasset.com", ANAN: "ananda.co.th",
+  PRIN: "prinsiri.com",
   LH: "lh.co.th", LPN: "lpn.co.th", NOBLE: "noblehome.com",
   SCC: "scg.com", SCGP: "scgpackaging.com", TOA: "toagroup.com",
   CPN: "cpn.co.th", CRC: "centralretail.com", WHA: "wha-group.com",
@@ -41,6 +43,23 @@ const ISSUER_DOMAINS: Record<string, string> = {
   ADVANC: "ais.th", TRUE: "truecorp.co.th", INTUCH: "intouchcompany.com",
   MINT: "minor.com", CENTEL: "centarahotelsresorts.com", ERW: "theerawan.com",
   IVL: "indoramaventures.com", DELTA: "deltathailand.com", KCE: "kcethai.com",
+  // State enterprises, banks & institutions
+  EGAT: "egat.co.th", GHB: "ghbank.co.th", BAAC: "baac.or.th",
+  EXIM: "exim.go.th", LHBANK: "lhbank.co.th", LHFG: "lhfg.co.th",
+  // Securities & leasing/finance
+  KGI: "kgieworld.co.th", YUANTA: "yuanta.co.th", ASK: "ask.co.th",
+  JMT: "jmtnetwork.co.th",
+  // Property, REITs & construction
+  FPT: "frasersproperty.co.th", FTREIT: "frasersproperty.co.th",
+  MQDC: "mqdc.com", DTP: "dtgo.com", CPNREIT: "cpn.co.th",
+  CWTTH: "chewathai.com", UNIQ: "unique-cons.com",
+  // Consumer, agri & industrial
+  CPFTH: "cpfoods.com", MPSC: "mitrphol.com", STA: "sritranggroup.com",
+  LOTUSS: "lotuss.com", NER: "nerubber.com", TPIPP: "tpipolene.co.th",
+  // Energy, utilities, transport & telecom
+  PTTC: "pttplc.com", EASTW: "eastwater.com",
+  WHART: "wha-group.com", WHAUP: "wha-group.com",
+  DTN: "truecorp.co.th", TUC: "truecorp.co.th", TAA: "airasia.com",
 };
 
 const LOGODEV_TOKEN = import.meta.env.VITE_LOGODEV_TOKEN as string | undefined;
@@ -51,7 +70,9 @@ const LOGODEV_TOKEN = import.meta.env.VITE_LOGODEV_TOKEN as string | undefined;
 export function getIssuerLogoUrl(symbol: string): string | null {
   if (!LOGODEV_TOKEN) return null;
   const ticker = issuerTicker(symbol);
-  const path = ISSUER_DOMAINS[ticker] ?? `ticker/${ticker}`;
+  // Manual map wins (hand-verified); then the auto-discovered domain; else fall
+  // back to logo.dev's own ticker DB.
+  const path = ISSUER_DOMAINS[ticker] ?? DISCOVERED_DOMAINS[ticker] ?? `ticker/${ticker}`;
   return `https://img.logo.dev/${path}?token=${LOGODEV_TOKEN}&size=80&format=png&retina=true&fallback=404`;
 }
 
@@ -91,9 +112,59 @@ const ISSUER_NAMES: Record<string, string> = {
 export function issuerName(symbol: string, fallback = ""): string {
   const ticker = issuerTicker(symbol);
   if (ISSUER_NAMES[ticker]) return ISSUER_NAMES[ticker];
-  const cleaned = fallback
+  const cleaned = cleanCompanyName(fallback);
+  return cleaned || fallback || ticker;
+}
+
+// Strip Thai legal wrappers so "บริษัท บีทีเอส กรุ๊ป โฮลดิงส์ จำกัด (มหาชน)"
+// reads as "บีทีเอส กรุ๊ป โฮลดิงส์".
+export function cleanCompanyName(name: string): string {
+  return name
     .replace(/^(บริษัท|บมจ\.?|บจก\.?)\s*/u, "")
     .replace(/\s*จำกัด\s*(\(มหาชน\))?\s*$/u, "")
     .trim();
-  return cleaned || fallback || ticker;
+}
+
+// Extra name keywords → ticker, for issuers whose curated ISSUER_NAMES entry
+// doesn't cover every legal-name variant (e.g. "โฮลดิงส์"), matched by substring.
+const NAME_TICKER_ALIASES: [RegExp, string][] = [
+  [/บีทีเอส/, "BTSG"],
+  [/บริทาเนีย/, "BRI"],
+  [/ออริจิ้น/, "ORI"],
+  [/แสนสิริ/, "SIRI"],
+  [/กัลฟ์/, "GULF"],
+  [/ซีพี\s*ออลล์|ซีพีออลล์/, "CPALL"],
+  [/เจริญโภคภัณฑ์อาหาร/, "CPF"],
+  [/ทรู\s*คอร์ปอเรชั่น|ทรูคอร์ป/, "TRUE"],
+  [/ไมเนอร์/, "MINT"],
+  [/ทางด่วนและรถไฟฟ้า/, "BEM"],
+];
+
+// Map a payer company name (e.g. from a slip that omits the bond code) to an
+// issuer ticker, so it still resolves to the right logo + display name. Matches
+// the curated Thai names first, then the alias keywords.
+export function issuerTickerFromName(name: string | null | undefined): string | null {
+  if (!name) return null;
+  for (const [ticker, th] of Object.entries(ISSUER_NAMES)) {
+    if (name.includes(th)) return ticker;
+  }
+  for (const [re, ticker] of NAME_TICKER_ALIASES) {
+    if (re.test(name)) return ticker;
+  }
+  return null;
+}
+
+// Juristic (13-digit) tax id → issuer ticker. Client-side OCR reads Thai company
+// names poorly but reads the numeric tax id reliably, so this is the robust way
+// to resolve the paying company + its logo when a slip omits the bond code.
+// Curated like ISSUER_DOMAINS — extend as new issuers appear.
+const ISSUER_TAX_IDS: Record<string, string> = {
+  "0107536000421": "BTSG", // บีทีเอส กรุ๊ป โฮลดิงส์
+  "0107557000381": "ORI", // ออริจิ้น พร็อพเพอร์ตี้
+  "0107564000294": "BRI", // บริทาเนีย
+};
+
+export function issuerTickerFromTaxId(taxId: string | null | undefined): string | null {
+  if (!taxId) return null;
+  return ISSUER_TAX_IDS[taxId.replace(/\D/g, "")] ?? null;
 }

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import {
   allocationHoldings as mockHoldings,
   mockTimeline,
+  mockTaxDocs,
   type AllocationHolding,
   type TimelineMonth,
 } from "../data/mockData";
+import { RATING_META, ratingFamily, ratingRank, type RatingFamily } from "../data/ratingMeta";
 
 const THAI_MONTHS = [
   "มกราคม",
@@ -26,8 +28,74 @@ interface HoldingRow {
   face_value: number;
   bonds: {
     symbol: string;
+    rating: string | null;
     sectors: { id: string; label_th: string; color: string };
   };
+}
+
+// Group holdings by sector — the default allocation view.
+function groupBySector(rows: HoldingRow[]): AllocationHolding[] {
+  const map = new Map<string, AllocationHolding>();
+  let total = 0;
+  for (const row of rows) {
+    const sector = row.bonds.sectors;
+    const v = Number(row.face_value);
+    total += v;
+    const prev = map.get(sector.id);
+    if (prev) prev.value += v;
+    else map.set(sector.id, { id: sector.id, label: sector.label_th, color: sector.color, value: v, pct: 0 });
+  }
+  return [...map.values()]
+    .map((h) => ({ ...h, pct: Math.round((h.value / total) * 100) }))
+    .sort((a, b) => b.value - a.value);
+}
+
+// Group by individual bond series (one pillar per symbol), largest first.
+// Distinct hue pool for the per-bond view, so every bond pillar/legend reads as
+// its own colour instead of collapsing to its sector's shade. Assigned by sorted
+// symbol (stable per bond) and cycled if there are more bonds than colours.
+const BOND_PALETTE = [
+  "#4A5AA8", "#5990D7", "#2FA8AD", "#5FB865",
+  "#E0991B", "#E8763A", "#D95F8A", "#9B6FD0",
+  "#3D7DD8", "#12A594", "#C6A015", "#6C7CC4",
+  "#E05B5B", "#42B3C2", "#8FB43A", "#B072C9",
+];
+
+function groupByBond(rows: HoldingRow[]): AllocationHolding[] {
+  const map = new Map<string, AllocationHolding>();
+  let total = 0;
+  for (const row of rows) {
+    const sym = row.bonds.symbol;
+    const v = Number(row.face_value);
+    total += v;
+    const prev = map.get(sym);
+    if (prev) prev.value += v;
+    else map.set(sym, { id: sym, label: sym, symbol: sym, color: "#4A5AA8", value: v, pct: 0 });
+  }
+  // Stable colour per bond: index into the palette by the symbol's sorted rank.
+  const colorBy = new Map(
+    [...map.keys()].sort().map((sym, i) => [sym, BOND_PALETTE[i % BOND_PALETTE.length]]),
+  );
+  return [...map.values()]
+    .map((h) => ({ ...h, color: colorBy.get(h.id) ?? h.color, pct: Math.round((h.value / total) * 100) }))
+    .sort((a, b) => b.value - a.value);
+}
+
+// Group holdings by credit-rating family (AAA…B, nonRate), safest first.
+function groupByRating(rows: HoldingRow[]): AllocationHolding[] {
+  const map = new Map<string, AllocationHolding>();
+  let total = 0;
+  for (const row of rows) {
+    const fam = ratingFamily(row.bonds.rating);
+    const v = Number(row.face_value);
+    total += v;
+    const prev = map.get(fam);
+    if (prev) prev.value += v;
+    else map.set(fam, { id: fam, label: RATING_META[fam].label, color: RATING_META[fam].color, value: v, pct: 0 });
+  }
+  return [...map.values()]
+    .map((h) => ({ ...h, pct: Math.round((h.value / total) * 100) }))
+    .sort((a, b) => ratingRank(a.id as RatingFamily) - ratingRank(b.id as RatingFamily));
 }
 
 interface PayoutRow {
@@ -36,7 +104,12 @@ interface PayoutRow {
   payout_date: string;
   holdings: {
     id: string;
-    bonds: { symbol: string; issuer: string; total_installments: number };
+    bonds: {
+      symbol: string;
+      issuer: string;
+      total_installments: number;
+      sectors: { color: string } | null;
+    };
   };
 }
 
@@ -60,10 +133,14 @@ function subscribePortfolio(cb: () => void): () => void {
 // Realtime), so views stay live without a page reload. Needs the table in the
 // `supabase_realtime` publication (migration 0006).
 function useRealtimeRefetch(table: string, onChange: () => void) {
+  // Unique per hook instance — two hooks watching the same table (e.g.
+  // allocation + holdings both watch "holdings") must not share a channel name,
+  // or the second .on() throws "callbacks ... after subscribe()".
+  const channelId = useRef(Math.random().toString(36).slice(2));
   useEffect(() => {
     if (!supabaseEnabled || !supabase) return;
     const channel = supabase
-      .channel(`rt-${table}`)
+      .channel(`rt-${table}-${channelId.current}`)
       .on("postgres_changes", { event: "*", schema: "public", table }, () => onChange())
       .subscribe();
     return () => {
@@ -74,8 +151,9 @@ function useRealtimeRefetch(table: string, onChange: () => void) {
 
 // Allocation grouped by sector. Falls back to mock data until Supabase is
 // configured and seeded; live-refreshes on holdings changes.
-export function useAllocation(): {
+export function useAllocation(groupBy: "sector" | "rating" | "bond" = "sector"): {
   holdings: AllocationHolding[];
+  loading: boolean;
   refetch: () => void;
 } {
   // With Supabase on, real data is the only source — no mock underneath, so
@@ -83,39 +161,117 @@ export function useAllocation(): {
   const [holdings, setHoldings] = useState<AllocationHolding[]>(
     supabaseEnabled ? [] : mockHoldings,
   );
+  const [loading, setLoading] = useState(supabaseEnabled);
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
     const { data, error } = await supabase
       .from("holdings")
-      .select("face_value, bonds(symbol, sectors(id, label_th, color))");
-    if (error) return;
-    if (!data.length) {
-      setHoldings([]);
+      .select("face_value, bonds(symbol, rating, sectors(id, label_th, color))");
+    if (error) {
+      setLoading(false);
       return;
     }
-    const bySector = new Map<string, AllocationHolding>();
-    let total = 0;
-    for (const row of data as unknown as HoldingRow[]) {
-      const sector = row.bonds.sectors;
-      total += Number(row.face_value);
-      const prev = bySector.get(sector.id);
-      if (prev) {
-        prev.value += Number(row.face_value);
-      } else {
-        bySector.set(sector.id, {
-          id: sector.id,
-          label: sector.label_th,
-          color: sector.color,
-          value: Number(row.face_value),
-          pct: 0,
-        });
-      }
-    }
-    const result = [...bySector.values()]
-      .map((h) => ({ ...h, pct: Math.round((h.value / total) * 100) }))
-      .sort((a, b) => b.value - a.value);
-    setHoldings(result);
+    const rows = data as unknown as HoldingRow[];
+    setHoldings(
+      !rows.length
+        ? []
+        : groupBy === "rating"
+          ? groupByRating(rows)
+          : groupBy === "bond"
+            ? groupByBond(rows)
+            : groupBySector(rows),
+    );
+    setLoading(false);
+  }, [groupBy]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+  useEffect(() => subscribePortfolio(load), [load]);
+  useRealtimeRefetch("holdings", load);
+
+  return { holdings, loading, refetch: load };
+}
+
+// Per-holding detail for the manage/CRUD view — carries the bond attributes
+// needed to re-derive the payout schedule when a holding is edited.
+export interface HoldingDetail {
+  id: string;
+  faceValue: number;
+  symbol: string;
+  issuer: string;
+  sectorId: string;
+  rating: string | null;
+  couponRate: number;
+  couponFreq: number | null;
+  issueDate: string | null;
+  maturityDate: string | null;
+  totalInstallments: number;
+}
+
+interface HoldingDetailRow {
+  id: string;
+  face_value: number;
+  bonds: {
+    symbol: string;
+    issuer: string;
+    sector_id: string;
+    rating: string | null;
+    coupon_rate: number;
+    coupon_freq: number | null;
+    issue_date: string | null;
+    maturity_date: string | null;
+    total_installments: number;
+  } | null;
+}
+
+// Offline sample holdings — same role as mockTimeline/allocation: a pure
+// fallback so the dashboard has data when Supabase is off (never on top of live).
+const mockHoldingsDetail: HoldingDetail[] = [
+  { id: "m1", faceValue: 3_000_000, symbol: "SIRI267A", issuer: "แสนสิริ", sectorId: "prop", rating: "BBB+", couponRate: 3.6, couponFreq: 2, issueDate: "2024-06-01", maturityDate: "2027-06-01", totalInstallments: 6 },
+  { id: "m2", faceValue: 3_000_000, symbol: "ORI288B", issuer: "ออริจิ้น พร็อพเพอร์ตี้", sectorId: "prop", rating: "BBB", couponRate: 5.5, couponFreq: 2, issueDate: "2023-08-01", maturityDate: "2028-08-01", totalInstallments: 10 },
+  { id: "m3", faceValue: 2_000_000, symbol: "BRI275A", issuer: "บริทาเนีย", sectorId: "prop", rating: "BBB", couponRate: 6.1, couponFreq: 2, issueDate: "2024-05-01", maturityDate: "2027-05-01", totalInstallments: 6 },
+  { id: "m4", faceValue: 2_000_000, symbol: "BTSG28OA", issuer: "บีทีเอส กรุ๊ป", sectorId: "trans", rating: "BBB+", couponRate: 3.6, couponFreq: 2, issueDate: "2023-10-01", maturityDate: "2028-10-01", totalInstallments: 10 },
+];
+
+// The signed-in user's holdings with their bond details; live-refreshes on any
+// portfolio change (add / edit / delete from web or the LINE bot).
+export function useHoldings(): {
+  holdings: HoldingDetail[];
+  loading: boolean;
+  refetch: () => void;
+} {
+  const [holdings, setHoldings] = useState<HoldingDetail[]>(supabaseEnabled ? [] : mockHoldingsDetail);
+  // Start loading only when Supabase drives the data; offline mock is instant.
+  const [loading, setLoading] = useState(supabaseEnabled);
+
+  const load = useCallback(async () => {
+    if (!supabaseEnabled || !supabase) return;
+    const { data, error } = await supabase
+      .from("holdings")
+      .select(
+        "id, face_value, bonds(symbol, issuer, sector_id, rating, coupon_rate, coupon_freq, issue_date, maturity_date, total_installments)",
+      )
+      .order("id");
+    if (error) return;
+    const rows = (data as unknown as HoldingDetailRow[])
+      .filter((r) => r.bonds)
+      .map((r) => ({
+        id: r.id,
+        faceValue: Number(r.face_value),
+        symbol: r.bonds!.symbol,
+        issuer: r.bonds!.issuer,
+        sectorId: r.bonds!.sector_id,
+        rating: r.bonds!.rating,
+        couponRate: Number(r.bonds!.coupon_rate),
+        couponFreq: r.bonds!.coupon_freq,
+        issueDate: r.bonds!.issue_date,
+        maturityDate: r.bonds!.maturity_date,
+        totalInstallments: r.bonds!.total_installments,
+      }));
+    setHoldings(rows);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -124,13 +280,14 @@ export function useAllocation(): {
   useEffect(() => subscribePortfolio(load), [load]);
   useRealtimeRefetch("holdings", load);
 
-  return { holdings, refetch: load };
+  return { holdings, loading, refetch: load };
 }
 
 // Twelve-month payout timeline (BE year). Falls back to mock data; live-
 // refreshes on payouts changes so adding a bond updates it in real time.
 export function useTimeline(): {
   months: TimelineMonth[];
+  loading: boolean;
   refetch: () => void;
 } {
   // Same rule as allocation: real data only when Supabase is on; mock is a
@@ -138,18 +295,23 @@ export function useTimeline(): {
   const [months, setMonths] = useState<TimelineMonth[]>(
     supabaseEnabled ? [] : mockTimeline,
   );
+  const [loading, setLoading] = useState(supabaseEnabled);
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
     const { data, error } = await supabase
       .from("payouts")
       .select(
-        "installment, amount, payout_date, holdings!inner(id, bonds(symbol, issuer, total_installments))",
+        "installment, amount, payout_date, holdings!inner(id, bonds(symbol, issuer, total_installments, sectors(color)))",
       )
       .order("payout_date");
-    if (error) return;
+    if (error) {
+      setLoading(false);
+      return;
+    }
     if (!data.length) {
       setMonths([]);
+      setLoading(false);
       return;
     }
     const rows = data as unknown as PayoutRow[];
@@ -194,12 +356,15 @@ export function useTimeline(): {
           month: "short",
           year: "numeric",
         }),
+        payoutISO: row.payout_date.slice(0, 10),
         amount: Number(row.amount),
+        color: bond.sectors?.color ?? undefined,
         // Bond fully redeemed once its last coupon has been paid.
         completed: Number(row.installment) === bond.total_installments && d < today,
       });
     }
     setMonths(skeleton);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -208,5 +373,248 @@ export function useTimeline(): {
   useEffect(() => subscribePortfolio(load), [load]);
   useRealtimeRefetch("payouts", load);
 
-  return { months, refetch: load };
+  return { months, loading, refetch: load };
+}
+
+// Withholding-tax credits from OCR'd 50-ทวิ slips (added via the LINE bot),
+// live-syncing into the web app. Only the fields a 40(4) filing needs — no
+// national ID is ever stored.
+export interface TaxDoc {
+  id: string;
+  status: "pending" | "confirmed" | "rejected";
+  payerName: string | null;
+  payerTaxId: string | null;
+  symbol: string | null;
+  incomeSubtype: string | null;
+  grossAmount: number | null;
+  whtAmount: number | null;
+  whtRate: number | null;
+  payDate: string | null;
+  taxYear: number | null;
+}
+
+interface TaxDocRow {
+  id: string;
+  status: TaxDoc["status"];
+  payer_name: string | null;
+  payer_tax_id: string | null;
+  income_subtype: string | null;
+  gross_amount: number | null;
+  wht_amount: number | null;
+  wht_rate: number | null;
+  pay_date: string | null;
+  tax_year: number | null;
+  bonds: { symbol: string } | null;
+}
+
+export function useTaxCredits(): { docs: TaxDoc[]; loading: boolean; refetch: () => void } {
+  const [docs, setDocs] = useState<TaxDoc[]>(supabaseEnabled ? [] : mockTaxDocs);
+  const [loading, setLoading] = useState(supabaseEnabled);
+
+  const load = useCallback(async () => {
+    if (!supabaseEnabled || !supabase) return;
+    const { data, error } = await supabase
+      .from("tax_documents")
+      .select(
+        "id, status, payer_name, payer_tax_id, income_subtype, gross_amount, wht_amount, wht_rate, pay_date, tax_year, bonds(symbol)",
+      )
+      .neq("status", "rejected")
+      .order("pay_date", { ascending: false, nullsFirst: false });
+    if (error) {
+      setLoading(false);
+      return;
+    }
+    setDocs(
+      (data as unknown as TaxDocRow[]).map((r) => ({
+        id: r.id,
+        status: r.status,
+        payerName: r.payer_name,
+        payerTaxId: r.payer_tax_id,
+        symbol: r.bonds?.symbol ?? null,
+        incomeSubtype: r.income_subtype,
+        grossAmount: r.gross_amount === null ? null : Number(r.gross_amount),
+        whtAmount: r.wht_amount === null ? null : Number(r.wht_amount),
+        whtRate: r.wht_rate === null ? null : Number(r.wht_rate),
+        payDate: r.pay_date,
+        taxYear: r.tax_year === null ? null : Number(r.tax_year),
+      })),
+    );
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+  useEffect(() => subscribePortfolio(load), [load]);
+  useRealtimeRefetch("tax_documents", load);
+
+  return { docs, loading, refetch: load };
+}
+
+// Detects coupon payouts that flipped to "confirmed" since the previous docs
+// snapshot and returns their payoutIds for a one-shot animation. Keyed by the
+// *matched* payout (not the slip's raw date) so the cube pop + card glow land on
+// the right month. Keys stay set ~1s, then clear; the initial load is skipped so
+// existing confirmations don't all animate on mount.
+export function useJustConfirmed(timeline: TimelineMonth[], docs: TaxDoc[]): Set<string> {
+  const prev = useRef<Set<string> | null>(null);
+  // Data (docs + timeline) arrives async after mount, so the first populated
+  // snapshot would otherwise look "all new". Ignore matches during the initial
+  // settle window; only animate confirmations that land mid-session.
+  const mountedAt = useRef(Date.now());
+  const [fresh, setFresh] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    const now = new Set(matchConfirmedPayouts(timeline, docs).keys());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (prev.current && Date.now() - mountedAt.current > 5000) {
+      const added: string[] = [];
+      now.forEach((k) => {
+        if (!prev.current!.has(k)) added.push(k);
+      });
+      if (added.length) {
+        setFresh(new Set(added));
+        timer = setTimeout(() => setFresh(new Set()), 1000);
+      }
+    }
+    prev.current = now;
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [timeline, docs]);
+  return fresh;
+}
+
+// Matches confirmed 50-ทวิ slips to the coupon payouts they belong to. A slip's
+// pay_date can drift from the scheduled payout_date by a couple of weeks (coupon
+// accrues end-of-month, is paid early next month), so we match on symbol +
+// nearest payout date within a 45-day window rather than exact month. Coupons
+// are ≥ ~1 quarter apart, so the window maps unambiguously; each payout takes at
+// most one slip. Returns payoutId → the matched doc.
+export function matchConfirmedPayouts(timeline: TimelineMonth[], docs: TaxDoc[]): Map<string, TaxDoc> {
+  const WINDOW = 45 * 86_400_000;
+  const all = timeline.flatMap((m) =>
+    m.payouts
+      .filter((p) => p.payoutISO)
+      .map((p) => ({ id: p.id, symbol: p.symbol, t: new Date(p.payoutISO as string).getTime() })),
+  );
+  const map = new Map<string, TaxDoc>();
+  const claimed = new Set<string>();
+  for (const d of docs) {
+    if (d.status !== "confirmed" || !d.symbol || !d.payDate) continue;
+    const dt = new Date(d.payDate).getTime();
+    let best: { id: string; diff: number } | null = null;
+    for (const p of all) {
+      if (p.symbol !== d.symbol || claimed.has(p.id)) continue;
+      const diff = Math.abs(p.t - dt);
+      if (diff <= WINDOW && (!best || diff < best.diff)) best = { id: p.id, diff };
+    }
+    if (best) {
+      claimed.add(best.id);
+      map.set(best.id, d);
+    }
+  }
+  return map;
+}
+
+// Current Thai tax year in the Buddhist calendar (พ.ศ.).
+export function currentTaxYearBE(): number {
+  return new Date().getFullYear() + 543;
+}
+
+// The timeline year (BE string, e.g. "2568") the user is currently viewing in
+// the interest chart, shared with the hero income header so its headline total
+// tracks whichever year the chart shows. The timeline owns writes; the header
+// reads. Module-level so the two sibling components stay in sync without a
+// provider wrapping them.
+let viewedYearBE: string | null = null;
+const viewedYearListeners = new Set<() => void>();
+
+export function setViewedYear(year: string | null): void {
+  if (year === viewedYearBE) return;
+  viewedYearBE = year;
+  viewedYearListeners.forEach((l) => l());
+}
+
+export function useViewedYear(): string | null {
+  return useSyncExternalStore(
+    (cb) => {
+      viewedYearListeners.add(cb);
+      return () => viewedYearListeners.delete(cb);
+    },
+    () => viewedYearBE,
+    () => viewedYearBE,
+  );
+}
+
+// Total coupon income received/scheduled in a given calendar year — the
+// headline number in the hero. Defaults to the current year; the hero passes
+// the year the user is viewing in the timeline. Live-refreshes on payout changes.
+function mockAnnualIncome(yearCE: number): number {
+  return mockTimeline
+    .flatMap((m) => m.payouts)
+    .filter((p) => new Date(p.payoutDate).getFullYear() === yearCE)
+    .reduce((s, p) => s + p.amount, 0);
+}
+
+export function useAnnualIncome(yearCE?: number): { total: number } {
+  const year = yearCE ?? new Date().getFullYear();
+  const [total, setTotal] = useState(supabaseEnabled ? 0 : mockAnnualIncome(year));
+
+  const load = useCallback(async () => {
+    if (!supabaseEnabled || !supabase) {
+      setTotal(mockAnnualIncome(year));
+      return;
+    }
+    const { data, error } = await supabase
+      .from("payouts")
+      .select("amount")
+      .gte("payout_date", `${year}-01-01`)
+      .lte("payout_date", `${year}-12-31`);
+    if (error) return;
+    setTotal((data as { amount: number }[]).reduce((s, p) => s + Number(p.amount), 0));
+  }, [year]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+  useEffect(() => subscribePortfolio(load), [load]);
+  useRealtimeRefetch("payouts", load);
+
+  return { total };
+}
+
+// Portfolio-level summary stats derived from the signed-in user's holdings:
+// total invested, face-value-weighted average coupon, and weighted average
+// years remaining to maturity.
+export interface PortfolioStats {
+  totalValue: number;
+  avgCoupon: number;
+  avgRemainingYears: number;
+  loading: boolean;
+}
+
+export function usePortfolioStats(): PortfolioStats {
+  const { holdings, loading } = useHoldings();
+  const totalValue = holdings.reduce((s, h) => s + h.faceValue, 0);
+  if (!holdings.length) return { totalValue: 0, avgCoupon: 0, avgRemainingYears: 0, loading };
+
+  // Coupon = yield on invested capital, so it's face-value-weighted (a big
+  // holding pulls the average toward its rate). Remaining years = a plain
+  // per-bond average (each bond counts the same), matching beBond.
+  const now = Date.now();
+  const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000;
+
+  const avgCoupon = totalValue
+    ? holdings.reduce((s, h) => s + h.couponRate * h.faceValue, 0) / totalValue
+    : 0;
+
+  const dated = holdings.filter((h) => h.maturityDate);
+  const avgRemainingYears = dated.length
+    ? dated.reduce(
+        (s, h) => s + Math.max(0, (new Date(h.maturityDate!).getTime() - now) / YEAR_MS),
+        0,
+      ) / dated.length
+    : 0;
+
+  return { totalValue, avgCoupon, avgRemainingYears, loading };
 }

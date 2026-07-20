@@ -9,14 +9,55 @@
   --accent-foreground: #ffffff;
 }
 
-/* Scale the whole UI up: rem-based Tailwind text/spacing grows from this root. */
+/* Scale the whole UI up: rem-based Tailwind text/spacing grows from this root.
+   Mobile (LIFF) stays at 18px; on desktop the 2-col dashboard has room, so the
+   root scales down and grows gently with viewport width instead of sitting at
+   the oversized mobile value. */
 html {
-  font-size: 18px;
+  /* No rubber-band overscroll — stops the white gutter appearing past the
+     page ends when the user scrolls beyond the content. */
+  overscroll-behavior: none;
+  font-size: 17px;
+}
+
+@media (min-width: 1024px) {
+  html {
+    font-size: clamp(13px, 0.65vw + 4px, 15px);
+  }
 }
 
 @theme {
   --font-sukhumvit: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-nunito: "Nunito", "Noto Sans Thai", system-ui, sans-serif;
+  --font-kanit: "Kanit", "Noto Sans Thai", system-ui, sans-serif;
+
+  /* ── beond design tokens ──────────────────────────────────────────────
+     Tailwind v4 turns each --color-* into utilities (bg-brand, text-ink,
+     border-line, from-success-soft, …). Values come from the Figma design.
+     See DESIGN.md for the full system + usage. */
+
+  /* Brand */
+  --color-brand: #43507f;        /* primary navy — headings, nav, primary buttons */
+  --color-brand-blue: #2968a5;   /* accent blue — links, secondary actions */
+  --color-sky: #779bc6;          /* hero sky gradient top */
+
+  /* Surfaces */
+  --color-surface: #f6f4f1;      /* app background (cream) */
+  --color-card: #ffffff;         /* card surface */
+  --color-line: #e7e7e7;         /* hairline border */
+  --color-line-soft: #f0f0f0;    /* softer divider */
+
+  /* Ink (text) */
+  --color-ink: #222222;          /* primary text */
+  --color-ink-soft: #8a8a8a;     /* secondary / muted text */
+
+  /* Semantic */
+  --color-success: #12bc59;      /* confirmed / positive */
+  --color-success-soft: #69e889; /* gradient start */
+  --color-success-mid: #00c732;  /* gradient mid */
+  --color-success-strong: #00b12d; /* gradient end */
+  --color-warning: #c0563b;      /* final-tax / owe-more */
+  --color-pending: #d97706;      /* awaiting confirmation (amber) */
 }
 
 /* Scroll without a visible scrollbar */
@@ -39,8 +80,289 @@ html {
   }
 }
 
+/* Subtle, formal idle float for the money illustration — a slow bob with a
+   slight tilt so it feels alive without being playful. */
+@keyframes money-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-4px) rotate(-2deg);
+  }
+}
+.animate-money-float {
+  animation: money-float 3.6s ease-in-out infinite;
+  transform-origin: bottom center;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-money-float {
+    animation: none;
+  }
+}
+
+/* Landing-page entrance motion — an elegant staggered rise + fade, plus a slow
+   float for the hero mascot. Easing is a soft ease-out so nothing feels bouncy. */
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(1.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes float-soft {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+.animate-fade-rise {
+  animation: fade-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.animate-fade-in {
+  animation: fade-in 1s ease-out both;
+}
+/* Fade in once, then keep floating gently. */
+.animate-rise-float {
+  animation:
+    fade-in 0.9s ease-out both,
+    float-soft 5.5s ease-in-out 0.9s infinite;
+  will-change: transform, opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-rise,
+  .animate-fade-in,
+  .animate-rise-float {
+    animation: none;
+  }
+}
+
+/* Scroll-reveal — elements start hidden + shifted down, then rise into place
+   when they scroll into view (toggled by an IntersectionObserver adding
+   .is-visible). Stagger via inline --reveal-delay. */
+.reveal {
+  opacity: 0;
+  transform: translateY(2rem);
+  transition:
+    opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+  will-change: opacity, transform;
+}
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* Allocation pillars rise from the ground on mount, staggered per pillar. */
+@keyframes pillar-rise {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+/* Coupon confirmed (slip matched via LINE OCR) — the cube pops as it flips to
+   green, and the matching month card pulses a green glow. Plays once. */
+@keyframes confirm-pop {
+  0% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.16);
+  }
+  55% {
+    transform: scale(0.96);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.animate-confirm-pop {
+  animation: confirm-pop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform-origin: bottom center;
+  will-change: transform;
+}
+@keyframes confirm-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(18, 188, 89, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 16px rgba(18, 188, 89, 0);
+  }
+}
+.animate-confirm-glow {
+  animation: confirm-glow 1s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-confirm-pop,
+  .animate-confirm-glow {
+    animation: none;
+  }
+}
+
+/* ── Match celebration overlay ─────────────────────────────────────────────
+   When a slip matches its coupon, the cube flies to centre-screen and a slip
+   paper is tossed into it, which then flips the cube green. */
+@keyframes celebrate-backdrop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-celebrate-backdrop {
+  animation: celebrate-backdrop 0.35s ease-out both;
+}
+@keyframes celebrate-cube-in {
+  0% {
+    transform: scale(0.2) translateY(-30px);
+    opacity: 0;
+  }
+  55% {
+    transform: scale(1.12) translateY(0);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(0.97);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.animate-celebrate-cube-in {
+  animation: celebrate-cube-in 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+/* Slip paper: rises from below-left, arcs up, then dives shrinking into the
+   cube's front face and vanishes. */
+@keyframes celebrate-slip {
+  0% {
+    transform: translate(-90px, 150px) rotate(-24deg) scale(1);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  50% {
+    transform: translate(0, -70px) rotate(10deg) scale(1.05);
+    opacity: 1;
+  }
+  78% {
+    transform: translate(0, 4px) rotate(0deg) scale(0.32);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(0, 10px) rotate(0deg) scale(0.08);
+    opacity: 0;
+  }
+}
+.animate-celebrate-slip {
+  animation: celebrate-slip 1.3s cubic-bezier(0.5, 0, 0.4, 1) 0.5s both;
+}
+/* Green cube revealed just as the slip lands (~1.5s in). */
+@keyframes celebrate-green {
+  0%,
+  62% {
+    opacity: 0;
+  }
+  78%,
+  100% {
+    opacity: 1;
+  }
+}
+.animate-celebrate-green {
+  animation: celebrate-green 1.9s ease-out both;
+}
+/* Impact pop on the whole cube when the slip lands. */
+@keyframes celebrate-impact {
+  0%,
+  70% {
+    transform: scale(1);
+  }
+  80% {
+    transform: scale(1.16);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.animate-celebrate-impact {
+  animation: celebrate-impact 1.9s ease-out both;
+}
+@keyframes celebrate-caption {
+  0%,
+  60% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  85%,
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-celebrate-caption {
+  animation: celebrate-caption 2s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-celebrate-backdrop,
+  .animate-celebrate-cube-in,
+  .animate-celebrate-slip,
+  .animate-celebrate-green,
+  .animate-celebrate-impact,
+  .animate-celebrate-caption {
+    animation: none;
+  }
+}
+
 body {
   margin: 0;
+  overscroll-behavior: none;
   background: #f6f4f1;
   font-family: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Every interactive element gets a pointer cursor (native buttons don't by
+   default); disabled ones fall back to not-allowed. */
+button,
+[role="button"],
+[role="tab"],
+a[href],
+label[for],
+select,
+summary {
+  cursor: pointer;
+}
+
+button:disabled,
+button[data-disabled="true"],
+[role="button"][aria-disabled="true"],
+[data-disabled="true"] {
+  cursor: not-allowed;
 }

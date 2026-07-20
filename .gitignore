@@ -27,3 +27,15 @@ dist-ssr
 
 # Supabase CLI temp
 supabase/.temp/
+
+# local OCR test slips — PII, never commit
+samples/
+.vercel
+.env*
+
+# Tesseract language blobs (runtime download, not source)
+*.traineddata
+
+# local temp
+.shot.mjs
+scratchpad/

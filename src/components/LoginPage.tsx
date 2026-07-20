@@ -1,80 +1,190 @@
-import { useState } from "react";
-import logo from "../assets/beond-icon.svg";
-import beondHero from "../assets/beond-hero.svg";
-import mascot from "../assets/mascot-1ee2b3.png";
+import { useEffect, useRef, useState } from "react";
+import { IconScan, IconPuzzle } from "@tabler/icons-react";
+import logo from "../assets/landing-logo.svg";
+import mascot from "../assets/landing-mascot.png";
+import money from "../assets/bond-rise-hero.svg";
+import clouds from "../assets/landing-clouds.svg";
+import slipBack from "../assets/landing-slip-back.svg";
+import slipFront from "../assets/landing-slip-front.svg";
+import moneyBill from "../assets/landing-money-bill.svg";
+import coins from "../assets/landing-coins.svg";
+import lineIcon from "../assets/landing-line-icon.png";
 
 interface LoginPageProps {
   onLogin: () => void;
 }
 
-function LineIcon() {
-  // Simplified LINE speech-bubble mark
-  return (
-    <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor" aria-hidden>
-      <path d="M12 3C6.48 3 2 6.64 2 11.13c0 4.02 3.57 7.39 8.4 8.03.33.07.77.22.89.5.1.26.07.66.03.92l-.14.86c-.04.26-.2 1 .88.55 1.08-.46 5.83-3.43 7.96-5.88C21.5 14.4 22 12.84 22 11.13 22 6.64 17.52 3 12 3Zm-5.1 10.03H5.14a.53.53 0 0 1-.53-.53V8.93c0-.29.24-.53.53-.53s.53.24.53.53v3.05H6.9c.29 0 .53.24.53.53s-.24.52-.53.52Zm2.02-.53a.53.53 0 0 1-.53.53.53.53 0 0 1-.53-.53V8.93c0-.29.24-.53.53-.53s.53.24.53.53v3.57Zm4.6 0c0 .23-.15.43-.36.5a.55.55 0 0 1-.59-.18l-1.96-2.66v2.34a.53.53 0 0 1-.53.53.53.53 0 0 1-.52-.53V8.93c0-.23.14-.43.35-.5.21-.07.45 0 .59.18l1.96 2.66V8.93c0-.29.24-.53.53-.53s.53.24.53.53v3.57Zm3.09-2.32c.29 0 .53.24.53.53s-.24.53-.53.53h-1.24v.73h1.24c.29 0 .53.24.53.53s-.24.52-.53.52h-1.77a.53.53 0 0 1-.53-.52V8.93c0-.29.24-.53.53-.53h1.77c.29 0 .53.24.53.53s-.24.53-.53.53h-1.24v.72h1.24Z" />
-    </svg>
-  );
+// Toggles `.is-visible` on `.reveal` children once they scroll into view, so
+// the feature section fades/rises in gradually. Fires once per element.
+function useScrollReveal() {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const els = root.querySelectorAll(".reveal");
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            e.target.classList.add("is-visible");
+            io.unobserve(e.target);
+          }
+        }
+      },
+      { threshold: 0.15, rootMargin: "0px 0px -10% 0px" },
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, []);
+  return ref;
 }
 
+// Desktop/marketing landing page (Figma node 239:441). The LINE button starts
+// the auth flow; the extension button is a Phase-4 placeholder.
 export default function LoginPage({ onLogin }: LoginPageProps) {
   const [loading, setLoading] = useState(false);
+  const featureRef = useScrollReveal();
 
   const handleLogin = () => {
     if (loading) return;
     setLoading(true);
-    // Prototype: pretend to round-trip LINE OAuth
+    // Prototype: pretend to round-trip LINE OAuth.
     setTimeout(onLogin, 900);
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#F6F4F1]">
-      <img
-        src={beondHero}
-        alt=""
-        className="pointer-events-none absolute inset-x-0 top-0 w-full"
-      />
-
-      <div className="relative z-10 mx-4 flex w-full max-w-md flex-col items-center rounded-4xl bg-white px-8 py-10 text-center">
-        <img src={mascot} alt="" className="h-28 w-auto" />
+    <div className="min-h-screen overflow-x-hidden bg-[#F6F4F1]">
+      {/* ── Hero ─────────────────────────────────────────────────────────── */}
+      <section className="relative overflow-hidden bg-linear-to-b from-[#779BC6] to-[#F6F4F1] lg:min-h-176">
+        {/* Cloud skyline drifting along the bottom of the gradient */}
         <img
-          src={logo}
-          alt="beond — Bring Your Bonds Beyond"
-          width={150}
-          height={47}
-          className="mt-4 brightness-0 opacity-80"
+          src={clouds}
+          alt=""
+          className="pointer-events-none absolute inset-x-0 bottom-0 w-full select-none"
         />
-        <h1 className="mt-6 text-xl font-bold text-[#43507F]">
-          ยินดีต้อนรับสู่ beond
-        </h1>
-        <p className="mt-2 text-sm font-medium text-black/60">
-          จัดการพอร์ตหุ้นกู้ ดูไทม์ไลน์ดอกเบี้ย
-          และเครดิตภาษีของคุณในที่เดียว
-        </p>
 
-        <button
-          onClick={handleLogin}
-          disabled={loading}
-          className="mt-8 flex w-full items-center justify-center gap-3 rounded-2xl bg-[#06C755] px-6 py-3.5 text-base font-bold text-white transition-colors hover:bg-[#05b34c] disabled:opacity-70"
-        >
-          {loading ? (
-            <span className="h-6 w-6 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-          ) : (
-            <LineIcon />
-          )}
-          {loading ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบด้วย LINE"}
-        </button>
+        {/* Top nav — translucent pill with the white beond wordmark */}
+        <nav className="animate-fade-in relative z-10 mx-auto mt-6 flex max-w-300 items-center rounded-full bg-white/10 px-6 py-4 backdrop-blur-sm">
+          <img src={logo} alt="beond" className="h-6 w-auto" />
+        </nav>
 
-        <p className="mt-4 text-xs text-black/40">
-          การเข้าสู่ระบบถือว่ายอมรับ
-          <a href="#" className="mx-1 text-[#43507F] underline">
-            เงื่อนไขการใช้งาน
-          </a>
-          และ
-          <a href="#" className="ml-1 text-[#43507F] underline">
-            นโยบายความเป็นส่วนตัว
-          </a>
-        </p>
-      </div>
+        <div className="relative mx-auto grid max-w-300 grid-cols-1 items-center gap-8 px-6 pb-28 pt-10 lg:grid-cols-2">
+          {/* Copy + CTAs — kept above the money illustration via z-index */}
+          <div className="relative z-20">
+            <h1 className="animate-fade-rise text-3xl font-bold leading-tight text-balance text-white sm:text-4xl lg:text-5xl xl:text-6xl">
+              ปลดล็อคผลตอบแทนในหุ้นกู้ ด้วยการจัดการเครดิตภาษีที่สะดวกกว่าเดิม
+            </h1>
+            <p className="animate-fade-rise mt-5 max-w-xl text-base text-white/80 [animation-delay:120ms] sm:text-lg lg:text-xl">
+              แพลตฟอร์มยุคใหม่ที่ออกแบบมาเพื่อนักลงทุนหุ้นกู้โดยเฉพาะ
+              ช่วยคำนวณและติดตามภาษีอย่างโปร่งใส เพื่อผลตอบแทนที่เต็มเม็ดเต็มหน่วย
+            </p>
+
+            <div className="animate-fade-rise mt-8 flex flex-wrap gap-4 [animation-delay:240ms]">
+              <button
+                onClick={handleLogin}
+                disabled={loading}
+                className="flex items-center gap-2 rounded-full bg-[#12BC59] px-6 py-4 text-lg font-bold text-white shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#10a850] hover:shadow-xl active:translate-y-0 disabled:opacity-70"
+              >
+                {loading ? (
+                  <span className="h-8 w-8 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                ) : (
+                  <img src={lineIcon} alt="" className="h-8 w-8" />
+                )}
+                {loading ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบด้วย LINE"}
+              </button>
+
+              <button
+                type="button"
+                className="flex items-center gap-2 rounded-full bg-[#43507F] px-6 py-4 text-lg font-bold text-white shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:bg-[#525f92] hover:shadow-xl active:translate-y-0"
+              >
+                <IconPuzzle size={26} />
+                ติดตั้ง Extension
+              </button>
+            </div>
+          </div>
+
+          {/* Mascot — stacks in-flow on mobile (spacer column on desktop) */}
+          <div className="flex justify-center lg:hidden">
+            <img
+              src={mascot}
+              alt=""
+              className="animate-rise-float w-64 max-w-full select-none sm:w-80"
+            />
+          </div>
+        </div>
+
+        {/* Mascot — on desktop it's anchored to the hero's bottom so its feet
+            meet the white section below (Figma: mascot bottom = section edge) */}
+        <img
+          src={mascot}
+          alt=""
+          className="animate-rise-float pointer-events-none absolute right-0 bottom-0 z-10 hidden w-lg max-w-[46%] select-none lg:block xl:w-xl"
+        />
+
+        {/* Money illustration bleeds off the bottom-left corner */}
+        <img
+          src={money}
+          alt=""
+          className="animate-fade-in pointer-events-none absolute bottom-0 left-0 z-10 w-32 select-none [animation-delay:450ms] sm:w-44 lg:w-56"
+        />
+      </section>
+
+      {/* ── Feature section ──────────────────────────────────────────────── */}
+      <section
+        ref={featureRef}
+        className="relative z-20 -mt-8 rounded-t-[40px] bg-white px-6 pb-24 pt-12"
+      >
+        <div className="mx-auto max-w-300">
+          <h2 className="reveal text-2xl font-bold text-[#27518D] sm:text-3xl lg:text-4xl">
+            ปลดล็อคผลตอบแทนในหุ้นกู้
+          </h2>
+
+          <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[1.8fr_1fr]">
+            {/* Scan-to-tax-credit card */}
+            <div className="reveal group relative min-h-80 overflow-hidden rounded-[40px] bg-[#253E7F] p-8 shadow-lg transition-all duration-300 [--reveal-delay:120ms] hover:-translate-y-1 hover:shadow-2xl md:p-10">
+              <h3 className="max-w-md text-2xl font-bold leading-snug text-white sm:text-3xl">
+                ใบ 50 ทวิหุ้นกู้ของปีนี้
+                <br />
+                คือรายได้ของคุณในปีหน้า
+              </h3>
+              <div className="relative z-10 mt-8 max-w-xs">
+                <IconScan size={40} className="text-white" />
+                <p className="mt-4 text-lg text-white/80">
+                  เพียงสแกนหนังสือรับรองการหักภาษีจากดอกเบี้ยหุ้นกู้
+                </p>
+              </div>
+              {/* Slip stack + money + coins illustration (Figma node 379:849).
+                  The slips use the same isometric transform as Figma —
+                  skewX + scaleY on top of the rotation — so they lie on a 3D plane. */}
+              {/* Banknote sits at the bottom of the stack — the slips lie on top of
+                  it, so it only peeks out from under the slip's lower-left edge */}
+              <img
+                src={moneyBill}
+                alt=""
+                className="pointer-events-none absolute bottom-1 left-[34%] w-24 select-none sm:w-28 lg:left-[38%] lg:w-32"
+              />
+              <img
+                src={slipBack}
+                alt=""
+                className="pointer-events-none absolute -right-2 top-10 w-40 select-none transform-[rotate(41deg)_skewX(-22deg)_scaleY(0.92)] sm:right-8 sm:top-14 sm:w-48 lg:w-56"
+              />
+              <img
+                src={slipFront}
+                alt=""
+                className="pointer-events-none absolute -right-6 top-4 w-44 select-none transform-[rotate(33deg)_skewX(-22deg)_scaleY(0.92)] sm:-right-2 sm:top-8 sm:w-52 lg:w-64"
+              />
+              <img
+                src={coins}
+                alt=""
+                className="pointer-events-none absolute right-4 bottom-3 w-14 select-none sm:w-16 lg:w-20"
+              />
+            </div>
+
+            {/* Reserved feature slot */}
+            <div className="reveal min-h-80 rounded-[40px] bg-[#00665D] [--reveal-delay:240ms]" />
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

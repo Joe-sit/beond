@@ -1,27 +1,38 @@
 import { useEffect, useRef, useState } from "react";
-import { Modal, ModalBackdrop, ModalContainer, ModalDialog } from "@heroui/react";
-import { Search, X } from "lucide-react";
+import {
+  Modal, ModalBackdrop, ModalContainer, ModalDialog,
+  Button, CloseButton, SearchField, Label, NumberField, toast,
+} from "@heroui/react";
 import { ensureCatalog, searchBonds, type BondCandidate } from "../lib/secApi";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
 import { overrideFor } from "../data/couponOverrides";
+import { ratingFor } from "../data/bondRatings";
 import { notifyPortfolioChanged } from "../hooks/usePortfolio";
 import { supabase, supabaseEnabled } from "../lib/supabase";
-import { allocationHoldings } from "../data/mockData";
+import IssuerLogo from "./IssuerLogo";
+import { issuerName } from "../lib/issuerLogo";
 
 interface AddBondModalProps {
   open: boolean;
   onClose: () => void;
   onAdded: () => void;
+  initialTerm?: string; // prefill the search (e.g. a bond code OCR'd from a slip)
 }
 
-const SECTOR_OPTIONS = allocationHoldings.map((h) => ({
-  id: h.id,
-  label: h.label,
-}));
+// SEC doesn't classify bonds by industry, and the form no longer asks — new
+// bonds land in the "unclassified" sector (migration 0015).
+const FALLBACK_SECTOR_ID = "other";
 
-function formatTHB(value: number): string {
-  return new Intl.NumberFormat("th-TH").format(value);
-}
+// Minimum face value a holding can be added with, and the counter's step.
+const MIN_FACE_VALUE = 100_000;
+const AMOUNT_PRESETS = [100_000, 500_000, 1_000_000];
+
+const FREQ_LABEL: Record<number, string> = {
+  1: "ปีละครั้ง",
+  2: "ทุก 6 เดือน",
+  4: "ทุกไตรมาส",
+  12: "ทุกเดือน",
+};
 
 function ResultSkeleton() {
   return (
@@ -45,13 +56,13 @@ function ResultSkeleton() {
   );
 }
 
-export default function AddBondModal({ open, onClose, onAdded }: AddBondModalProps) {
+export default function AddBondModal({ open, onClose, onAdded, initialTerm }: AddBondModalProps) {
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<BondCandidate[]>([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<BondCandidate | null>(null);
-  const [amount, setAmount] = useState("");
-  const [sectorId, setSectorId] = useState(SECTOR_OPTIONS[0].id);
+  const [amount, setAmount] = useState<number>(NaN);
+  const [rating, setRating] = useState(""); // credit rating; "" → nonRate
   const [freq, setFreq] = useState(2); // coupon payments per year (SEC omits this)
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,8 +72,11 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
   // Warm the full bond catalog as soon as the modal opens, so free-text
   // searches (company names) answer locally and instantly.
   useEffect(() => {
-    if (open) ensureCatalog();
-  }, [open]);
+    if (open) {
+      ensureCatalog();
+      if (initialTerm) setTerm(initialTerm); // prefill from an OCR'd bond code
+    }
+  }, [open, initialTerm]);
 
   // Debounced search; stale in-flight requests are aborted.
   useEffect(() => {
@@ -95,7 +109,8 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
     setTerm("");
     setResults([]);
     setSelected(null);
-    setAmount("");
+    setAmount(NaN);
+    setRating("");
     setFreq(2);
     setError(null);
   };
@@ -107,9 +122,9 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
 
   const handleSave = async () => {
     if (!selected || saving) return;
-    const faceValue = Number(amount.replace(/,/g, ""));
-    if (!faceValue || faceValue <= 0) {
-      setError("กรุณากรอกจำนวนเงินลงทุน");
+    const faceValue = amount;
+    if (!Number.isFinite(faceValue) || faceValue < MIN_FACE_VALUE) {
+      setError(`จำนวนเงินลงทุนขั้นต่ำ ${MIN_FACE_VALUE.toLocaleString("th-TH")} บาท`);
       return;
     }
     if (!supabaseEnabled || !supabase) {
@@ -148,7 +163,7 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
           .insert({
             symbol: selected.symbol,
             issuer: selected.issuer,
-            sector_id: sectorId,
+            sector_id: FALLBACK_SECTOR_ID,
             coupon_rate: selected.couponRate ?? 0,
             total_installments:
               schedule.length ||
@@ -156,6 +171,7 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
             maturity_date: selected.maturityDate,
             issue_date: selected.issueDate,
             coupon_freq: freq,
+            rating: rating || null,
           })
           .select("id")
           .single();
@@ -188,10 +204,13 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
       }
 
       notifyPortfolioChanged();
+      toast.success(`เพิ่ม ${selected.symbol} เข้าพอร์ตแล้ว`);
       handleClose();
       onAdded();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง");
+      const msg = e instanceof Error ? e.message : "บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง";
+      setError(msg);
+      toast.danger(msg);
     } finally {
       setSaving(false);
     }
@@ -204,27 +223,26 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
           <ModalDialog className="flex h-140 w-full max-w-lg flex-col rounded-3xl bg-white p-6">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-[#43507F]">เพิ่มหุ้นกู้</h3>
-          <button
-            onClick={handleClose}
-            className="rounded-full p-1.5 text-gray-400 transition-colors hover:bg-gray-100"
-            aria-label="ปิด"
-          >
-            <X size={20} />
-          </button>
+          <CloseButton onPress={handleClose} aria-label="ปิด" />
         </div>
 
         {!selected ? (
           <>
-            <div className="mt-4 flex items-center gap-2 rounded-2xl border border-[#E7E7E7] px-4 py-3">
-              <Search size={18} className="shrink-0 text-gray-400" />
-              <input
-                autoFocus
-                value={term}
-                onChange={(e) => setTerm(e.target.value)}
-                placeholder="พิมพ์ชื่อบริษัท / สัญลักษณ์ / ISIN เช่น Origin, ปตท, ORI288B"
-                className="w-full bg-transparent text-sm outline-none placeholder:text-gray-400"
-              />
-            </div>
+            <SearchField
+              value={term}
+              onChange={setTerm}
+              aria-label="ค้นหาหุ้นกู้"
+              className="mt-4"
+            >
+              <SearchField.Group>
+                <SearchField.SearchIcon />
+                <SearchField.Input
+                  autoFocus
+                  placeholder="พิมพ์ชื่อบริษัท / สัญลักษณ์ / ISIN เช่น Origin, ปตท, ORI288B"
+                />
+                <SearchField.ClearButton />
+              </SearchField.Group>
+            </SearchField>
             <p className="mt-2 text-xs text-black/40">
               ข้อมูลตราสารหนี้จาก SEC Open Data API (ก.ล.ต.)
             </p>
@@ -242,8 +260,12 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
                     <button
                       onClick={() => {
                         setSelected(b);
-                        // Verified master map wins over parsed/default frequency.
+                        // Frequency + rating are auto-derived, not user-entered.
+                        // Frequency: verified master map wins over parsed/default.
                         setFreq(overrideFor(b.symbol)?.frequency ?? b.frequency ?? 2);
+                        // Rating from the TRIS issuer list, keyed by the symbol's
+                        // issuer prefix (SEC's feed carries no rating).
+                        setRating(ratingFor(b.symbol) ?? "");
                       }}
                       className="flex w-full items-center justify-between gap-3 rounded-2xl border border-[#E7E7E7] p-3 text-left transition-colors hover:border-[#43507F]/40 hover:bg-[#43507F]/5"
                     >
@@ -270,85 +292,94 @@ export default function AddBondModal({ open, onClose, onAdded }: AddBondModalPro
         ) : (
           <div className="mt-4 flex flex-col gap-4">
             <div className="rounded-2xl bg-[#F6F4F1] p-4">
-              <p className="font-nunito text-base font-bold text-[#181D20]">
-                {selected.symbol}
-              </p>
-              <p className="text-xs text-black/60">{selected.nameTh}</p>
-              <div className="mt-1 flex gap-4 text-xs text-black/60">
+              <div className="flex items-start justify-between gap-2">
+                {/* Company profile: issuer logo + brand name */}
+                <div className="flex min-w-0 items-center gap-3">
+                  <IssuerLogo
+                    symbol={selected.symbol}
+                    name={issuerName(selected.symbol, selected.issuer)}
+                    size={44}
+                  />
+                  <div className="min-w-0">
+                    <p className="font-nunito text-base font-bold text-[#181D20]">
+                      {selected.symbol}
+                    </p>
+                    <p className="truncate text-xs text-black/60">
+                      {issuerName(selected.symbol, selected.issuer)}
+                    </p>
+                  </div>
+                </div>
+                {/* Rating auto-derived — read-only. Shown only when known; an
+                    unknown rating is not asserted as "unrated". */}
+                {rating ? (
+                  <span className="shrink-0 rounded-lg bg-[#43507F]/10 px-2 py-1 font-nunito text-xs font-bold text-[#43507F]">
+                    {rating}
+                  </span>
+                ) : (
+                  <span className="shrink-0 rounded-lg bg-black/5 px-2 py-1 text-xs text-black/40">
+                    ไม่มีข้อมูลเครดิต
+                  </span>
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-black/60">
                 {selected.couponRate != null && (
                   <span>
                     ดอกเบี้ย <b className="font-nunito">{selected.couponRate}%</b> ต่อปี
                   </span>
                 )}
+                {/* Frequency auto-parsed from the SEC coupon text / master map. */}
+                <span>จ่ายดอกเบี้ย {FREQ_LABEL[freq] ?? "ทุก 6 เดือน"}</span>
                 {selected.maturityDate && <span>ครบกำหนด {selected.maturityDate}</span>}
               </div>
             </div>
 
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-black/60">
-                จำนวนเงินลงทุน (บาท)
-              </span>
-              <input
-                autoFocus
-                inputMode="numeric"
-                value={amount}
-                onChange={(e) => {
-                  const digits = e.target.value.replace(/[^\d]/g, "");
-                  setAmount(digits ? formatTHB(Number(digits)) : "");
-                }}
-                placeholder="เช่น 100,000"
-                className="rounded-2xl border border-[#E7E7E7] px-4 py-3 font-nunito text-sm outline-none focus:border-[#43507F]/50"
-              />
-            </label>
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-sm font-medium text-black/60">จำนวนเงินลงทุน (บาท)</Label>
 
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-black/60">กลุ่มอุตสาหกรรม</span>
-              <select
-                value={sectorId}
-                onChange={(e) => setSectorId(e.target.value)}
-                className="rounded-2xl border border-[#E7E7E7] bg-white px-4 py-3 text-sm outline-none focus:border-[#43507F]/50"
-              >
-                {SECTOR_OPTIONS.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
+              {/* Quick-pick presets */}
+              <div className="flex flex-wrap gap-2">
+                {AMOUNT_PRESETS.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setAmount(v)}
+                    className={`rounded-full border px-3 py-1 font-nunito text-xs transition-colors ${
+                      amount === v
+                        ? "border-[#43507F] bg-[#43507F]/10 font-bold text-[#43507F]"
+                        : "border-[#E7E7E7] text-black/60 hover:border-[#43507F]/40"
+                    }`}
+                  >
+                    {v.toLocaleString("th-TH")}
+                  </button>
                 ))}
-              </select>
-            </label>
+              </div>
 
-            <label className="flex flex-col gap-1.5">
-              <span className="text-sm font-medium text-black/60">งวดจ่ายดอกเบี้ย</span>
-              <select
-                value={freq}
-                onChange={(e) => setFreq(Number(e.target.value))}
-                className="rounded-2xl border border-[#E7E7E7] bg-white px-4 py-3 text-sm outline-none focus:border-[#43507F]/50"
+              {/* Stepper — step 100,000, min 100,000 */}
+              <NumberField
+                value={amount}
+                onChange={setAmount}
+                minValue={MIN_FACE_VALUE}
+                step={MIN_FACE_VALUE}
+                formatOptions={{ useGrouping: true, maximumFractionDigits: 0 }}
+                aria-label="จำนวนเงินลงทุน (บาท)"
               >
-                <option value={2}>ทุก 6 เดือน (ครึ่งปี)</option>
-                <option value={4}>ทุก 3 เดือน (รายไตรมาส)</option>
-                <option value={12}>ทุกเดือน</option>
-                <option value={1}>ปีละครั้ง</option>
-              </select>
-              <span className="text-xs text-black/40">
-                SEC ไม่ระบุความถี่ — เลือกตามหนังสือชี้ชวน/statement ของหุ้นกู้
-              </span>
-            </label>
+                <NumberField.Group>
+                  <NumberField.DecrementButton />
+                  <NumberField.Input autoFocus placeholder="เช่น 100,000" className="text-center font-nunito" />
+                  <NumberField.IncrementButton />
+                </NumberField.Group>
+              </NumberField>
+            </div>
 
             {error && <p className="text-sm text-red-500">{error}</p>}
 
             <div className="flex gap-3">
-              <button
-                onClick={() => setSelected(null)}
-                className="flex-1 rounded-2xl border border-[#E7E7E7] py-3 text-sm font-bold text-black/60 transition-colors hover:bg-gray-50"
-              >
+              <Button variant="secondary" fullWidth onPress={() => setSelected(null)}>
                 ย้อนกลับ
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="flex-1 rounded-2xl bg-[#43507F] py-3 text-sm font-bold text-white transition-colors hover:bg-[#525f92] disabled:opacity-60"
-              >
+              </Button>
+              <Button variant="primary" fullWidth isDisabled={saving} onPress={handleSave}>
                 {saving ? "กำลังบันทึก..." : "เพิ่มเข้าพอร์ต"}
-              </button>
+              </Button>
             </div>
           </div>
         )}
