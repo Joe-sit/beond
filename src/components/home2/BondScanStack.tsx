@@ -168,7 +168,7 @@ function StackCard({
 
 // 50-ทวิ withholding-tax certificate, data-bound. Rebuilt from Figma doc art:
 // header (issuer + title) → key info → detail table → summary → barcode.
-function SlipPaper({ slip, dimmed, peel }: { slip: SlipPaperData; dimmed: boolean; peel: boolean }) {
+export function SlipPaper({ slip, dimmed = false, peel = false }: { slip: SlipPaperData; dimmed?: boolean; peel?: boolean }) {
   const s = peel ? PEEL : 0;
   return (
     <div
