@@ -9,6 +9,9 @@ import HomeRework from "./components/home2/HomeRework";
 import HomeDashboard from "./components/home2/HomeDashboard";
 import MailboxFly from "./components/home2/MailboxFly";
 import CubePOC from "./components/home2/CubePOC";
+import HeroStairs3D from "./components/home2/HeroStairs3D";
+import TaxStoryPOC from "./components/home2/TaxStoryPOC";
+import IntroPOC from "./components/home2/IntroPOC";
 import ScanFlow from "./components/ScanFlow";
 import { notifyPortfolioChanged } from "./hooks/usePortfolio";
 import { initAuth, login, logout, liffEnabled, type AuthProfile } from "./lib/auth";
@@ -101,6 +104,22 @@ function App() {
   // `?cube` — interactive 3D-cuboid tuner (orbit + dimension sliders).
   if (new URLSearchParams(window.location.search).has("cube")) {
     return <CubePOC />;
+  }
+
+  // `?stairs` — 3D staircase/podium tuner (rebuild of the flat hero-stairs SVG).
+  if (new URLSearchParams(window.location.search).has("stairs")) {
+    return <HeroStairs3D />;
+  }
+
+  // `?tax` — preview the tax story chapter (3D bracket staircase + refund gauge).
+  if (new URLSearchParams(window.location.search).has("tax")) {
+    return <TaxStoryPOC />;
+  }
+
+  // `?intro` — debug the goal-chapter opener (staircase + slip + text) in a
+  // panel that mirrors the real right column.
+  if (new URLSearchParams(window.location.search).has("intro")) {
+    return <IntroPOC />;
   }
 
   // `?v2` — preview the reworked full-viewport home (works pre-auth with a

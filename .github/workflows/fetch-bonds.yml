@@ -1,0 +1,47 @@
+name: Refresh bond catalog
+
+# Weekly rebuild of public/bond-catalog.json from the SEC Open Data API, so the
+# instant client-side search snapshot stays current. Live remote search already
+# backfills gaps between runs — this just keeps the fast path fresh.
+on:
+  schedule:
+    - cron: "0 20 * * 0" # Sundays 20:00 UTC (~03:00 Mon ICT)
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+# Let the job push the regenerated catalog back to the branch.
+permissions:
+  contents: write
+
+concurrency:
+  group: fetch-bonds
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Fetch bond catalog
+        env:
+          SEC_API_KEY: ${{ secrets.SEC_API_KEY }}
+        run: npm run fetch:bonds
+
+      - name: Commit if the catalog changed
+        run: |
+          if git diff --quiet -- public/bond-catalog.json; then
+            echo "No catalog change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/bond-catalog.json
+          git commit -m "chore: refresh bond catalog (weekly auto-fetch)"
+          git push

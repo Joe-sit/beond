@@ -4,10 +4,19 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const envFile = readFileSync(resolve(process.cwd(), ".env.local"), "utf8");
-const key = envFile.match(/^SEC_API_KEY=(.+)$/m)?.[1]?.trim();
+// Key from the environment (CI) first, else parse .env.local (local dev).
+function readKey() {
+  if (process.env.SEC_API_KEY?.trim()) return process.env.SEC_API_KEY.trim();
+  try {
+    const envFile = readFileSync(resolve(process.cwd(), ".env.local"), "utf8");
+    return envFile.match(/^SEC_API_KEY=(.+)$/m)?.[1]?.trim();
+  } catch {
+    return undefined;
+  }
+}
+const key = readKey();
 if (!key) {
-  console.error("SEC_API_KEY missing in .env.local");
+  console.error("SEC_API_KEY missing (set env var or .env.local)");
   process.exit(1);
 }
 
