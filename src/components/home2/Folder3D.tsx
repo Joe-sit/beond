@@ -1,4 +1,5 @@
 import wordmark from "../../assets/landing-logo.svg?raw";
+import { SlipPaper, type SlipPaperData } from "./BondScanStack";
 
 // The beond "50-ทวิ" folder as a real CSS-3D object: a white slip document with
 // thickness, and an orange cover raised in front of it (its own thickness), the
@@ -49,14 +50,59 @@ export default function Folder3D({
   scale = 1,
   open = false,
   part = "full",
-}: { amount?: string; rx?: number; ry?: number; scale?: number; open?: boolean; part?: "full" | "sheet" | "cover" }) {
+  blank = false,
+  slips = [],
+  sink = 0,
+  slipScale = 1,
+  slipShift = 0,
+  slipFront = false,
+  focusSlip = null,
+}: { amount?: string; rx?: number; ry?: number; scale?: number; open?: boolean; part?: "full" | "sheet" | "cover"; blank?: boolean; slips?: SlipPaperData[]; sink?: number; slipScale?: number; slipShift?: number; slipFront?: boolean; focusSlip?: string | null }) {
   const openDeg = open ? -125 : 0; // swing the cover about the left spine
+  // When the folder has sunk, the slips turn front-on: counter-rotate the layer
+  // by the group's inverse so they face the camera. The popped slip is driven
+  // externally by `focusSlip` (clicking its logo next to "X ใบ").
+  const slipFace = slipFront ? `rotateY(${-ry}deg) rotateX(${-rx}deg)` : "";
+  // Folder body (sheet + cover) slides down by `sink` while the slip stack
+  // stays put — so opening the folder drops it away and leaves the slips.
+  const bodySink: React.CSSProperties = { position: "absolute", inset: 0, transformStyle: "preserve-3d", transform: `translateY(${sink}px)`, transition: "transform 700ms cubic-bezier(.5,0,.2,1) 150ms" };
   return (
     <div style={{ perspective: 1400, width: W + 60, height: H + 40 }}>
       <div style={{ position: "absolute", inset: 0, transformStyle: "preserve-3d", transform: `scale(${scale}) rotateX(${rx}deg) rotateY(${ry}deg)` }}>
+        {/* Slip stack — its OWN layer on the sheet plane so it stays in place
+            when the folder body sinks. Fanned, one sheet per bill to gather. */}
+        {slips.length > 0 && (
+          <div style={{ position: "absolute", left: "50%", top: "50%", width: W, height: H, marginLeft: -W / 2, marginTop: -H / 2, transformStyle: "preserve-3d", transform: `translateY(${slipShift}px) translateZ(${D / 2 + 3}px) scale(${slipScale}) ${slipFace}`, transformOrigin: "center bottom", transition: "transform 650ms cubic-bezier(.5,0,.2,1)", pointerEvents: "none" }}>
+            {slips.map((s, i) => {
+              const SC = (W - 34) / 310; // fit the 310px slip to the sheet width
+              const hov = slipFront && focusSlip === s.id;
+              return (
+                <div
+                  key={s.id}
+                  style={{
+                    position: "absolute",
+                    left: "50%",
+                    bottom: 12 + i * 16,
+                    width: 310,
+                    transformOrigin: "bottom center",
+                    // Hovered slip pops toward the camera + lifts so it can be read.
+                    transform: `translateX(-50%) translateX(${(i - (slips.length - 1) / 2) * 20}px) ${hov ? "translateY(-40px) " : ""}scale(${SC * (hov ? 1.12 : 1)}) rotate(${hov ? 0 : (i - (slips.length - 1) / 2) * 6}deg) ${hov ? "translateZ(80px)" : ""}`,
+                    transition: "transform 300ms cubic-bezier(.4,0,.2,1)",
+                    zIndex: hov ? 50 : i,
+                  }}
+                >
+                  <SlipPaper slip={s} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div style={bodySink}>
         {/* White slip sheet */}
         {part !== "cover" && (
         <Slab w={W} h={H} cx={0} z={0} radius={0} col={SHEET}>
+          {!blank && (
           <div className="flex h-full flex-col px-5 py-5">
             <div className="flex justify-end">
               <span className="rounded-full bg-[#DFF5E6] px-2.5 py-1 text-[11px] font-medium text-[#1BA34B]">ยืนยันแล้ว</span>
@@ -74,6 +120,7 @@ export default function Folder3D({
             </div>
             <div className="mt-auto h-9 w-full" style={{ background: "repeating-linear-gradient(90deg, #1c1c1c 0 2px, transparent 2px 5px)" }} />
           </div>
+          )}
         </Slab>
         )}
 
@@ -101,6 +148,7 @@ export default function Folder3D({
           </div>
         </div>
         )}
+        </div>
       </div>
     </div>
   );

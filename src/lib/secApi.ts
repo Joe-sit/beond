@@ -14,7 +14,7 @@ export interface BondCandidate {
   issueDate: string | null;
   termYears: number | null;
   frequency: number | null; // coupon payments per year (parsed from coupon text)
-  source: "sec" | "local";
+  source: "sec" | "local" | "manual";
 }
 
 interface SecFeatureRow {
@@ -85,6 +85,26 @@ export function ensureCatalog(): void {
     .finally(() => {
       catalogPromise = null;
     });
+}
+
+// ── Issuer suggestions (for manual entry) ──────────────────────────────────
+
+// Leading letters of a bond symbol identify the issuer (e.g. ORI284C → ORI).
+const symbolPrefix = (s: string) => (s.match(/^[A-Za-z]+/)?.[0] ?? "").toUpperCase();
+
+// Unique issuer names from the loaded catalog, for an autocomplete datalist.
+export function issuerNames(): string[] {
+  if (!catalog) return [];
+  return [...new Set(catalog.map((c) => c.issuer).filter((x) => x && x !== "-"))].sort();
+}
+
+// Best-guess issuer for a typed symbol, by matching its letter prefix against
+// the catalog (e.g. ORI284C → issuer of other ORI* bonds). Null if unknown.
+export function issuerForSymbol(symbol: string): string | null {
+  if (!catalog) return null;
+  const p = symbolPrefix(symbol);
+  if (p.length < 2) return null;
+  return catalog.find((c) => symbolPrefix(c.symbol) === p)?.issuer ?? null;
 }
 
 // ── Search ───────────────────────────────────────────────────────────────

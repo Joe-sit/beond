@@ -34,7 +34,7 @@ const CSS = `
   position: absolute; perspective: 4000px;
 }
 /* tilt the whole stack to the folder's iso angle so slips land matching it */
-.pf-scene .papers { width: ${PW}px; height: ${PH}px; transform: rotateX(6deg) rotateY(-45deg); }
+.pf-scene .papers { width: ${PW}px; height: ${PH}px; transform: rotateX(8deg) rotateY(-28deg); }
 
 .pf-scene .paper {
   --segments: ${SEGMENTS}; --segment: calc(100% * 1 / var(--segments));
@@ -91,10 +91,10 @@ function Segments({ slip, depth }: { slip: SlipPaperData; depth: number }) {
   );
 }
 
-export default function PaperFly({ play, slips = MOCK }: { play: boolean; slips?: SlipPaperData[] }) {
+export default function PaperFly({ play, slips = MOCK, left = "50%", top = "20%" }: { play: boolean; slips?: SlipPaperData[]; left?: string; top?: string }) {
   if (!play) return null;
   return (
-    <div className="pf-scene pointer-events-none" style={{ right: "18%", top: "20%" }}>
+    <div className="pf-scene pointer-events-none" style={{ left, top, transform: "translateX(-50%)" }}>
       <style>{CSS}</style>
       <div className="papers">
         {slips.map((s, i) => (
