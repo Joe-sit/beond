@@ -13,7 +13,11 @@
   },
   "dependencies": {
     "@heroui/react": "^3.2.1",
+    "@internationalized/date": "^3.12.2",
     "@line/liff": "^2.29.1",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
+    "@react-three/rapier": "^2.2.0",
     "@supabase/supabase-js": "^2.110.0",
     "@tabler/icons-react": "^3.44.0",
     "@vercel/analytics": "^2.0.1",
@@ -21,14 +25,17 @@
     "lucide-react": "^1.22.0",
     "motion": "^12.42.2",
     "react": "^19.2.7",
+    "react-aria-components": "^1.18.0",
     "react-dom": "^19.2.7",
     "recharts": "^3.9.1",
-    "tesseract.js": "^7.0.0"
+    "tesseract.js": "^7.0.0",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.185.1",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.5.2",

@@ -22,6 +22,10 @@ import { useHoldings, notifyPortfolioChanged } from "../hooks/usePortfolio";
 import { issuerName, issuerTickerFromTaxId } from "../lib/issuerLogo";
 import AddBondModal from "./AddBondModal";
 import IssuerLogo from "./IssuerLogo";
+import { motion } from "motion/react";
+import Folder3D from "./home2/Folder3D";
+import PaperFly from "./home2/PaperFly";
+import type { SlipPaperData } from "./home2/BondScanStack";
 
 // One bond the user holds — offered as a picker so OCR misses on the bond code
 // can be fixed by choosing from the portfolio (which also fills the issuer name).
@@ -258,7 +262,7 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
           />
         )}
 
-        {step === "done" && <DoneStep onClose={onClose} />}
+        {step === "done" && <DoneStep fields={fields} onClose={onClose} />}
 
         <input
           ref={fileRef}
@@ -1038,24 +1042,83 @@ function SlipField({
 }
 
 // ── Step: success ───────────────────────────────────────────────────────────
-function DoneStep({ onClose }: { onClose: () => void }) {
+// First plays the "slip collected into folder" pirouette (same PaperFly + Folder3D
+// as the web app), then crossfades to the success confirmation.
+function DoneStep({ fields, onClose }: { fields: SlipFields; onClose: () => void }) {
+  const slip: SlipPaperData = {
+    id: "scan",
+    symbol: fields.bond_symbol ?? "50 ทวิ",
+    issuer: fields.payer_name ?? "",
+    installment: "",
+    wht: Math.round(Number(fields.wht_amount) || 0),
+    net: Math.round(
+      Number(fields.net_amount) ||
+        (Number(fields.gross_amount) || 0) - (Number(fields.wht_amount) || 0),
+    ),
+  };
+
+  const [phase, setPhase] = useState(0); // 0 none → 1 folder → 2 slip flies in
+  const [closed, setClosed] = useState(false); // cover shuts over the landed slip
+  const [done, setDone] = useState(false); // crossfade to the success confirmation
+  useEffect(() => {
+    const t1 = setTimeout(() => setPhase(1), 60);
+    const t2 = setTimeout(() => setPhase(2), 560);
+    const t3 = setTimeout(() => setClosed(true), 560 + 2600);
+    const t4 = setTimeout(() => setDone(true), 560 + 3100);
+    return () => { [t1, t2, t3, t4].forEach(clearTimeout); };
+  }, []);
+
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-5 px-8 text-center">
-      <div className="grid h-20 w-20 place-items-center rounded-full bg-[#12BC59]">
-        <IconCheck size={44} className="text-white" />
-      </div>
-      <div>
-        <p className="text-lg font-bold">บันทึกสำเร็จ</p>
-        <p className="mt-1 text-sm text-white/70">
-          บันทึกเครดิตภาษีจากใบ 50 ทวิเรียบร้อยแล้ว
-        </p>
-      </div>
-      <button
-        onClick={onClose}
-        className="mt-2 rounded-2xl bg-white px-8 py-3 text-sm font-bold text-[#0B1220]"
+    <div className="relative flex flex-1 flex-col items-center justify-center px-8 text-center">
+      {/* Folder collect animation — fades out once the slip has landed. */}
+      <motion.div
+        className="pointer-events-none absolute inset-0 flex items-center justify-center"
+        animate={{ opacity: done ? 0 : 1 }}
+        transition={{ duration: 0.4 }}
       >
-        เสร็จสิ้น
-      </button>
+        <div className="relative" style={{ width: 360, height: 420 }}>
+          <div
+            className="absolute z-0"
+            style={{ left: "50%", top: "17%", transformOrigin: "bottom center", transform: "translateX(-50%) translateY(-70px)", opacity: phase >= 1 ? 1 : 0, transition: "opacity 500ms ease 300ms" }}
+          >
+            <Folder3D scale={0.72} rx={8} ry={-28} part="sheet" blank />
+          </div>
+          <div className="absolute inset-0" style={{ zIndex: closed ? 1 : 3 }}>
+            <PaperFly play={phase >= 2} slips={[slip]} left="50%" top="17%" />
+          </div>
+          <div
+            className="absolute z-2"
+            style={{ left: "50%", top: "17%", transformOrigin: "bottom center", transform: "translateX(-50%) translateY(-70px)", opacity: phase >= 1 ? 1 : 0, transition: "opacity 500ms ease 300ms" }}
+          >
+            <Folder3D scale={0.72} rx={8} ry={-28} part="cover" open={phase >= 2 && !closed} />
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Success confirmation — fades in after the slip lands. */}
+      <motion.div
+        className="flex flex-col items-center gap-5"
+        initial={{ opacity: 0, y: 12 }}
+        animate={done ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 }}
+        style={{ pointerEvents: done ? "auto" : "none" }}
+        transition={{ duration: 0.4 }}
+      >
+        <div className="grid h-20 w-20 place-items-center rounded-full bg-[#12BC59]">
+          <IconCheck size={44} className="text-white" />
+        </div>
+        <div>
+          <p className="text-lg font-bold">บันทึกสำเร็จ</p>
+          <p className="mt-1 text-sm text-white/70">
+            บันทึกเครดิตภาษีจากใบ 50 ทวิเรียบร้อยแล้ว
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="mt-2 rounded-2xl bg-white px-8 py-3 text-sm font-bold text-[#0B1220]"
+        >
+          เสร็จสิ้น
+        </button>
+      </motion.div>
     </div>
   );
 }

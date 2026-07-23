@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
-import { IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconInfoCircle, IconCheck, IconCircleDotted, IconRestore, IconLogout, IconPuzzle, IconSettings, IconPlus } from "@tabler/icons-react";
+import { motion, AnimatePresence, useAnimationControls } from "motion/react";
+import { IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconInfoCircle, IconCheck, IconCircleDotted, IconRestore, IconLogout, IconPuzzle, IconSettings, IconPlus, IconBrandLine } from "@tabler/icons-react";
+import { toast } from "@heroui/react";
 import type { AuthProfile } from "../../lib/auth";
 import {
   usePortfolioStats,
@@ -8,22 +9,26 @@ import {
   useTimeline,
   useTaxCredits,
   matchConfirmedPayouts,
+  notifyPortfolioChanged,
+  type HoldingDetail,
 } from "../../hooks/usePortfolio";
+import { supabase } from "../../lib/supabase";
 import { LEVELS, levelIndex } from "../home/ProfileLevelModal";
 import { issuerName } from "../../lib/issuerLogo";
+import { ratingFor } from "../../data/bondRatings";
 import IssuerLogo from "../IssuerLogo";
-import { SlipPaper, type SlipPaperData } from "./BondScanStack";
+import { type SlipPaperData } from "./BondScanStack";
 import Folder3D from "./Folder3D";
+import PaperFly from "./PaperFly";
 import wordmark from "../../assets/landing-logo.svg?raw";
 import addBondMain from "../../assets/add-bond-main.png";
 import bondDec1 from "../../assets/bond-dec-1.png";
 import bondEx1 from "../../assets/bond-ex-1.png";
 import bondEx2 from "../../assets/bond-ex-2.png";
 import emptyBonds from "../../assets/empty-bonds.svg";
-import mascot2d from "../../assets/mascot-2d.png";
-import lineQr from "../../assets/line-qr.png";
 import { estimatedRefund, getMarginalRate } from "../../lib/taxSettings";
 import TaxStoryChapter, { type TaxStoryData } from "./TaxStoryChapter";
+import JarWidget from "./JarWidget";
 import AddBondModal from "../AddBondModal";
 
 const fmtTHB = (n: number) => new Intl.NumberFormat("th-TH").format(Math.round(n));
@@ -35,6 +40,28 @@ const THAI_MONTHS_ABBR = [
   "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
   "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.",
 ];
+const QUARTER_LABEL = ["ไตรมาส 1", "ไตรมาส 2", "ไตรมาส 3", "ไตรมาส 4"];
+
+// Persist which LINE-confirmed slips the user has acknowledged (dismissed the
+// collect celebration for), so a reload never replays them.
+const COLLECT_ACK_KEY = "beond:collectAck:v2"; // v2 drops the old seed-everything data
+function loadCollectAck(): Set<string> | null {
+  try {
+    const raw = localStorage.getItem(COLLECT_ACK_KEY);
+    if (!raw) return null;
+    const arr = JSON.parse(raw) as string[];
+    return Array.isArray(arr) ? new Set(arr) : null;
+  } catch {
+    return null;
+  }
+}
+function saveCollectAck(ids: Set<string>): void {
+  try {
+    localStorage.setItem(COLLECT_ACK_KEY, JSON.stringify([...ids]));
+  } catch {
+    /* storage unavailable — celebration just won't persist */
+  }
+}
 
 // Pop-in style for the add-bond art: fade + rise + settle, staggered per image
 // (delay only when appearing; leaves together).
@@ -63,6 +90,24 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   const monthly = annualCoupon / 12;
 
   const payoutMonths = months; // continuous timeline
+
+  // Chart granularity: quarterly (default) or monthly.
+  const [viewMode, setViewMode] = useState<"quarter" | "month">("quarter");
+  // Quarter-aggregated timeline: each year's months collapsed into 4 buckets,
+  // payouts concatenated. payoutMonths is already chronological, so insertion
+  // order keeps quarters in order too.
+  const quarterMonths = useMemo(() => {
+    const byKey = new Map<string, (typeof payoutMonths)[number]>();
+    for (const m of payoutMonths) {
+      const q = Math.floor(THAI_MONTHS.indexOf(m.month) / 3); // 0..3
+      const key = `${m.year}-Q${q}`;
+      const ex = byKey.get(key);
+      if (ex) ex.payouts = [...ex.payouts, ...m.payouts];
+      else byKey.set(key, { id: key, month: QUARTER_LABEL[q], year: m.year, payouts: [...m.payouts] });
+    }
+    return [...byKey.values()];
+  }, [payoutMonths]);
+
   const currentIdx = useMemo(() => {
     const now = new Date();
     const beY = now.getFullYear() + 543;
@@ -82,8 +127,28 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   const [holdingHover, setHoldingHover] = useState<string | null>(null); // list row → show invested value
   const [hideValue, setHideValue] = useState(false); // mask the portfolio total
   const [addBondOpen, setAddBondOpen] = useState(false); // add-bond modal
+  // Click a holding row → open its details/edit page. Delete lives inside that page.
+  const [editHolding, setEditHolding] = useState<HoldingDetail | null>(null);
+
+  const delHolding = async (h: HoldingDetail) => {
+    if (!supabase) { setEditHolding(null); return; }
+    const { error: delErr } = await supabase.from("holdings").delete().eq("id", h.id);
+    if (delErr) { toast.danger(`ลบไม่สำเร็จ: ${delErr.message}`); return; }
+    notifyPortfolioChanged();
+    toast.success(`ลบ ${h.symbol} ออกจากพอร์ตแล้ว`);
+    setEditHolding(null);
+    refetchHoldings();
+  };
+
   // The folder card is hidden during the chart's intro, shown once it settles.
   const [chartSettled, setChartSettled] = useState(false);
+  // A cube is opened in the chart → hide the top folder/slip card behind the
+  // month-detail view.
+  const [cubeFocused, setCubeFocused] = useState(false);
+  const cubeCloseRef = useRef<(() => void) | null>(null); // closes the focused cube
+
+  const chartMode = viewMode;
+  const chartMonths = chartMode === "quarter" ? quarterMonths : payoutMonths;
 
   // Holdings list scroll-fade: mask the top/bottom edge only when there's more
   // content to scroll toward in that direction.
@@ -111,44 +176,100 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   const idx = monthIdx ?? currentIdx;
   const month = payoutMonths[Math.min(idx, Math.max(0, payoutMonths.length - 1))];
 
+  // Map the monthly `idx` onto the chart's array (identity in month mode; the
+  // containing quarter in quarter mode).
+  const chartActiveIdx = useMemo(() => {
+    if (chartMode === "month") return idx;
+    if (!month) return 0;
+    const q = Math.floor(THAI_MONTHS.indexOf(month.month) / 3);
+    const i = chartMonths.findIndex((c) => c.year === month.year && c.month === QUARTER_LABEL[q]);
+    return i >= 0 ? i : 0;
+  }, [chartMode, idx, month, chartMonths]);
+
+  // Clicking a chart bar → set the monthly index. In quarter mode, jump to that
+  // quarter's first income month (else its first month).
+  const onSelectChart = (ci: number) => {
+    if (chartMode === "month") { setMonthIdx(ci); return; }
+    const q = chartMonths[ci];
+    if (!q) return;
+    const qi = QUARTER_LABEL.indexOf(q.month);
+    const inQuarter = (m: (typeof payoutMonths)[number]) =>
+      m.year === q.year && Math.floor(THAI_MONTHS.indexOf(m.month) / 3) === qi;
+    const withIncome = payoutMonths.findIndex((m) => inQuarter(m) && m.payouts.length > 0);
+    setMonthIdx(withIncome >= 0 ? withIncome : payoutMonths.findIndex(inQuarter));
+  };
+
   const folder = useMemo(() => {
     if (!month) return { slips: [] as { id: string; symbol: string; issuer: string; confirmed: boolean }[], remaining: 0, label: "" };
     const slips = month.payouts.map((p) => ({ id: p.id, symbol: p.symbol, issuer: p.issuer, confirmed: matched.has(p.id) }));
     return { slips, remaining: slips.filter((s) => !s.confirmed).length, label: `${month.month} ${month.year}` };
   }, [month, matched]);
 
-  // Folder reveal sequence: open the cover → hold → sink the body away while the
-  // slips enlarge. Re-runs whenever the month (or its remaining count) changes.
-  const [folderOpen, setFolderOpen] = useState(false);
-  const [folderSunk, setFolderSunk] = useState(false);
+  // Clear any focused slip when the month changes.
   useEffect(() => {
-    // Reset to the folder view first (closed, not sunk), clearing any popped
-    // slip, so changing the month tab replays the reveal from the start.
-    setFolderOpen(false);
-    setFolderSunk(false);
     setSlipFocus(null);
-    if (folder.remaining > 0) {
-      const tOpen = setTimeout(() => setFolderOpen(true), 300); // show folder, then open
-      const tSink = setTimeout(() => setFolderSunk(true), 300 + 1200); // open (700) + hold
-      return () => { clearTimeout(tOpen); clearTimeout(tSink); };
-    }
-  }, [folder.remaining, month?.id]);
+  }, [month?.id]);
 
-  // The 50-ทวิ slips still to collect this month, as full slip data (for the
-  // papers shown inside the folder + the pirouette).
-  const pendingSlipData = useMemo<SlipPaperData[]>(() => {
-    if (!month) return [];
-    return month.payouts
-      .filter((p) => !matched.has(p.id))
-      .map((p) => ({
-        id: p.id,
-        symbol: p.symbol,
-        issuer: p.issuer,
-        installment: p.installment,
-        wht: Math.round(p.amount * 0.15),
-        net: Math.round(p.amount * 0.85),
-      }));
-  }, [month, matched]);
+  // A slip confirmed via LINE (its OCR flow) flies INTO the folder. We show the
+  // celebration only for LINE-sourced slips the user hasn't acknowledged yet, and
+  // persist the acknowledged ids so a reload never replays them. The very first
+  // run (no stored ack) seeds every current LINE slip as acknowledged, so only
+  // genuinely NEW confirmations (arriving live afterwards) trigger it.
+  const [flyInSlip, setFlyInSlip] = useState<SlipPaperData | null>(null);
+  const ackRef = useRef<Set<string> | null>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
+  const jarRef = useRef<HTMLDivElement>(null); // coin-particle landing target (jar mouth)
+  // While a collect celebration runs, hold the bar at its PRE-confirm value; on
+  // acknowledge `collecting` clears and the bar jumps to the new confirmed total
+  // (the tokens themselves accumulate in the jar, not the bar).
+  const [collecting, setCollecting] = useState(false);
+  const [landFrac] = useState(0);
+  const [barPulse] = useState(0);
+  const barPopControls = useAnimationControls();
+  useEffect(() => { if (flyInSlip) setCollecting(true); }, [flyInSlip]);
+  useEffect(() => {
+    const lineIds: { id: string; slip: SlipPaperData }[] = [];
+    for (const m of months) {
+      for (const p of m.payouts) {
+        const doc = matched.get(p.id);
+        // Only slips that came through the LINE OCR channel (webhook sets
+        // source "line_ocr") — not in-app web uploads.
+        if (doc && doc.source === "line_ocr") {
+          lineIds.push({
+            id: p.id,
+            slip: { id: p.id, symbol: p.symbol, issuer: p.issuer, installment: p.installment, wht: Math.round(p.amount * 0.15), net: Math.round(p.amount * 0.85) },
+          });
+        }
+      }
+    }
+    if (ackRef.current === null) ackRef.current = loadCollectAck() ?? new Set();
+    if (flyInSlip) return; // one at a time
+    // Show any LINE-confirmed slip the user hasn't acknowledged yet (persisted),
+    // including ones confirmed while the app was closed.
+    const next = lineIds.find((x) => !ackRef.current!.has(x.id));
+    if (next) setFlyInSlip(next.slip);
+  }, [matched, months, flyInSlip]);
+
+  // Acknowledge the shown slip: persist + dismiss, so it never replays.
+  const acknowledgeSlip = () => {
+    if (flyInSlip && flyInSlip.id !== "__debug__" && ackRef.current && !ackRef.current.has(flyInSlip.id)) {
+      ackRef.current.add(flyInSlip.id);
+      saveCollectAck(ackRef.current);
+    }
+    setCollecting(false);
+    setFlyInSlip(null);
+  };
+
+  // Debug: `?debugcollect` fires the celebration once with a mock slip so the
+  // full animation (folder → button → particles → progress bar) can be previewed
+  // without waiting for a real LINE confirmation.
+  useEffect(() => {
+    if (!new URLSearchParams(window.location.search).has("debugcollect")) return;
+    const t = setTimeout(() => {
+      setFlyInSlip({ id: "__debug__", symbol: "BAM284A", issuer: "บริหารสินทรัพย์", installment: "1/2", wht: 2640, net: 14960 });
+    }, 1500);
+    return () => clearTimeout(t);
+  }, []);
 
   // Year-to-date collection progress (this BE year). `credit` = WHT already
   // secured (confirmed slips); `potentialWht` = WHT across every payout this year
@@ -169,6 +290,25 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
     }
     return { total, confirmed, credit, potentialWht, pct: total ? confirmed / total : 0, year: beY };
   }, [months, matched, month]);
+
+  // Confirmed slips this year → one issuer-logo token each, piled in the jar.
+  const jarCoins = useMemo(() => {
+    const beY = month ? month.year : String(new Date().getFullYear() + 543);
+    const out: { id: string; symbol: string }[] = [];
+    for (const m of months) {
+      if (m.year !== beY) continue;
+      for (const p of m.payouts) if (matched.has(p.id)) out.push({ id: p.id, symbol: p.symbol });
+    }
+    return out;
+  }, [months, matched, month]);
+
+  // Bar value shown: while collecting, start one slip behind and grow by landFrac
+  // (the share of particles that have landed) so the fill tracks the particles.
+  const barUnits = collecting
+    ? Math.max(0, yearProgress.confirmed - 1) + landFrac
+    : yearProgress.confirmed;
+  const barConfirmed = Math.round(barUnits);
+  const barPct = yearProgress.total ? barUnits / yearProgress.total : 0;
 
   // Caller's marginal tax bracket for the refund story (defaults to 5% until the
   // saved setting loads / when logged out, so the tax chapter still narrates).
@@ -331,9 +471,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                   return (
                   <li
                     key={h.id}
+                    onClick={() => setEditHolding(h)}
                     onMouseEnter={() => setHoldingHover(h.id)}
                     onMouseLeave={() => setHoldingHover((c) => (c === h.id ? null : c))}
-                    className={`flex items-center justify-between gap-4 py-2 ${i < holdings.length - 1 ? "border-b-[0.5px] border-black/10" : ""}`}
+                    className={`-mx-2 flex cursor-pointer items-center justify-between gap-4 rounded-2xl px-2 py-2 transition-colors duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:bg-[#F0F2F7] ${i < holdings.length - 1 ? "border-b-[0.5px] border-black/10" : ""}`}
                   >
                     <div className="flex items-center gap-4">
                       <IssuerLogo symbol={h.symbol} name={issuerName(h.symbol, h.issuer)} size={48} />
@@ -342,8 +483,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                         <p className="truncate text-sm text-ink/80">{issuerName(h.symbol, h.issuer)}</p>
                       </div>
                     </div>
-                    {/* Hover a row → show that bond's invested value instead of the
-                        coupon rate + rating. */}
+                    {/* Hover a row → show invested value instead of coupon + rating. */}
                     <div className="text-right">
                       {hv ? (
                         <>
@@ -353,7 +493,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                       ) : (
                         <>
                           <p className="text-base font-medium text-ink">{h.couponRate.toFixed(1)}%</p>
-                          <p className="text-sm text-ink/80">{h.rating ?? "—"}</p>
+                          <p className="text-sm text-ink/80">{h.rating ?? ratingFor(h.symbol) ?? "—"}</p>
                         </>
                       )}
                     </div>
@@ -370,26 +510,24 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             </div>
             </div>
 
-            {/* Add-bond flow shown inline as a single panel over this section. */}
-            {addBondOpen && (
+            {/* Add-bond / edit flow shown inline as a single panel over this section. */}
+            {(addBondOpen || editHolding) && (
               <div className="absolute inset-0 z-30 flex flex-col bg-white p-6">
                 {/* Rolled paper at the card corner — same placement as the
                     holdings card, so the art matches exactly. */}
                 <img src={bondDec1} alt="" aria-hidden className="pointer-events-none absolute -right-2 -top-1 h-10 w-auto rotate-[18deg]" />
-                <AddBondModal inline open onClose={() => setAddBondOpen(false)} onAdded={() => refetchHoldings()} />
+                <AddBondModal
+                  inline
+                  open
+                  editHolding={editHolding}
+                  onDelete={editHolding ? () => delHolding(editHolding) : undefined}
+                  onClose={() => { setAddBondOpen(false); setEditHolding(null); }}
+                  onAdded={() => refetchHoldings()}
+                />
               </div>
             )}
           </section>
 
-          {/* LINE CTA */}
-          <section className="relative shrink-0 overflow-hidden rounded-3xl bg-[#06C755] p-6 text-white">
-            <p className="max-w-[60%] text-lg font-medium">สแกนใบสลิปดอกเบี้ยหุ้นกู้ผ่าน LINE OA</p>
-            <p className="mt-1 text-sm text-white/90">แอดเพื่อนเลย @beond</p>
-            <div className="absolute right-4 bottom-3 flex items-end gap-2">
-              <img src={mascot2d} alt="" aria-hidden className="h-24 w-auto" />
-              <img src={lineQr} alt="LINE QR" className="size-24 rounded-lg bg-white p-1" />
-            </div>
-          </section>
         </div>
 
         {/* RIGHT blue panel */}
@@ -397,6 +535,16 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
           {/* IG-story style progress — one segment per intro chapter, filling over
               its duration; fades out once the intro ends. */}
           <IntroProgress chapter={chapter} chartSettled={chartSettled} />
+          {/* Back button — panel top-left corner; shown while a cube is focused. */}
+          <button
+            onClick={() => cubeCloseRef.current?.()}
+            aria-label="ย้อนกลับ"
+            className="absolute left-6 top-6 z-40 flex items-center gap-1.5 rounded-full border border-black/10 bg-white py-1.5 pl-2 pr-4 text-sm font-medium text-ink transition hover:bg-[#F0F2F7]"
+            style={{ opacity: cubeFocused ? 1 : 0, pointerEvents: cubeFocused ? "auto" : "none", transition: "opacity 300ms ease" }}
+          >
+            <IconChevronLeft size={22} />
+            ย้อนกลับ
+          </button>
           {/* Income chapter — folder card + coupon building chart. Always mounted +
               visible: during the tax chapter the cubes stay on screen (only the
               folder card fades out, letting the gauge overlay take its place). */}
@@ -406,11 +554,11 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
               can rise up from behind the card's top edge. Hidden (keeps its space)
               while the tax chapter's gauge overlays this region. */}
           <div
-            className="relative z-10 mt-14"
+            className={`z-10 mt-14 ${cubeFocused ? "pointer-events-none absolute inset-x-0" : "relative"}`}
             style={{
-              opacity: chapter === "slip" ? 1 : 0,
-              transform: chapter === "slip" ? "translateY(0)" : "translateY(40px)",
-              pointerEvents: chapter === "slip" ? "auto" : "none",
+              opacity: chapter === "slip" && !cubeFocused ? 1 : 0,
+              transform: chapter === "slip" && !cubeFocused ? "translateY(0)" : "translateY(40px)",
+              pointerEvents: chapter === "slip" && !cubeFocused ? "auto" : "none",
               transition: "opacity 500ms ease, transform 600ms cubic-bezier(.34,1.2,.5,1)",
             }}
           >
@@ -445,26 +593,12 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
 
             <div className="relative z-10 rounded-[24px] bg-white px-5 pb-5 pt-5 backdrop-blur">
 
-            {/* Folder — the 50-ทวิ folder as a 3D object where the mailbox used to
-                be. Cover open while slips remain to collect, closed once all are
-                confirmed. */}
-            {/* Clip frame — bottom edge = card bottom (crops the folder foot to
-                stay inside the card, matching the rounded corner); extends far
-                above the card so the folder top still bleeds over the top. */}
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-0 overflow-hidden rounded-b-3xl" style={{ top: -400 }}>
-              {/* Once open, the folder BODY sinks away while the slip stack
-                  stays in place (handled inside Folder3D via `sink`). */}
-              <div className="absolute right-2" style={{ bottom: -155 }}>
-                <Folder3D scale={0.56} rx={8} ry={-28} open={folderOpen} blank slips={pendingSlipData} sink={folderSunk ? 460 : 0} slipScale={folderSunk ? 1.45 : 1} slipShift={folderSunk ? 240 : 0} slipFront={folderSunk} focusSlip={slipFocus} />
-              </div>
+            {/* Glass money jar — confirmed slips this year piled as issuer coins. */}
+            <div ref={jarRef} className="pointer-events-none absolute right-10 z-20" style={{ top: -60 }}>
+              <JarWidget coins={jarCoins} />
             </div>
 
-            {/* Coupon slips pirouetting UP out of the open folder — only when the
-                month has income still to collect. Not clipped, so they float
-                above the card. */}
-            {folder.remaining > 0 && <MailboxFloat slips={pendingSlipData.slice(0, 3)} />}
-
-            {/* Left content — kept clear of the slips on the right */}
+            {/* Left content — kept clear of the jar on the right */}
             <div className="relative z-10 max-w-[58%]">
               <p className="text-sm text-ink/80">สลิปที่ต้องสะสมของเดือน</p>
               {/* Fixed row height (= issuer-logo size) so months with 0 logos
@@ -495,12 +629,54 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
 
               <div className="mt-4 w-3/5">
                 <div className="flex items-center justify-between gap-4">
-                  <p className="text-xs text-ink/70">สะสมได้ตลอดปี ({yearProgress.confirmed}/{yearProgress.total} ใบ)</p>
+                  <p className="text-xs text-ink/70">
+                    สะสมได้ตลอดปี (
+                    <motion.span
+                      key={barPulse}
+                      className="inline-block font-medium text-[#3FA35B]"
+                      animate={collecting ? { scale: [1, 1.5, 1] } : { scale: 1 }}
+                      transition={{ duration: 0.4, ease: [0.34, 1.6, 0.5, 1] }}
+                    >
+                      {barConfirmed}
+                    </motion.span>
+                    /{yearProgress.total} ใบ)
+                  </p>
                   <p className="text-base font-medium text-ink">฿{fmtTHB(yearProgress.credit)}</p>
                 </div>
-                <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-black/10">
-                  <div className="h-full rounded-full bg-[#3FA35B]" style={{ width: `${yearProgress.pct * 100}%` }} />
-                </div>
+                {/* Game-UI bar: the whole track pops (scaleY) on each particle hit;
+                    the fill springs with overshoot; a white flash sweeps on impact. */}
+                <motion.div
+                  ref={progressBarRef}
+                  className="mt-2 h-2.5 origin-bottom rounded-full bg-black/10"
+                  animate={barPopControls}
+                  style={{ overflow: "hidden" }}
+                >
+                  <motion.div
+                    className="relative h-full rounded-full bg-[#3FA35B]"
+                    initial={{ width: 0 }}
+                    animate={{
+                      width: chapter === "slip" ? `${barPct * 100}%` : 0,
+                      boxShadow: collecting
+                        ? `0 0 ${6 + landFrac * 12}px rgba(63,163,91,${0.35 + landFrac * 0.6})`
+                        : ["0 0 12px rgba(63,163,91,0.85)", "0 0 0px rgba(63,163,91,0)"],
+                    }}
+                    transition={{
+                      width: collecting
+                        ? { type: "spring", stiffness: 420, damping: 11 } // bouncy overshoot
+                        : { type: "spring", stiffness: 90, damping: 18, delay: 0.25 },
+                      boxShadow: { duration: 0.5, ease: "easeOut" },
+                    }}
+                  >
+                    {/* White flash at the fill head on each hit. */}
+                    <motion.span
+                      key={`flash-${barPulse}`}
+                      className="absolute inset-y-0 right-0 w-8 rounded-full bg-white"
+                      initial={{ opacity: collecting ? 0.75 : 0 }}
+                      animate={{ opacity: 0 }}
+                      transition={{ duration: 0.45, ease: "easeOut" }}
+                    />
+                  </motion.div>
+                </motion.div>
               </div>
             </div>
             </div>
@@ -509,11 +685,15 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
           {/* Building chart (year summary overlays inside it, so it doesn't
               steal vertical space from the cube stage). */}
           <BuildingChart
-            months={payoutMonths}
-            activeIdx={idx}
+            months={chartMonths}
+            activeIdx={chartActiveIdx}
             matched={matched}
-            onSelect={setMonthIdx}
+            onSelect={onSelectChart}
             onSettled={() => setChartSettled(true)}
+            onFocusChange={setCubeFocused}
+            closeRef={cubeCloseRef}
+            viewMode={viewMode}
+            onViewMode={setViewMode}
             showWidgets={chapter === "slip"}
             start={chapter === "income"}
             taxRate={taxRate}
@@ -534,6 +714,36 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
           </div>
         </section>
       </main>
+
+      {/* Floating action button — scan interest slips via the LINE OA.
+          Hovering reveals the details label sliding in from the right. */}
+      <a
+        href="https://line.me/R/ti/p/@beond"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="สแกนสลิปดอกเบี้ยผ่าน LINE OA @beond"
+        className="group fixed bottom-6 right-6 z-50 flex items-center gap-3"
+      >
+        <div className="pointer-events-none flex translate-x-3 flex-col items-end rounded-2xl bg-white px-4 py-2 opacity-0 shadow-[0_8px_24px_rgba(0,0,0,0.12)] transition duration-300 ease-out group-hover:translate-x-0 group-hover:opacity-100">
+          <span className="whitespace-nowrap text-sm font-medium text-ink">สแกนสลิปดอกเบี้ยผ่าน LINE OA</span>
+          <span className="whitespace-nowrap text-xs text-black/50">แอดเพื่อนเลย @beond</span>
+        </div>
+        <span className="flex size-14 shrink-0 items-center justify-center rounded-full bg-[#06C755] text-white shadow-[0_8px_24px_rgba(6,199,85,0.45)] transition group-hover:scale-105 group-hover:bg-[#05b64d]">
+          <IconBrandLine size={30} />
+        </span>
+      </a>
+
+      {/* Full-screen slip-collected celebration — a confirmed slip pirouettes in
+          and drops into the folder, centered over everything. */}
+      <AnimatePresence>
+        {flyInSlip && (
+          <SlipCollectOverlay
+            slip={flyInSlip}
+            onDone={acknowledgeSlip}
+            skipIntro={flyInSlip.id === "__debug__"}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -636,20 +846,30 @@ function BuildingChart({
   matched,
   onSelect,
   onSettled,
+  onFocusChange,
+  closeRef,
+  viewMode,
+  onViewMode,
   showWidgets = false,
   start = true,
   taxRate = 5,
   resizing = false,
+  tilted = false,
 }: {
   months: ReturnType<typeof useTimeline>["months"];
   activeIdx: number;
   matched: ReturnType<typeof matchConfirmedPayouts>;
   onSelect: (i: number) => void;
   onSettled?: () => void;
+  onFocusChange?: (focused: boolean) => void; // a cube is opened → parent hides the top card
+  closeRef?: React.MutableRefObject<(() => void) | null>; // parent-driven "close focus"
+  viewMode?: "quarter" | "month";
+  onViewMode?: (m: "quarter" | "month") => void;
   showWidgets?: boolean; // month total — held back until the slip panel
   start?: boolean; // gate the intro so it waits for the goal chapter to finish
   taxRate?: number; // marginal bracket %, for the detail card's refund estimate
   resizing?: boolean; // layout opening → cubes track width instantly (no lag)
+  tilted?: boolean; // resting bars stay in the iso 3D view instead of turning flat
 }) {
   // Intro storytelling (plays once): bars grow out of the ground in the iso view
   // — you feel the 3D dimension — then the camera turns them face-on into a flat
@@ -667,6 +887,13 @@ function BuildingChart({
   useEffect(() => {
     setFocused((f) => (f == null ? null : activeIdx));
   }, [activeIdx]);
+  // Tell the parent whenever a cube opens/closes so it can hide the top card.
+  useEffect(() => {
+    onFocusChange?.(focused != null);
+  }, [focused, onFocusChange]);
+  // Let the parent close the focused view (its back button lives at the panel
+  // top-left corner, outside this component).
+  if (closeRef) closeRef.current = () => setFocused(null);
   // Hovered month (global index g) in the resting chart → highlight its column.
   const [hovered, setHovered] = useState<number | null>(null);
   const introDone = useRef(false);
@@ -743,6 +970,9 @@ function BuildingChart({
     // fire on a later stageH change (e.g. a window resize).
   }, [stageH, ordered.length, start]);
 
+  // "Flat" = the resting front-on bar chart. In tilted (quarter) mode we KEEP the
+  // intro's iso perspective deck at rest instead — fanned, depth-stacked, no axis.
+  const flat = faced && !tilted;
   // Slide the whole deck so the currently-toured building sits at centre.
   const deckShift = faced || tourIdx == null || !ordered[tourIdx] ? 0 : -xOf(ordered[tourIdx].d);
 
@@ -759,9 +989,6 @@ function BuildingChart({
   // Bar height ∝ the month's total coupon income: the highest-earning month of
   // the focused year fills ~85% of the stage, everything else scales to it. Empty
   // months keep a short placeholder stub.
-  const monthTotal = (m: (typeof months)[number]) => m.payouts.reduce((s, p) => s + p.amount, 0);
-  const maxIncome = Math.max(1, ...months.filter((m) => m.year === focusYear).map(monthTotal));
-  const usableH = stageH > 0 ? stageH * 0.85 : 400;
   const EMPTY_H = 26; // short stub for months with no income
 
   // Resting bar-chart layout (after the intro settles): evenly spaced, no fan
@@ -770,7 +997,13 @@ function BuildingChart({
   const barSlot = stageW > 0 ? Math.min(170, (stageW * 0.96) / Math.max(1, nBars)) : 150;
   // Cube width = S·barScale; keep it at ~0.82 of the slot so a clear gap sits
   // between neighbouring cubes.
-  const barScale = Math.min(1.15, (barSlot * 0.82) / S);
+  const barScale = Math.min(1.0, (barSlot * 0.72) / S);
+  const usableH = stageH > 0 ? stageH * 0.82 : 400;
+  // Each payout is ONE fixed-height cube; a bar's height = its payout count ×
+  // that unit (NOT the income amount). The bar with the most payouts fills
+  // usableH, so every cube across the chart is the same height.
+  const maxSegs = Math.max(1, ...ordered.map((o) => o.m.payouts.length));
+  const segUnit = usableH / maxSegs;
 
   // Hover band x — held in a ref so it keeps its last column while fading out
   // (band stays mounted; only opacity drops when the pointer leaves).
@@ -790,24 +1023,28 @@ function BuildingChart({
     <div className="relative z-10 mt-2 flex-1">
       {/* Year summary — absolute overlays so they never steal stage height:
           bars top-left. */}
-      {/* Month total — hidden during the intro, revealed with the slip panel. */}
-      <div className="absolute inset-x-0 top-0 text-center" style={{ zIndex: 120, opacity: showWidgets && focused == null ? 1 : 0, pointerEvents: showWidgets && focused == null ? "auto" : "none", transition: "opacity 500ms ease" }}>
-        <p className="text-base text-white/85">รายได้เดือน {months[activeIdx]?.month} {months[activeIdx]?.year}</p>
-        <p className="text-4xl font-medium text-white">
-          ฿{fmtTHB((months[activeIdx]?.payouts ?? []).reduce((s, p) => s + p.amount, 0))}
-        </p>
-      </div>
-
-      {/* Back button — shown while a month is focused so it's clear you can exit. */}
-      <button
-        onClick={() => setFocused(null)}
-        aria-label="ย้อนกลับ"
-        className="absolute left-0 top-0 flex items-center gap-1.5 rounded-full border border-black/10 bg-white py-1.5 pl-2 pr-4 text-sm font-medium text-ink transition hover:bg-[#F0F2F7]"
-        style={{ zIndex: 145, opacity: focused != null ? 1 : 0, pointerEvents: focused != null ? "auto" : "none", transition: "opacity 300ms ease" }}
-      >
-        <IconChevronLeft size={22} />
-        ย้อนกลับ
-      </button>
+      {/* View-mode toggle — sits where the period-income header used to be;
+          revealed with the resting chart, hidden while a cube is focused. */}
+      {viewMode && onViewMode && (
+        <div
+          className="absolute inset-x-0 top-0 flex justify-center"
+          style={{ zIndex: 120, opacity: showWidgets && focused == null ? 1 : 0, pointerEvents: showWidgets && focused == null ? "auto" : "none", transition: "opacity 500ms ease" }}
+        >
+          <div className="flex gap-1 rounded-full border border-black/10 bg-white/80 p-1 backdrop-blur">
+            {([["quarter", "รายไตรมาส"], ["month", "รายเดือน"]] as const).map(([mode, label]) => (
+              <button
+                key={mode}
+                onClick={() => onViewMode(mode)}
+                className={`rounded-full px-3 py-1 text-sm font-medium transition ${
+                  viewMode === mode ? "bg-[#43507F] text-white" : "text-ink/70 hover:bg-black/5"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Intro story — year overview narration. Lines rise + fade in on a stagger
           as the story opens, then the whole block fades out once the bars settle. */}
@@ -843,11 +1080,11 @@ function BuildingChart({
 
       {/* Baseline stage — lifted off the panel bottom so the whole bar chart
           floats above the x-axis. */}
-      <div ref={stageRef} className="absolute inset-x-0 bottom-12 top-2">
+      <div ref={stageRef} className="absolute inset-x-0 bottom-6 top-2">
         {/* Y axis (left) + X axis (baseline) — the chart frame; fades in only
             after the intro has settled into the bar chart. */}
-        <div className="pointer-events-none absolute left-0 bottom-0 top-8" style={{ width: 1.5, background: "rgba(0,0,0,0.14)", zIndex: 1, opacity: faced && focused == null ? 1 : 0, transition: "opacity 500ms ease" }} />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ height: 1.5, background: "rgba(0,0,0,0.14)", zIndex: 1, opacity: faced && focused == null ? 1 : 0, transition: "opacity 500ms ease" }} />
+        <div className="pointer-events-none absolute left-0 bottom-0 top-8" style={{ width: 1.5, background: "rgba(0,0,0,0.14)", zIndex: 1, opacity: flat && focused == null ? 1 : 0, transition: "opacity 500ms ease" }} />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ height: 1.5, background: "rgba(0,0,0,0.14)", zIndex: 1, opacity: flat && focused == null ? 1 : 0, transition: "opacity 500ms ease" }} />
         {/* Hover highlight — one soft vertical band that SLIDES between columns
             (kept mounted so moving between bars glides instead of popping) and
             fades out when the pointer leaves. */}
@@ -859,7 +1096,7 @@ function BuildingChart({
             background: "linear-gradient(to top, rgba(255,255,255,0.28), rgba(255,255,255,0))",
             borderRadius: 12,
             zIndex: 1,
-            opacity: faced && focused == null && hovered != null ? 1 : 0,
+            opacity: flat && focused == null && hovered != null ? 1 : 0,
             transition: "transform 320ms cubic-bezier(.45,0,.25,1), opacity 320ms ease",
           }}
         />
@@ -873,39 +1110,50 @@ function BuildingChart({
         {/* Deck — slides horizontally so the camera-toured building sits centre. */}
         <div
           className="absolute inset-0"
-          style={{ transform: `translateX(${deckShift}px) translateY(${faced ? 0 : 72}px)`, transition: "transform 620ms cubic-bezier(.45,0,.25,1)" }}
+          style={{ transform: `translateX(${deckShift}px) translateY(${faced || tilted ? -8 : 72}px)`, transition: "transform 620ms cubic-bezier(.45,0,.25,1)" }}
         >
         {stageH > 0 &&
           ordered.map(({ d, g, m }, oi) => {
             // Two layouts: the intro deck (fan + depth scaling) while animating,
             // and the resting bar chart (even slots, no overlap, flat) once faced.
             const barX = (oi - (nBars - 1) / 2) * barSlot;
-            const x = faced ? barX : xOf(d);
-            const scale = faced ? barScale : Math.pow(SCALE_FALLOFF, Math.abs(d));
+            const x = flat ? barX : xOf(d);
+            const scale = flat ? barScale : Math.pow(SCALE_FALLOFF, Math.abs(d));
             // Camera-tour state for this building.
             const onTour = !faced && tourIdx != null; // a visit is in progress
             const isVisited = !faced && tourIdx === oi; // the one being looked at
             // Cubes stay iso during the explore; only the final settle turns them
             // front-on. Amounts still reveal on the cube being visited.
-            const showFront = faced;
+            const showFront = faced && !tilted; // tilted → keep the iso 3D camera
             // Largest payout at the base, smaller ones stacked on top.
             const segs: Seg[] = [...m.payouts]
               .sort((a, b) => b.amount - a.amount)
               .map((p) => ({ id: p.id, symbol: p.symbol, issuer: p.issuer, amount: p.amount, confirmed: matched.has(p.id) }));
-            // Bar height ∝ this month's total income (empty → short stub).
+            // Bar height ∝ this month's total income — but floored so each payout
+            // cube is always tall enough to show its logo + ฿ amount (clarity over
+            // strict proportion; small real portfolios otherwise collapse to stubs).
             const mTotal = segs.reduce((s, x) => s + x.amount, 0);
-            const hpx = mTotal > 0 ? Math.max(EMPTY_H, (mTotal / maxIncome) * usableH) : EMPTY_H;
+            // Bar height = payout COUNT × the fixed cube unit (income magnitude no
+            // longer drives it). fill ÷ barScale counters the uniform width-fit
+            // scale that would otherwise crush height in the flat resting chart.
+            const fill = flat && focused !== g ? 1 / barScale : 1;
+            const hpx = (mTotal > 0 ? segs.length * segUnit : EMPTY_H) * fill;
             const baseBlur = Math.max(0, Math.abs(d) - 2) * 6;
             // Perspective-focus overrides (only in the resting chart): the picked
             // month turns iso, centres, scales up alone; the rest fade out.
-            const anyFocus = faced && focused != null;
+            const anyFocus = focused != null;
             const isFocus = focused === g;
+            // Focused tower gets a FIXED tall height, decoupled from income — so a
+            // low-earning month still renders big cubes with readable logos + ฿.
+            // (Tying height to income made small real portfolios collapse to specks.)
+            const hpxEff = isFocus && stageH > 0 ? Math.max(stageH * 0.68, 420) : hpx;
             // Bigger + parked on the LEFT so a detail card can sit on the right.
-            const focusScale = stageH > 0 ? Math.min(2.1, (stageH * 0.74) / hpx) : 1;
+            // Modest zoom bounded by width so wide cubes don't overflow the stage.
+            const focusScale = stageW > 0 ? Math.min(1.25, (stageW * 0.42) / S) : 1.2;
             const focusX = stageW > 0 ? -stageW * 0.24 : -160;
             const xEff = isFocus ? focusX : x;
             // Hover highlight (resting chart only): lift + brighten the column.
-            const isHover = faced && focused == null && hovered === g;
+            const isHover = flat && focused == null && hovered === g;
             const scaleEff = isFocus ? focusScale : isVisited ? 1.2 : scale;
             // Focused month stays iso (side+top faces); everything else front-on
             // in the resting chart.
@@ -919,24 +1167,24 @@ function BuildingChart({
                   onSelect(g);
                   setFocused(g);
                 }}
-                onMouseEnter={() => faced && focused == null && setHovered(g)}
+                onMouseEnter={() => flat && focused == null && setHovered(g)}
                 onMouseLeave={() => setHovered((h) => (h === g ? null : h))}
                 aria-label={`${m.month} ${m.year}`}
                 className="absolute bottom-0 left-1/2 origin-bottom cursor-pointer"
                 style={{
                   width: B_W,
-                  height: hpx,
+                  height: hpxEff,
                   // scaleY grows the bar out of the ground; a visited cube snaps to
                   // a FIXED focus scale (same for every month → equal closeness to
                   // camera), otherwise it keeps its depth/rest scale.
                   transform: `translateX(calc(-50% + ${xEff}px)) scale(${scaleEff}) scaleY(${grown ? 1 : 0.02})`,
                   // Flat, uniform stacking order in the resting chart; deck order during intro.
-                  zIndex: isFocus ? 140 : isHover ? 110 : faced ? 100 : isVisited ? 130 : 100 + d,
+                  zIndex: isFocus ? 140 : isHover ? 110 : flat ? 100 : isVisited ? 130 : 100 + d,
                   // No depth blur/brightness in the resting chart (hover brightens); deck effects during intro.
-                  filter: faced ? (isHover ? "brightness(1.08)" : "none") : `brightness(${1 - 0.05 * Math.abs(d)}) blur(${isVisited ? 0 : baseBlur}px)`,
+                  filter: flat ? (isHover ? "brightness(1.08)" : "none") : `brightness(${1 - 0.05 * Math.abs(d)}) blur(${isVisited ? 0 : baseBlur}px)`,
                   // During the tour, non-visited cubes dim; in focus, only the picked
                   // month shows; all solid otherwise.
-                  opacity: anyFocus ? (isFocus ? 1 : 0) : faced ? 1 : onTour ? (isVisited ? 1 : 0.22) : Math.abs(d) >= 3 ? 0.5 : 1,
+                  opacity: anyFocus ? (isFocus ? 1 : 0) : flat ? 1 : onTour ? (isVisited ? 1 : 0.22) : Math.abs(d) >= 3 ? 0.5 : 1,
                   pointerEvents: anyFocus && !isFocus ? "none" : "auto",
                   // Slow, smooth ease-in-out for the zoom/pan feel. While the
                   // layout opens, drop the transform transition so cubes track
@@ -946,7 +1194,7 @@ function BuildingChart({
                   transitionDelay: faced || onTour ? "0ms" : `${Math.abs(d) * 70}ms`,
                 }}
               >
-                <Building3D hpx={hpx} segments={segs} label={faced && !isFocus ? undefined : m.month} frontView={frontEff} reveal={faced || isVisited} delay={isFocus || isVisited ? 0 : Math.abs(d) * 70} />
+                <Building3D hpx={hpxEff} segments={segs} label={flat && !isFocus ? undefined : m.month} frontView={frontEff} reveal={faced || isVisited} delay={isFocus || isVisited ? 0 : Math.abs(d) * 70} />
               </button>
             );
           })}
@@ -964,7 +1212,7 @@ function BuildingChart({
                 style={{
                   width: barSlot,
                   transform: `translateX(calc(-50% + ${barX}px)) translateY(20px)`,
-                  opacity: faced && focused == null ? 1 : 0,
+                  opacity: flat && focused == null ? 1 : 0,
                   transition: "opacity 450ms ease 200ms",
                   zIndex: 2,
                 }}
@@ -985,7 +1233,7 @@ function BuildingChart({
         className="absolute top-2 bottom-12"
         style={{
           right: 0,
-          width: "min(46%, 420px)",
+          width: "min(50%, 460px)",
           zIndex: 135,
           opacity: focused != null ? 1 : 0,
           transform: `translateX(${focused != null ? 0 : 24}px)`,
@@ -1064,22 +1312,33 @@ function MonthDetailCard({
   const total = rows.reduce((s, p) => s + p.amount, 0);
   const wht = Math.round(total * 0.15); // Thai bond coupon withholding = 15%
   const refund = Math.round(estimatedRefund(wht, taxRate));
-  // Thumbnail slip = the largest payout, as full slip data.
-  const topSlip: SlipPaperData | null = rows[0]
-    ? { id: rows[0].id, symbol: rows[0].symbol, issuer: rows[0].issuer, installment: rows[0].installment, wht: Math.round(rows[0].amount * 0.15), net: Math.round(rows[0].amount * 0.85) }
-    : null;
+  // The month's 50-ทวิ folder — pending (uncollected) slips only; folder shown
+  // open while any remain, closed once every slip is confirmed.
+  const folderSlips: SlipPaperData[] = month.payouts
+    .filter((p) => !matched.has(p.id))
+    .map((p) => ({ id: p.id, symbol: p.symbol, issuer: p.issuer, installment: p.installment, wht: Math.round(p.amount * 0.15), net: Math.round(p.amount * 0.85) }));
+
+  // Play the folder open animation each time a new month is focused: start
+  // closed, then swing the cover open (slips fan out) a beat later.
+  const hasSlips = folderSlips.length > 0;
+  const [folderOpen, setFolderOpen] = useState(false);
+  useEffect(() => {
+    setFolderOpen(false);
+    const t = setTimeout(() => setFolderOpen(hasSlips), 320);
+    return () => clearTimeout(t);
+  }, [month.id, hasSlips]);
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden rounded-3xl bg-white px-4 pt-4 pb-4">
-      {/* Slip thumbnail — floats over the top-right corner so it doesn't push the
-          list down. */}
-      {topSlip && (
-        <div className="pointer-events-none absolute right-4 top-4 z-10 h-[130px] w-[150px] overflow-hidden">
-          <div style={{ width: 310, transformOrigin: "top right", transform: "scale(0.484)", marginLeft: "auto" }}>
-            <SlipPaper slip={topSlip} />
-          </div>
+      {/* Folder — the month's 50-ทวิ folder floats over the top-right corner
+          (moved here from the summary card when a cube is focused). Folder3D's
+          layout box is 330×420; scale is a transform, so size the wrapper to the
+          scaled visual and center the box inside it. */}
+      <div className="pointer-events-none absolute right-2 top-3 z-0" style={{ width: 330 * 0.46, height: 420 * 0.46 }}>
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+          <Folder3D scale={0.46} rx={8} ry={-28} open={folderOpen} blank slips={folderSlips} />
         </div>
-      )}
+      </div>
 
       {/* Header — month total (list sits directly under it). */}
       <div className="px-1">
@@ -1087,8 +1346,9 @@ function MonthDetailCard({
         <p className="mt-1 text-[32px] font-medium leading-tight text-ink">฿{fmtTHB(total)}</p>
       </div>
 
-      {/* Inner bordered box — list + tax summary, expands to fill the card. */}
-      <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-2xl border-[0.5px] border-black/10 p-4">
+      {/* Inner bordered box — list + tax summary, expands to fill the card.
+          relative z-10 + solid bg so it paints OVER the folder tucked behind. */}
+      <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col rounded-2xl border-[0.5px] border-black/10 bg-white p-4">
         <p className="text-sm text-ink/60">รายชื่อ</p>
 
         {/* Payout rows — one per cube (largest first). */}
@@ -1129,85 +1389,113 @@ function MonthDetailCard({
   );
 }
 
-// Coupon slips pirouetting up out of the open mailbox — the keyframers/shshaw
-// segment-curl (same as PaperFly) but looping and floating OUT: each sheet rises
-// from the mailbox mouth, its 5 stacked segments rippling via rotateX, then
-// flattens and fades. One real 50-ทวิ per pending slip, staggered.
-const MBF_SEG = 5;
-const MBF_PW = 150; // slip width (px) — larger so the flying slips are the focus
-const MBF_PH = Math.round((MBF_PW * 297) / 210);
+// Full-screen "slip collected" celebration — reuses the goal-chapter opener's
+// exact animation (layered Folder3D sheet/cover + PaperFly pirouette), just ONE
+// slip. Covers everything (fixed inset-0). Tapping รับทราบ fills the button green,
+// then bursts it into particles that fly into the year-progress bar.
+export function SlipCollectOverlay({
+  slip,
+  onDone,
+  skipIntro = false,
+}: {
+  slip: SlipPaperData;
+  onDone: () => void;
+  skipIntro?: boolean; // debug: jump straight to the acknowledge button
+}) {
+  const [phase, setPhase] = useState(skipIntro ? 2 : 0); // 0 none → 1 folder → 2 slip flies in
+  const [closed, setClosed] = useState(skipIntro); // cover shuts over the landed slip
+  const [settled, setSettled] = useState(skipIntro); // animation done → show the button
+  const [ack, setAck] = useState<"idle" | "fill" | "burst">("idle");
+  const btnRef = useRef<HTMLButtonElement>(null);
 
-function MbfSegments({ slip, depth }: { slip: SlipPaperData; depth: number }) {
-  if (depth >= MBF_SEG) return null;
+  useEffect(() => {
+    if (skipIntro) return; // debug → button is already shown, no cinematic
+    const t1 = setTimeout(() => setPhase(1), 60); // folder fades in
+    const t2 = setTimeout(() => setPhase(2), 560); // slip pirouettes in, cover opens
+    const t3 = setTimeout(() => setClosed(true), 560 + 2600); // cover shuts
+    const t4 = setTimeout(() => setSettled(true), 560 + 3100); // reveal the button
+    return () => { [t1, t2, t3, t4].forEach(clearTimeout); };
+  }, [skipIntro]);
+
+  const handleAck = () => {
+    if (ack !== "idle") return;
+    setAck("fill"); // button fills green left→right
+    setTimeout(() => {
+      // Fade the celebration away so the jar (already gaining its tokens) is
+      // revealed — no particle burst; the coins drop into the jar itself.
+      setAck("burst");
+      setTimeout(onDone, 700);
+    }, 620);
+  };
+
+  const bursting = ack === "burst";
+
   return (
-    <div className="mbf-seg">
-      <div className="mbf-win">
-        <div className="mbf-slice" style={{ transform: `translateY(${-depth * (100 / MBF_SEG)}%)` }}>
-          <div style={{ width: 310, transformOrigin: "top left", transform: `scale(${MBF_PW / 310})` }}>
-            <SlipPaper slip={slip} />
+    <motion.div
+      className="fixed inset-0 z-[120]"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.3 }}
+    >
+      {/* Backdrop + folder + button — fades away on burst so the dashboard (and
+          its progress bar) is REVEALED while the particles fly into it. The
+          particles live outside this group, so they stay fully visible. */}
+      <motion.div
+        className="absolute inset-0 flex items-center justify-center bg-black/35 backdrop-blur-sm"
+        animate={{ opacity: bursting ? 0 : 1 }}
+        transition={{ duration: 0.4, ease: "easeOut" }}
+        style={{ pointerEvents: bursting ? "none" : "auto" }}
+      >
+        <p className="pointer-events-none absolute inset-x-0 top-16 text-center text-xl font-medium text-white">
+          เก็บสลิปเข้าแฟ้มแล้ว
+        </p>
+        {/* Same layering as TaxStoryChapter: sheet (back z0) — flying slip (mid) —
+            cover (front z2), so the cover shuts over the landed slip. */}
+        <div className="pointer-events-none relative" style={{ width: 360, height: 420 }}>
+          <div
+            className="absolute z-0"
+            style={{ left: "50%", top: "17%", transformOrigin: "bottom center", transform: "translateX(-50%) translateY(-70px)", opacity: phase >= 1 ? 1 : 0, transition: "opacity 500ms ease 300ms" }}
+          >
+            <Folder3D scale={0.72} rx={8} ry={-28} part="sheet" blank />
+          </div>
+          <div className="absolute inset-0" style={{ zIndex: closed ? 1 : 3 }}>
+            <PaperFly play={phase >= 2} slips={[slip]} left="50%" top="17%" />
+          </div>
+          <div
+            className="absolute z-2"
+            style={{ left: "50%", top: "17%", transformOrigin: "bottom center", transform: "translateX(-50%) translateY(-70px)", opacity: phase >= 1 ? 1 : 0, transition: "opacity 500ms ease 300ms" }}
+          >
+            <Folder3D scale={0.72} rx={8} ry={-28} part="cover" open={phase >= 2 && !closed} />
           </div>
         </div>
-      </div>
-      <MbfSegments slip={slip} depth={depth + 1} />
-    </div>
-  );
-}
 
-function MailboxFloat({ slips }: { slips: SlipPaperData[] }) {
-  if (!slips.length) return null;
-  return (
-    // Clip frame — its BOTTOM edge sits at the mailbox's open slot, and
-    // overflow-hidden hides everything below it, so a paper rising from beneath
-    // reads as sliding OUT of the mailbox opening. Plain div (no preserve-3d) so
-    // it clips without flattening the inner 3D scene.
-    <div className="pointer-events-none absolute z-5 overflow-hidden" style={{ right: 40, bottom: "34%", width: 230, height: 280 }}>
-      <div className="mbf-scene absolute inset-0" style={{ perspective: 2200 }}>
-      <style>{`
-        .mbf-scene, .mbf-scene *, .mbf-scene *:before, .mbf-scene *:after { box-sizing: border-box; position: relative; }
-        .mbf-scene * { transform-style: preserve-3d; }
-        .mbf-paper {
-          --seg: ${MBF_SEG}; --segment: calc(100% * 1 / var(--seg));
-          position: absolute; bottom: 0; right: 0; width: ${MBF_PW}px; height: ${MBF_PH}px;
-          animation: mbf-rise 4.6s var(--d) cubic-bezier(.36,.07,.25,1) infinite; will-change: transform, opacity;
-        }
-        /* Start BELOW the clip bottom (hidden inside the mailbox), pirouette up
-           and out through the slot. */
-        @keyframes mbf-rise {
-          0%   { transform: translateY(70px) translateZ(-60px) translateX(0) rotateX(38deg) rotate(var(--r)); opacity: 0; }
-          14%  { opacity: 1; }
-          72%  { opacity: 1; }
-          100% { transform: translateY(-150px) translateZ(0) translateX(var(--dx)) rotateX(0deg) rotate(calc(var(--r) * -0.5)); opacity: 0; }
-        }
-        .mbf-paper > .mbf-seg { height: var(--segment); }
-        .mbf-seg { --rot: 22deg; height: 100%; transform-origin: top center;
-          animation: inherit; animation-name: mbf-curl; }
-        .mbf-seg > .mbf-seg { top: 98%; }
-        @keyframes mbf-curl {
-          0%,4%  { transform: rotateX(var(--rot)); }
-          60%,100% { transform: rotateX(0deg); }
-        }
-        .mbf-win { position: absolute; inset: 0; overflow: hidden; }
-        .mbf-slice { position: absolute; top: 0; left: 0; width: ${MBF_PW}px; height: ${MBF_PH}px; }
-      `}</style>
-      {slips.map((s, i) => (
-        <div
-          key={s.id}
-          className="mbf-paper"
-          style={{
-            ["--r" as string]: `${(i - 1) * 7}deg`,
-            ["--dx" as string]: `${(i - 1) * 22}px`,
-            ["--d" as string]: `${i * 1.35}s`,
-            right: i * 8,
-          }}
+        {/* Acknowledge — appears once the slip has settled. Tapping fills it green,
+            then it bursts into particles (below) heading for the progress bar. */}
+        <motion.button
+          ref={btnRef}
+          onClick={handleAck}
+          className="absolute bottom-16 overflow-hidden rounded-full bg-white px-8 py-3 text-base font-medium shadow-[0_8px_24px_rgba(0,0,0,0.18)]"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: settled ? 1 : 0, y: settled ? 0 : 12, scale: bursting ? 0.9 : 1 }}
+          style={{ pointerEvents: settled && ack === "idle" ? "auto" : "none" }}
+          transition={{ duration: 0.3 }}
         >
-          <MbfSegments slip={s} depth={0} />
-        </div>
-      ))}
-      </div>
-    </div>
+          {/* Green fill sweeps across on tap. */}
+          <motion.span
+            className="absolute inset-0 origin-left bg-[#3FA35B]"
+            initial={{ scaleX: 0 }}
+            animate={{ scaleX: ack === "idle" ? 0 : 1 }}
+            transition={{ duration: 0.6, ease: [0.4, 0, 0.2, 1] }}
+          />
+          <span className={`relative transition-colors duration-300 ${ack === "idle" ? "text-ink" : "text-white"}`}>
+            รับทราบ
+          </span>
+        </motion.button>
+      </motion.div>
+    </motion.div>
   );
 }
-
 // A building rendered as real 3D cuboids: one stacked box per payout (largest at
 // the base). Confirmed payouts are green, pending grey. Empty months render a
 // single faint translucent cuboid. hpx = the building's pixel height.
@@ -1246,16 +1534,16 @@ function Building3D({ hpx, segments, label, frontView, reveal = true, delay = 0 
       </div>
     );
   }
-  // Stacked bar — one cube per payout, each cube's height ∝ its coupon amount so
-  // the tower reflects the month's income breakdown (flush, no gap).
-  const totalAmt = segments.reduce((s, x) => s + x.amount, 0) || 1;
+  // Stacked bar — one cube per payout, EQUAL height each (income magnitude no
+  // longer sizes the cube; every payout reads the same, flush, no gap).
+  const segH = hpx / segments.length;
   let cum = 0; // running height from the base
   return (
     <div className="absolute inset-0" style={{ perspective: PERSP, perspectiveOrigin: "50% 100%" }}>
       <div className="absolute bottom-0 left-1/2" style={camStyle}>
         {monthLabel}
         {segments.map((s, i) => {
-          const h = (s.amount / totalAmt) * hpx;
+          const h = segH;
           const y = cum + h / 2;
           cum += h;
           const pal = s.confirmed ? "green" : "grey";
@@ -1315,16 +1603,18 @@ function Cuboid({
         style={{ width: S, height: h, marginLeft: -S / 2, marginTop: -h / 2, background: front, border, transform: `translateZ(${S / 2}px)` }}
       >
         {seg && (() => {
-          const box = Math.min(56, Math.round(Math.min(h, S) * 0.5));
-          if (box < 30) return null;
-          const badge = Math.round(box * 0.4);
+          // Fixed logo size — every cube shows the same-size logo (no dynamic
+          // scaling). Hidden only when the cube is too short to hold it.
+          const box = 46;
+          const badge = 18;
+          if (h < 34) return null;
           return (
             <div className="flex flex-col items-center gap-1.5">
               {/* Amount fades up on reveal; the logo shows from the start. */}
               <span
                 className="font-medium leading-none text-white drop-shadow-sm"
                 style={{
-                  fontSize: Math.max(11, Math.round(box * 0.3)),
+                  fontSize: 13,
                   opacity: reveal ? 1 : 0,
                   transform: `translateY(${reveal ? 0 : 8}px)`,
                   transition: "opacity 500ms ease 350ms, transform 500ms ease 350ms",
