@@ -356,7 +356,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
       {/* Header hidden for now — kept behind a false guard to re-enable later. */}
       {false && (
         <header className="sticky top-0 z-40 bg-white py-4">
-          <div className="mx-auto flex w-full max-w-[1400px] items-center justify-between px-6">
+          <div className="flex w-full items-center justify-between px-6">
             <div className="leading-tight text-[#43507F]">
               <span
                 className="block h-5 w-auto [&_svg]:h-full [&_svg]:w-auto"
@@ -379,7 +379,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
         </header>
       )}
 
-      <main className="mx-auto grid min-h-0 w-full max-w-[1400px] flex-1 grid-cols-1 gap-6 overflow-hidden p-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
+      <main className="grid min-h-0 w-full flex-1 grid-cols-1 gap-6 overflow-hidden p-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
         {/* LEFT column */}
         <div className="flex min-h-0 flex-col gap-4">
           {/* Portfolio value card */}
