@@ -16,6 +16,8 @@ import {
   IconBrandLine,
   IconWorld,
   IconClockExclamation,
+  IconDatabasePlus,
+  IconUser,
 } from "@tabler/icons-react";
 import {
   fetchHealth,
@@ -23,6 +25,7 @@ import {
   type HealthResult,
   type ServiceStatus,
 } from "../lib/health";
+import { fetchUncataloguedBonds, type CatalogAuditResult } from "../lib/catalogAudit";
 
 const REFRESH_MS = 20_000;
 
@@ -111,16 +114,73 @@ function StatTile({
   );
 }
 
+// Report: bonds users hold/added that are missing from bond-catalog.json — the
+// list an admin should add to the catalog (usually manual entries too new for
+// the SEC feed). Copy button hands the symbols off for a snapshot refresh.
+function CatalogGapReport({ audit }: { audit: CatalogAuditResult | null }) {
+  if (!audit || audit.kind !== "ok") return null;
+  const { bonds } = audit;
+  return (
+    <>
+      <h2 className="mt-6 mb-2 flex items-center gap-1.5 text-sm font-bold text-[#43507F]">
+        <IconDatabasePlus size={16} />
+        หุ้นกู้ที่ต้องเพิ่มเข้า catalog
+        <span className="rounded-full bg-[#43507F]/10 px-2 py-0.5 text-xs font-medium text-[#43507F]">{bonds.length}</span>
+      </h2>
+      <div className="overflow-hidden rounded-2xl border border-[#E7E7E7] bg-white">
+        {bonds.length === 0 ? (
+          <p className="p-5 text-center text-sm text-black/45">
+            catalog ครบ — ไม่มีหุ้นกู้ที่ผู้ใช้ถือ/เพิ่มแล้วหายไปจาก snapshot
+          </p>
+        ) : (
+          <>
+            <div className="flex items-center justify-between border-b border-[#E7E7E7] px-4 py-2">
+              <span className="text-xs text-black/45">
+                หุ้นกู้ในฐานข้อมูลที่ไม่มีใน <code>bond-catalog.json</code> — รัน <code>npm run fetch:bonds</code> ถ้า SEC ลงแล้ว
+              </span>
+              <button
+                onClick={() => navigator.clipboard?.writeText(bonds.map((b) => b.symbol).join(", "))}
+                className="shrink-0 rounded-lg border border-[#E7E7E7] px-2.5 py-1 text-xs font-medium text-black/60 hover:bg-black/5"
+              >
+                คัดลอกรหัส
+              </button>
+            </div>
+            <ul className="divide-y divide-[#F0F0F0]">
+              {bonds.map((b) => (
+                <li key={b.symbol} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <div className="min-w-0">
+                    <p className="font-nunito text-sm font-bold text-[#181D20]">{b.symbol}</p>
+                    <p className="truncate text-xs text-black/50">{b.issuer}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-4 text-right">
+                    <span className="text-xs text-black/45">ครบกำหนด {b.maturityDate ?? "—"}</span>
+                    <span className="flex items-center gap-1 text-xs font-medium text-[#43507F]">
+                      <IconUser size={13} />
+                      {b.holders}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 export default function AdminDashboard() {
   const [result, setResult] = useState<HealthResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [audit, setAudit] = useState<CatalogAuditResult | null>(null);
   // Rolling latency history per service id, appended each poll for the sparklines.
   const [history, setHistory] = useState<Record<string, (number | null)[]>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await fetchHealth();
+    const [res, auditRes] = await Promise.all([fetchHealth(), fetchUncataloguedBonds()]);
     setResult(res);
+    setAudit(auditRes);
     if (res.kind === "ok") {
       setHistory((prev) => {
         const next: Record<string, (number | null)[]> = { ...prev };
@@ -266,6 +326,9 @@ export default function AdminDashboard() {
                 </>
               );
             })()}
+
+            {/* Bonds held/added but missing from the catalog snapshot. */}
+            <CatalogGapReport audit={audit} />
           </>
         )}
       </div>

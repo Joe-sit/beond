@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import {
-  allocationHoldings as mockHoldings,
-  mockTimeline,
-  mockTaxDocs,
   type AllocationHolding,
   type TimelineMonth,
 } from "../data/mockData";
@@ -156,11 +153,9 @@ export function useAllocation(groupBy: "sector" | "rating" | "bond" = "sector"):
   loading: boolean;
   refetch: () => void;
 } {
-  // With Supabase on, real data is the only source — no mock underneath, so
-  // an empty DB reads as empty (not fake data). Mock only when Supabase is off.
-  const [holdings, setHoldings] = useState<AllocationHolding[]>(
-    supabaseEnabled ? [] : mockHoldings,
-  );
+  // Real data is the only source — never fabricated. No Supabase (or an empty
+  // DB) reads as empty, not fake.
+  const [holdings, setHoldings] = useState<AllocationHolding[]>([]);
   const [loading, setLoading] = useState(supabaseEnabled);
 
   const load = useCallback(async () => {
@@ -198,6 +193,7 @@ export function useAllocation(groupBy: "sector" | "rating" | "bond" = "sector"):
 // needed to re-derive the payout schedule when a holding is edited.
 export interface HoldingDetail {
   id: string;
+  bondId: string;
   faceValue: number;
   symbol: string;
   issuer: string;
@@ -212,6 +208,7 @@ export interface HoldingDetail {
 
 interface HoldingDetailRow {
   id: string;
+  bond_id: string;
   face_value: number;
   bonds: {
     symbol: string;
@@ -226,15 +223,6 @@ interface HoldingDetailRow {
   } | null;
 }
 
-// Offline sample holdings — same role as mockTimeline/allocation: a pure
-// fallback so the dashboard has data when Supabase is off (never on top of live).
-const mockHoldingsDetail: HoldingDetail[] = [
-  { id: "m1", faceValue: 3_000_000, symbol: "SIRI267A", issuer: "แสนสิริ", sectorId: "prop", rating: "BBB+", couponRate: 3.6, couponFreq: 2, issueDate: "2024-06-01", maturityDate: "2027-06-01", totalInstallments: 6 },
-  { id: "m2", faceValue: 3_000_000, symbol: "ORI288B", issuer: "ออริจิ้น พร็อพเพอร์ตี้", sectorId: "prop", rating: "BBB", couponRate: 5.5, couponFreq: 2, issueDate: "2023-08-01", maturityDate: "2028-08-01", totalInstallments: 10 },
-  { id: "m3", faceValue: 2_000_000, symbol: "BRI275A", issuer: "บริทาเนีย", sectorId: "prop", rating: "BBB", couponRate: 6.1, couponFreq: 2, issueDate: "2024-05-01", maturityDate: "2027-05-01", totalInstallments: 6 },
-  { id: "m4", faceValue: 2_000_000, symbol: "BTSG28OA", issuer: "บีทีเอส กรุ๊ป", sectorId: "trans", rating: "BBB+", couponRate: 3.6, couponFreq: 2, issueDate: "2023-10-01", maturityDate: "2028-10-01", totalInstallments: 10 },
-];
-
 // The signed-in user's holdings with their bond details; live-refreshes on any
 // portfolio change (add / edit / delete from web or the LINE bot).
 export function useHoldings(): {
@@ -242,8 +230,7 @@ export function useHoldings(): {
   loading: boolean;
   refetch: () => void;
 } {
-  const [holdings, setHoldings] = useState<HoldingDetail[]>(supabaseEnabled ? [] : mockHoldingsDetail);
-  // Start loading only when Supabase drives the data; offline mock is instant.
+  const [holdings, setHoldings] = useState<HoldingDetail[]>([]);
   const [loading, setLoading] = useState(supabaseEnabled);
 
   const load = useCallback(async () => {
@@ -251,7 +238,7 @@ export function useHoldings(): {
     const { data, error } = await supabase
       .from("holdings")
       .select(
-        "id, face_value, bonds(symbol, issuer, sector_id, rating, coupon_rate, coupon_freq, issue_date, maturity_date, total_installments)",
+        "id, bond_id, face_value, bonds(symbol, issuer, sector_id, rating, coupon_rate, coupon_freq, issue_date, maturity_date, total_installments)",
       )
       .order("id");
     if (error) return;
@@ -259,6 +246,7 @@ export function useHoldings(): {
       .filter((r) => r.bonds)
       .map((r) => ({
         id: r.id,
+        bondId: r.bond_id,
         faceValue: Number(r.face_value),
         symbol: r.bonds!.symbol,
         issuer: r.bonds!.issuer,
@@ -283,18 +271,14 @@ export function useHoldings(): {
   return { holdings, loading, refetch: load };
 }
 
-// Twelve-month payout timeline (BE year). Falls back to mock data; live-
-// refreshes on payouts changes so adding a bond updates it in real time.
+// Twelve-month payout timeline (BE year). Real data only; live-refreshes on
+// payouts changes so adding a bond updates it in real time.
 export function useTimeline(): {
   months: TimelineMonth[];
   loading: boolean;
   refetch: () => void;
 } {
-  // Same rule as allocation: real data only when Supabase is on; mock is a
-  // pure offline fallback so it can never sit on top of live data.
-  const [months, setMonths] = useState<TimelineMonth[]>(
-    supabaseEnabled ? [] : mockTimeline,
-  );
+  const [months, setMonths] = useState<TimelineMonth[]>([]);
   const [loading, setLoading] = useState(supabaseEnabled);
 
   const load = useCallback(async () => {
@@ -381,6 +365,7 @@ export function useTimeline(): {
 // national ID is ever stored.
 export interface TaxDoc {
   id: string;
+  source: string | null; // "web_upload" (in-app) vs LINE channel sources
   status: "pending" | "confirmed" | "rejected";
   payerName: string | null;
   payerTaxId: string | null;
@@ -395,6 +380,7 @@ export interface TaxDoc {
 
 interface TaxDocRow {
   id: string;
+  source: string | null;
   status: TaxDoc["status"];
   payer_name: string | null;
   payer_tax_id: string | null;
@@ -408,7 +394,7 @@ interface TaxDocRow {
 }
 
 export function useTaxCredits(): { docs: TaxDoc[]; loading: boolean; refetch: () => void } {
-  const [docs, setDocs] = useState<TaxDoc[]>(supabaseEnabled ? [] : mockTaxDocs);
+  const [docs, setDocs] = useState<TaxDoc[]>([]);
   const [loading, setLoading] = useState(supabaseEnabled);
 
   const load = useCallback(async () => {
@@ -416,7 +402,7 @@ export function useTaxCredits(): { docs: TaxDoc[]; loading: boolean; refetch: ()
     const { data, error } = await supabase
       .from("tax_documents")
       .select(
-        "id, status, payer_name, payer_tax_id, income_subtype, gross_amount, wht_amount, wht_rate, pay_date, tax_year, bonds(symbol)",
+        "id, source, status, payer_name, payer_tax_id, income_subtype, gross_amount, wht_amount, wht_rate, pay_date, tax_year, bonds(symbol)",
       )
       .neq("status", "rejected")
       .order("pay_date", { ascending: false, nullsFirst: false });
@@ -427,6 +413,7 @@ export function useTaxCredits(): { docs: TaxDoc[]; loading: boolean; refetch: ()
     setDocs(
       (data as unknown as TaxDocRow[]).map((r) => ({
         id: r.id,
+        source: r.source,
         status: r.status,
         payerName: r.payer_name,
         payerTaxId: r.payer_tax_id,
@@ -549,22 +536,12 @@ export function useViewedYear(): string | null {
 // Total coupon income received/scheduled in a given calendar year — the
 // headline number in the hero. Defaults to the current year; the hero passes
 // the year the user is viewing in the timeline. Live-refreshes on payout changes.
-function mockAnnualIncome(yearCE: number): number {
-  return mockTimeline
-    .flatMap((m) => m.payouts)
-    .filter((p) => new Date(p.payoutDate).getFullYear() === yearCE)
-    .reduce((s, p) => s + p.amount, 0);
-}
-
 export function useAnnualIncome(yearCE?: number): { total: number } {
   const year = yearCE ?? new Date().getFullYear();
-  const [total, setTotal] = useState(supabaseEnabled ? 0 : mockAnnualIncome(year));
+  const [total, setTotal] = useState(0);
 
   const load = useCallback(async () => {
-    if (!supabaseEnabled || !supabase) {
-      setTotal(mockAnnualIncome(year));
-      return;
-    }
+    if (!supabaseEnabled || !supabase) return;
     const { data, error } = await supabase
       .from("payouts")
       .select("amount")

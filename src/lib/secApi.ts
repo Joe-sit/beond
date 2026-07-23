@@ -107,6 +107,13 @@ export function issuerForSymbol(symbol: string): string | null {
   return catalog.find((c) => symbolPrefix(c.symbol) === p)?.issuer ?? null;
 }
 
+// A representative bond symbol for an issuer name — lets callers resolve
+// issuer-derived data (e.g. the credit rating) when only the company is known.
+export function symbolForIssuer(issuer: string): string | null {
+  if (!catalog || !issuer) return null;
+  return catalog.find((c) => c.issuer === issuer)?.symbol ?? null;
+}
+
 // ── Search ───────────────────────────────────────────────────────────────
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, "");
@@ -149,6 +156,30 @@ function searchCatalog(term: string): BondCandidate[] {
     .map((s) => s.c);
 }
 
+// Instant, catalog-only search — no network. Lets the UI decide results /
+// empty-state immediately; the remote search backfills in the background.
+export function searchLocal(term: string): BondCandidate[] {
+  const q = term.trim();
+  if (q.length < 2) return [];
+  return searchCatalog(q).slice(0, 30);
+}
+
+// The SEC search_term endpoint returns loose prefix/fuzzy matches (searching
+// "ORI284C" also yields ORI284B, ORI288A…). Keep only candidates that actually
+// contain every query token — same relevance bar as the local catalog — so we
+// never show a bond the user didn't search for.
+function matchesAllTokens(c: BondCandidate, term: string): boolean {
+  const tokens = term.toLowerCase().split(/\s+/).filter(Boolean).map(norm);
+  if (!tokens.length) return false;
+  const sym = norm(c.symbol);
+  const nameEn = norm(c.nameEn);
+  const nameTh = norm(c.nameTh);
+  const isin = norm(c.isin);
+  return tokens.every(
+    (t) => sym.includes(t) || nameEn.includes(t) || nameTh.includes(t) || isin.includes(t),
+  );
+}
+
 const remoteCache = new Map<string, BondCandidate[]>();
 
 async function searchRemote(
@@ -167,7 +198,8 @@ async function searchRemote(
     const items = (body.items ?? [])
       .filter((r) => r.thaibma_symbol)
       .map(toCandidate)
-      .filter(isActive);
+      .filter(isActive)
+      .filter((c) => matchesAllTokens(c, term)); // drop SEC's fuzzy non-matches
     remoteCache.set(term, items);
     return items;
   } catch {

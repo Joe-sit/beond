@@ -12,6 +12,8 @@ import CubePOC from "./components/home2/CubePOC";
 import HeroStairs3D from "./components/home2/HeroStairs3D";
 import TaxStoryPOC from "./components/home2/TaxStoryPOC";
 import IntroPOC from "./components/home2/IntroPOC";
+import SlipCollectPOC from "./components/home2/SlipCollectPOC";
+import JarPOC from "./components/home2/JarPOC";
 import ScanFlow from "./components/ScanFlow";
 import { notifyPortfolioChanged } from "./hooks/usePortfolio";
 import { initAuth, login, logout, liffEnabled, type AuthProfile } from "./lib/auth";
@@ -120,6 +122,16 @@ function App() {
   // panel that mirrors the real right column.
   if (new URLSearchParams(window.location.search).has("intro")) {
     return <IntroPOC />;
+  }
+
+  // `?collect` — debug the LINE-confirm "slip collected into folder" notification.
+  if (new URLSearchParams(window.location.search).has("collect")) {
+    return <SlipCollectPOC />;
+  }
+
+  // `?jar` — tune the 3D glass money jar.
+  if (new URLSearchParams(window.location.search).has("jar")) {
+    return <JarPOC />;
   }
 
   // `?v2` — preview the reworked full-viewport home (works pre-auth with a

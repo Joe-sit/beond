@@ -1,17 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Modal, ModalBackdrop, ModalContainer, ModalDialog,
-  Breadcrumbs, Button, SearchField, Label, NumberField, Accordion, toast,
+  Breadcrumbs, Button, SearchField, Label, NumberField, Accordion, ComboBox, ListBox, Input, DatePicker, Calendar, toast,
 } from "@heroui/react";
-import { ensureCatalog, searchBonds, issuerNames, issuerForSymbol, type BondCandidate } from "../lib/secApi";
+import { Group, DateInput, DateSegment, Dialog, I18nProvider } from "react-aria-components";
+import { parseDate, toCalendar, GregorianCalendar, type DateValue } from "@internationalized/date";
+import { ensureCatalog, searchLocal, issuerNames, issuerForSymbol, symbolForIssuer, type BondCandidate } from "../lib/secApi";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
 import { overrideFor } from "../data/couponOverrides";
 import { ratingFor } from "../data/bondRatings";
-import { notifyPortfolioChanged } from "../hooks/usePortfolio";
+import { notifyPortfolioChanged, type HoldingDetail } from "../hooks/usePortfolio";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import IssuerLogo from "./IssuerLogo";
 import { issuerName } from "../lib/issuerLogo";
-import { IconCheck, IconChevronDown } from "@tabler/icons-react";
+import { IconCheck, IconChevronDown, IconTrash, IconCalendar } from "@tabler/icons-react";
 import emptyBonds from "../assets/empty-bonds.svg";
 import addBondMain from "../assets/add-bond-main.png";
 import bondEx1 from "../assets/bond-ex-1.png";
@@ -23,6 +25,8 @@ interface AddBondModalProps {
   onAdded: () => void;
   initialTerm?: string; // prefill the search (e.g. a bond code OCR'd from a slip)
   inline?: boolean; // render the body in place (no Modal chrome), filling its parent
+  editHolding?: HoldingDetail | null; // edit an existing holding instead of adding
+  onDelete?: () => void | Promise<void>; // delete the holding being edited
 }
 
 // SEC doesn't classify bonds by industry, and the form no longer asks — new
@@ -36,36 +40,108 @@ const AMOUNT_PRESETS = [100_000, 500_000, 1_000_000];
 const FREQ_LABEL: Record<number, string> = {
   1: "ปีละครั้ง",
   2: "ทุก 6 เดือน",
-  4: "ทุกไตรมาส",
+  4: "ทุก 3 เดือน",
   12: "ทุกเดือน",
 };
 
-function ResultSkeleton() {
+const THAI_MONTHS_ABBR = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+
+// ISO date → Thai Buddhist-era short date, e.g. "2028-08-13" → "13 ส.ค. 2571".
+function fmtThaiDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.getDate()} ${THAI_MONTHS_ABBR[d.getMonth()]} ${d.getFullYear() + 543}`;
+}
+
+// Scroll-fade: mask a scroll container's top/bottom edge only when there's more
+// content to scroll toward — same effect as the holdings list.
+function useScrollFade<T extends HTMLElement>(dep: unknown) {
+  const ref = useRef<T>(null);
+  const [edge, setEdge] = useState({ top: false, bottom: false });
+  const onScroll = () => {
+    const el = ref.current;
+    if (!el) return;
+    const top = el.scrollTop > 4;
+    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 4;
+    setEdge((c) => (c.top === top && c.bottom === bottom ? c : { top, bottom }));
+  };
+  useLayoutEffect(() => { onScroll(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [dep]);
+  useEffect(() => {
+    window.addEventListener("resize", onScroll);
+    return () => window.removeEventListener("resize", onScroll);
+  }, []);
+  const FADE = "24px";
+  const mask = `linear-gradient(to bottom, ${edge.top ? "transparent" : "black"} 0, black ${FADE}, black calc(100% - ${FADE}), ${edge.bottom ? "transparent" : "black"} 100%)`;
+  return { ref, mask, onScroll };
+}
+
+// heroUI date picker for the issue date. Bridges the ISO string state
+// (mIssue) to react-aria's DateValue.
+function IssueDatePicker({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
+  let dv: DateValue | null = null;
+  try { dv = value ? parseDate(value) : null; } catch { dv = null; }
   return (
-    <ul className="flex animate-pulse flex-col gap-2">
-      {Array.from({ length: 4 }, (_, i) => (
-        <li
-          key={i}
-          className="flex items-center justify-between gap-3 rounded-2xl border border-[#E7E7E7] p-3"
-        >
-          <div className="flex flex-col gap-2">
-            <span className="h-3.5 w-24 rounded bg-gray-200" />
-            <span className="h-3 w-48 rounded bg-gray-100" />
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            <span className="h-3.5 w-10 rounded bg-gray-200" />
-            <span className="h-3 w-28 rounded bg-gray-100" />
-          </div>
-        </li>
-      ))}
-    </ul>
+    // Thai locale + Buddhist era so the field/calendar read in พ.ศ. like the
+    // rest of the app's dates; onChange converts back to a Gregorian ISO string.
+    <I18nProvider locale="th-TH-u-ca-buddhist">
+    <DatePicker
+      aria-label="วันที่ออก"
+      value={dv}
+      onChange={(v) => onChange(v ? toCalendar(v, new GregorianCalendar()).toString() : "")}
+      className="flex flex-1 flex-col gap-1"
+    >
+      <Label className="text-sm font-medium text-black/60">วันที่ออก</Label>
+      {/* Whole field opens the calendar: the trigger covers the group and the
+          segments are click-through (display only). */}
+      <Group className="input relative flex cursor-pointer items-center gap-2">
+        <DatePicker.Trigger className="absolute inset-0 z-0" aria-label="เปิดปฏิทิน">
+          <span className="sr-only">เปิดปฏิทิน</span>
+        </DatePicker.Trigger>
+        <DateInput className="pointer-events-none flex flex-1 font-normal">
+          {(segment) => (
+            <DateSegment
+              segment={segment}
+              className="rounded px-0.5 tabular-nums outline-none data-[placeholder]:text-black/30"
+            />
+          )}
+        </DateInput>
+        <IconCalendar size={18} className="pointer-events-none relative z-10 shrink-0 text-black/50" />
+      </Group>
+      <DatePicker.Popover>
+        <Dialog className="p-3 outline-none">
+          <Calendar>
+            <header className="flex items-center justify-between px-1 pb-2">
+              <Calendar.NavButton slot="previous" />
+              <Calendar.Heading className="text-sm font-medium text-[#181D20]" />
+              <Calendar.NavButton slot="next" />
+            </header>
+            <Calendar.Grid className="border-separate border-spacing-1">
+              <Calendar.GridHeader>
+                {(day) => <Calendar.HeaderCell className="text-xs font-normal text-black/40">{day}</Calendar.HeaderCell>}
+              </Calendar.GridHeader>
+              <Calendar.GridBody>
+                {(date) => (
+                  <Calendar.Cell
+                    date={date}
+                    className="flex size-8 cursor-pointer items-center justify-center rounded-full text-sm outline-none data-[hovered]:bg-black/5 data-[selected]:bg-[#43507F] data-[selected]:text-white data-[disabled]:opacity-30"
+                  />
+                )}
+              </Calendar.GridBody>
+            </Calendar.Grid>
+          </Calendar>
+        </Dialog>
+      </DatePicker.Popover>
+    </DatePicker>
+    </I18nProvider>
   );
 }
 
-export default function AddBondModal({ open, onClose, onAdded, initialTerm, inline = false }: AddBondModalProps) {
+export default function AddBondModal({ open, onClose, onAdded, initialTerm, inline = false, editHolding = null, onDelete }: AddBondModalProps) {
+  const editing = !!editHolding;
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [manualReview, setManualReview] = useState(false); // summary step before saving a manual entry
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<BondCandidate[]>([]);
-  const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<BondCandidate | null>(null);
   const [amount, setAmount] = useState<number>(NaN);
   const [rating, setRating] = useState(""); // credit rating; "" → nonRate
@@ -87,7 +163,47 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   const yieldValid = Number.isFinite(mCoupon) && mCoupon > 0 && Number.isFinite(amount) && amount >= MIN_FACE_VALUE;
   const termValid = mIssue !== "" && ((Number.isFinite(mTermY) ? mTermY : 0) * 12 + (Number.isFinite(mTermM) ? mTermM : 0)) > 0;
 
-  const abortRef = useRef<AbortController | null>(null);
+  // Scroll-fade for the search results (like the holdings list). The manual
+  // form can't use it: the heroUI accordion sets `contain`/`will-change` on its
+  // panels, and an ancestor `mask-image` over those compositing layers renders
+  // solid black in Chrome — so the manual form scrolls without the fade.
+  const resultsFade = useScrollFade<HTMLDivElement>(results.length);
+
+  // Debounce the issuer query so the (local) catalog filter + list re-render
+  // fire once the user pauses, not on every keystroke.
+  const [issuerQuery, setIssuerQuery] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setIssuerQuery(mIssuer.trim().toLowerCase()), 200);
+    return () => clearTimeout(t);
+  }, [mIssuer]);
+
+  // Credit rating for the manual entry — from the symbol prefix, or, when the
+  // symbol doesn't resolve, from the chosen company's other bonds. Reactive so
+  // picking a company (not just typing a code) updates it.
+  const manualRating = useMemo(
+    () => ratingFor(mSymbol) ?? ratingFor(symbolForIssuer(mIssuer) ?? "") ?? "",
+    [mSymbol, mIssuer],
+  );
+  useEffect(() => {
+    if (manual && !editing) setRating(manualRating);
+  }, [manual, editing, manualRating]);
+
+  // Maturity derived from issue date + entered term — for the review summary.
+  const manualMaturity = useMemo(() => {
+    const months = (Number.isFinite(mTermY) ? mTermY : 0) * 12 + (Number.isFinite(mTermM) ? mTermM : 0);
+    if (!mIssue || months <= 0) return null;
+    const d = new Date(mIssue);
+    d.setMonth(d.getMonth() + months);
+    return d.toISOString().slice(0, 10);
+  }, [mIssue, mTermY, mTermM]);
+
+  // Company-name suggestions for the manual issuer combobox — filtered by the
+  // debounced text, capped so the popover stays light.
+  const issuerMatches = useMemo(() => {
+    const all = issuerNames();
+    const list = issuerQuery ? all.filter((n) => n.toLowerCase().includes(issuerQuery)) : all;
+    return list.slice(0, 50).map((n) => ({ id: n, name: n }));
+  }, [issuerQuery]);
 
   // Warm the full bond catalog as soon as the modal opens, so free-text
   // searches (company names) answer locally and instantly.
@@ -98,31 +214,33 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     }
   }, [open, initialTerm]);
 
-  // Debounced search; stale in-flight requests are aborted.
+  // Editing an existing holding → open straight into the manual form, prefilled.
+  useEffect(() => {
+    if (!open || !editHolding) return;
+    const h = editHolding;
+    setManual(true);
+    setMSymbol(h.symbol);
+    setMIssuer(h.issuer);
+    setMCoupon(h.couponRate);
+    setAmount(h.faceValue);
+    setFreq(h.couponFreq ?? 2);
+    setRating(h.rating ?? "");
+    setMIssue(h.issueDate ?? "");
+    if (h.issueDate && h.maturityDate) {
+      const months = Math.max(0, Math.round(
+        (new Date(h.maturityDate).getTime() - new Date(h.issueDate).getTime()) / (30.4375 * 864e5),
+      ));
+      setMTermY(Math.floor(months / 12));
+      setMTermM(months % 12);
+    }
+  }, [open, editHolding]);
+
+  // Realtime, single-stage search: the local catalog answers on every
+  // keystroke. No remote round-trip — bonds too new for the snapshot are added
+  // via manual entry, and the catalog is refreshed daily.
   useEffect(() => {
     if (!open || selected) return;
-    if (term.trim().length < 2) {
-      setResults([]);
-      setSearching(false);
-      return;
-    }
-    setSearching(true);
-    const controller = new AbortController();
-    abortRef.current?.abort();
-    abortRef.current = controller;
-    const t = setTimeout(() => {
-      searchBonds(term, controller.signal)
-        .then((r) => {
-          if (!controller.signal.aborted) setResults(r);
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setSearching(false);
-        });
-    }, 250);
-    return () => {
-      clearTimeout(t);
-      controller.abort();
-    };
+    setResults(term.trim().length < 2 ? [] : searchLocal(term));
   }, [term, open, selected]);
 
   const reset = () => {
@@ -140,6 +258,8 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     setMIssue("");
     setMTermY(NaN);
     setMTermM(NaN);
+    setConfirmDelete(false);
+    setManualReview(false);
   };
 
   // Build a candidate from the manual form fields.
@@ -177,7 +297,14 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     onClose();
   };
 
-  // Manual flow saves straight from the header button (no confirm step).
+  // Manual flow: the header button opens a summary step; the summary confirms.
+  const goManualReview = () => {
+    if (!infoValid) { setError("กรอกชื่อรุ่นและชื่อบริษัท"); return; }
+    if (!yieldValid) { setError("กรอกดอกเบี้ยและมูลค่าที่ลงทุน"); return; }
+    if (!termValid) { setError("กรอกวันที่ออกและอายุหุ้นกู้"); return; }
+    setError(null);
+    setManualReview(true);
+  };
   const saveManual = () => {
     const c = buildManualCandidate();
     if (c) handleSave(c);
@@ -215,6 +342,42 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
         couponRate: cand.couponRate,
         faceValue,
       });
+
+      // Edit mode: update the existing bond + holding, regenerate payouts.
+      if (editHolding) {
+        const { error: bondErr } = await supabase
+          .from("bonds")
+          .update({
+            issuer: cand.issuer,
+            coupon_rate: cand.couponRate ?? 0,
+            maturity_date: cand.maturityDate,
+            issue_date: cand.issueDate,
+            coupon_freq: freq,
+            rating: rating || null,
+          })
+          .eq("id", editHolding.bondId);
+        if (bondErr) throw bondErr;
+        const { error: upErr } = await supabase
+          .from("holdings").update({ face_value: faceValue }).eq("id", editHolding.id);
+        if (upErr) throw upErr;
+        await supabase.from("payouts").delete().eq("holding_id", editHolding.id);
+        if (schedule.length) {
+          const { error: payErr } = await supabase.from("payouts").insert(
+            schedule.map((p) => ({
+              holding_id: editHolding.id,
+              installment: p.installment,
+              amount: p.amount,
+              payout_date: p.date,
+            })),
+          );
+          if (payErr) throw payErr;
+        }
+        notifyPortfolioChanged();
+        toast.success(`อัปเดต ${cand.symbol} แล้ว`);
+        handleClose();
+        onAdded();
+        return;
+      }
 
       let { data: bond } = await supabase
         .from("bonds")
@@ -288,20 +451,32 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             {/* Breadcrumb replaces the close button — each crumb steps back a
                 level (เพิ่มหุ้นกู้ → closes; ค้นหา → back to search). */}
             <Breadcrumbs separator="/">
-              <Breadcrumbs.Item onPress={handleClose}>เพิ่มหุ้นกู้</Breadcrumbs.Item>
-              <Breadcrumbs.Item onPress={() => { setSelected(null); setManual(false); setError(null); }}>ค้นหา</Breadcrumbs.Item>
-              {selected && <Breadcrumbs.Item>ยืนยัน</Breadcrumbs.Item>}
-              {manual && <Breadcrumbs.Item>กรอกเอง</Breadcrumbs.Item>}
+              {editing ? (
+                <>
+                  <Breadcrumbs.Item onPress={handleClose}>หุ้นกู้ที่ถืออยู่</Breadcrumbs.Item>
+                  <Breadcrumbs.Item>แก้ไข</Breadcrumbs.Item>
+                </>
+              ) : (
+                <>
+                  <Breadcrumbs.Item onPress={handleClose}>เพิ่มหุ้นกู้</Breadcrumbs.Item>
+                  <Breadcrumbs.Item onPress={() => { setSelected(null); setManual(false); setError(null); }}>ค้นหา</Breadcrumbs.Item>
+                  {selected && <Breadcrumbs.Item>ยืนยัน</Breadcrumbs.Item>}
+                  {manual && <Breadcrumbs.Item>กรอกเอง</Breadcrumbs.Item>}
+                </>
+              )}
             </Breadcrumbs>
             <h3 className="mt-1 text-3xl font-medium text-[#181D20]">
-              {selected ? "ยืนยัน" : manual ? "กรอกเอง" : "ค้นหา"}
+              {editing ? "แก้ไข" : selected ? "ยืนยัน" : manual ? "กรอกเอง" : "ค้นหา"}
             </h3>
-            {!selected && !manual && (
+            {editing && (
+              <p className="mt-1 font-nunito text-sm text-black/80">{mSymbol}</p>
+            )}
+            {!editing && !selected && !manual && (
               <p className="mt-1 text-sm text-black/80">
                 ข้อมูลตราสารหนี้จาก SEC Open Data API (ก.ล.ต.)
               </p>
             )}
-            {manual && (
+            {manual && !editing && (
               <p className="mt-1 max-w-md text-sm text-black/80">
                 สำหรับหุ้นกู้ที่ยังไม่มีในระบบ SEC
               </p>
@@ -316,16 +491,84 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
           </div>
         </div>
 
-        {!selected && manual ? (
-          <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col gap-3 rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-4">
-            {/* Save = folder-head tab rising from this card, flush like the
-                add-bond tab over the holdings list. */}
+        {!selected && manual && manualReview ? (
+          <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-4">
+            {/* Save = folder-head tab above the card, like every other page. */}
             <button
               onClick={saveManual}
               disabled={saving}
               className="absolute bottom-full right-5 z-10 flex items-center gap-2 rounded-t-2xl border-[0.5px] border-b-0 border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7] disabled:opacity-60"
             >
               {saving ? "กำลังบันทึก..." : "บันทึก"}
+              <span className="flex size-6 items-center justify-center rounded-full border-[1.5px] border-current text-ink">
+                <IconCheck size={14} stroke={2.5} />
+              </span>
+            </button>
+            <p className="text-sm text-black/50">ตรวจสอบข้อมูลก่อนบันทึก</p>
+            {/* Company profile card — same look as the search→confirm page. */}
+            <div className="mt-3 rounded-2xl bg-[#F6F4F1] p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-3">
+                  <IssuerLogo
+                    symbol={mSymbol.trim().toUpperCase()}
+                    name={issuerName(mSymbol, mIssuer)}
+                    size={44}
+                  />
+                  <div className="min-w-0">
+                    <p className="font-nunito text-base font-bold text-[#181D20]">
+                      {mSymbol.trim().toUpperCase()}
+                    </p>
+                    <p className="truncate text-xs text-black/60">
+                      {issuerName(mSymbol, mIssuer)}
+                    </p>
+                  </div>
+                </div>
+                {rating ? (
+                  <span className="shrink-0 rounded-lg bg-[#43507F]/10 px-2 py-1 font-nunito text-xs font-bold text-[#43507F]">
+                    {rating}
+                  </span>
+                ) : (
+                  <span className="shrink-0 rounded-lg bg-black/5 px-2 py-1 text-xs text-black/40">
+                    ไม่มีข้อมูลเครดิต
+                  </span>
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-black/60">
+                <span>
+                  ดอกเบี้ย <b className="font-nunito">{Number.isFinite(mCoupon) ? mCoupon : 0}%</b> ต่อปี
+                </span>
+                <span>จ่ายดอกเบี้ย {FREQ_LABEL[freq]}</span>
+                {manualMaturity && <span>ครบกำหนด {fmtThaiDate(manualMaturity)}</span>}
+              </div>
+            </div>
+            <div className="mt-3 min-h-0 flex-1 divide-y divide-[#F0F0F0] overflow-y-auto">
+              {[
+                ["มูลค่าที่ลงทุน", `฿${(Number.isFinite(amount) ? amount : 0).toLocaleString("th-TH")}`],
+                ["วันที่ออก", mIssue ? fmtThaiDate(mIssue) : "—"],
+                ["อายุหุ้นกู้", `${Number.isFinite(mTermY) ? mTermY : 0} ปี ${Number.isFinite(mTermM) ? mTermM : 0} เดือน`],
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-center justify-between gap-4 py-2.5">
+                  <span className="text-sm text-black/55">{label}</span>
+                  <span className="text-right text-sm font-medium text-[#181D20]">{value}</span>
+                </div>
+              ))}
+            </div>
+            {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
+            <div className="mt-3 shrink-0">
+              <Button variant="secondary" fullWidth onPress={() => setManualReview(false)}>
+                แก้ไข
+              </Button>
+            </div>
+          </div>
+        ) : !selected && manual ? (
+          <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col gap-3 rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-3">
+            {/* Save = folder-head tab rising from this card, flush like the
+                add-bond tab over the holdings list. */}
+            <button
+              onClick={goManualReview}
+              className="absolute bottom-full right-5 z-10 flex items-center gap-2 rounded-t-2xl border-[0.5px] border-b-0 border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7]"
+            >
+              ตรวจสอบ
               <span className="flex size-6 items-center justify-center rounded-full border-[1.5px] border-current text-ink">
                 <IconCheck size={14} stroke={2.5} />
               </span>
@@ -350,37 +593,49 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                     <Accordion.Body className="flex gap-3 pb-4">
                       <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
                         ชื่อรุ่น *
-                        <input
+                        <Input
                           autoFocus
                           value={mSymbol}
                           onChange={(e) => {
                             const v = e.target.value;
                             setMSymbol(v);
-                            // Auto-fill the issuer from the symbol prefix while it's blank.
-                            if (!mIssuer.trim()) {
-                              const guess = issuerForSymbol(v);
-                              if (guess) setMIssuer(guess);
-                            }
+                            // Auto-fill the company from the symbol prefix whenever it
+                            // resolves (e.g. ORI284C → Origin) — works for brand-new
+                            // series too, since the issuer has other bonds in catalog.
+                            const guess = issuerForSymbol(v);
+                            if (guess) setMIssuer(guess);
+                            // Rating is derived reactively from symbol + company
+                            // (see manualRating) — no need to set it here.
                           }}
-                          placeholder="เช่น ORI284C"
-                          className="rounded-xl border border-[#E7E7E7] px-3 py-2 font-nunito text-base font-medium uppercase text-[#181D20] outline-none focus:border-[#43507F]"
+                          placeholder="เช่น ORI288B"
+                          className="font-nunito text-base font-medium uppercase sm:text-base"
                         />
                       </label>
-                      <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
-                        ชื่อบริษัท
-                        <input
-                          list="issuer-suggestions"
-                          value={mIssuer}
-                          onChange={(e) => setMIssuer(e.target.value)}
-                          placeholder="เช่น ออริจิ้น พร็อพเพอร์ตี้"
-                          className="rounded-xl border border-[#E7E7E7] px-3 py-2 text-base text-[#181D20] outline-none focus:border-[#43507F]"
-                        />
-                        <datalist id="issuer-suggestions">
-                          {issuerNames().map((n) => (
-                            <option key={n} value={n} />
-                          ))}
-                        </datalist>
-                      </label>
+                      <ComboBox
+                        aria-label="ชื่อบริษัท"
+                        allowsCustomValue
+                        menuTrigger="input"
+                        inputValue={mIssuer}
+                        onInputChange={setMIssuer}
+                        // Controlled inputValue → react-aria won't auto-set the
+                        // field on pick, so sync it here (id === company name).
+                        onSelectionChange={(key) => { if (key != null) setMIssuer(String(key)); }}
+                        items={issuerMatches}
+                        className="flex flex-1 flex-col gap-1"
+                      >
+                        <Label className="text-sm font-medium text-black/60">ชื่อบริษัท</Label>
+                        <ComboBox.InputGroup className="[&_input]:!font-normal">
+                          <Input placeholder="เช่น ออริจิ้น พร็อพเพอร์ตี้" className="py-2 text-base !font-normal sm:text-base" />
+                          <ComboBox.Trigger />
+                        </ComboBox.InputGroup>
+                        <ComboBox.Popover>
+                          <ListBox items={issuerMatches}>
+                            {(it: { id: string; name: string }) => (
+                              <ListBox.Item id={it.id} textValue={it.name}>{it.name}</ListBox.Item>
+                            )}
+                          </ListBox>
+                        </ComboBox.Popover>
+                      </ComboBox>
                     </Accordion.Body>
                   </Accordion.Panel>
                 </Accordion.Item>
@@ -410,7 +665,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           >
                             <NumberField.Group>
                               <NumberField.DecrementButton />
-                              <NumberField.Input placeholder="เช่น 5.5" className="text-center font-nunito" />
+                              <NumberField.Input placeholder="เช่น 5.5" className="text-center font-nunito text-base font-medium" />
                               <NumberField.IncrementButton />
                             </NumberField.Group>
                           </NumberField>
@@ -427,24 +682,34 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           >
                             <NumberField.Group>
                               <NumberField.DecrementButton />
-                              <NumberField.Input placeholder="เช่น 100,000" className="text-center font-nunito" />
+                              <NumberField.Input placeholder="เช่น 100,000" className="text-center font-nunito text-base font-medium" />
                               <NumberField.IncrementButton />
                             </NumberField.Group>
                           </NumberField>
                         </label>
                       </div>
-                      <label className="flex flex-col gap-1 text-sm font-medium text-black/60">
-                        จ่ายดอกเบี้ย
-                        <select
-                          value={freq}
-                          onChange={(e) => setFreq(Number(e.target.value))}
-                          className="rounded-xl border border-[#E7E7E7] px-3 py-2 text-base text-[#181D20] outline-none focus:border-[#43507F]"
-                        >
-                          {[1, 2, 4, 12].map((f) => (
-                            <option key={f} value={f}>{FREQ_LABEL[f]}</option>
-                          ))}
-                        </select>
-                      </label>
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-sm font-medium text-black/60">จ่ายดอกเบี้ย</span>
+                        <div className="flex gap-2">
+                          {[1, 2, 4, 12].map((f) => {
+                            const on = freq === f;
+                            return (
+                              <button
+                                key={f}
+                                type="button"
+                                onClick={() => setFreq(f)}
+                                className={`flex-1 whitespace-nowrap rounded-full border px-2 py-1.5 text-sm font-medium transition ${
+                                  on
+                                    ? "border-[#43507F] bg-[#43507F] text-white"
+                                    : "border-[#d9d9d9] bg-white text-ink hover:bg-[#F0F2F7]"
+                                }`}
+                              >
+                                {FREQ_LABEL[f]}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </Accordion.Body>
                   </Accordion.Panel>
                 </Accordion.Item>
@@ -461,15 +726,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   </Accordion.Heading>
                   <Accordion.Panel>
                     <Accordion.Body className="flex gap-3 pb-4">
-                      <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
-                        วันที่ออก
-                        <input
-                          type="date"
-                          value={mIssue}
-                          onChange={(e) => setMIssue(e.target.value)}
-                          className="rounded-xl border border-[#E7E7E7] px-3 py-2 text-base text-[#181D20] outline-none focus:border-[#43507F]"
-                        />
-                      </label>
+                      <IssueDatePicker value={mIssue} onChange={setMIssue} />
                       <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
                         อายุหุ้นกู้
                         <div className="flex gap-2">
@@ -480,9 +737,11 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                             step={1}
                             formatOptions={{ maximumFractionDigits: 0 }}
                             aria-label="อายุหุ้นกู้ (ปี)"
+                            className="flex-1"
                           >
-                            <NumberField.Group>
-                              <NumberField.Input placeholder="ปี" className="text-center font-nunito" />
+                            <NumberField.Group className="relative [grid-template-columns:1fr]">
+                              <NumberField.Input placeholder="ปี" className="text-center font-nunito text-base font-medium" />
+                              {Number.isFinite(mTermY) && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-black/50">ปี</span>}
                             </NumberField.Group>
                           </NumberField>
                           <NumberField
@@ -493,9 +752,11 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                             step={1}
                             formatOptions={{ maximumFractionDigits: 0 }}
                             aria-label="อายุหุ้นกู้ (เดือน)"
+                            className="flex-1"
                           >
-                            <NumberField.Group>
-                              <NumberField.Input placeholder="เดือน" className="text-center font-nunito" />
+                            <NumberField.Group className="relative [grid-template-columns:1fr]">
+                              <NumberField.Input placeholder="เดือน" className="text-center font-nunito text-base font-medium" />
+                              {Number.isFinite(mTermM) && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-black/50">เดือน</span>}
                             </NumberField.Group>
                           </NumberField>
                         </div>
@@ -506,10 +767,41 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
               </Accordion>
               {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
             </div>
+            {/* Delete lives at the bottom of the details/edit card. */}
+            {editing && onDelete && (
+              <div className="mt-2 shrink-0 border-t border-black/5 px-2 pt-3">
+                {confirmDelete ? (
+                  <div className="flex items-center gap-2">
+                    <span className="flex-1 text-sm text-black/70">ลบ {mSymbol} ออกจากพอร์ต?</span>
+                    <button
+                      onClick={() => setConfirmDelete(false)}
+                      className="rounded-2xl border-[0.5px] border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7]"
+                    >
+                      ยกเลิก
+                    </button>
+                    <button
+                      onClick={() => onDelete()}
+                      className="flex items-center gap-2 rounded-2xl bg-[#D64545] px-4 py-2.5 text-base font-medium text-white transition hover:bg-[#c23c3c]"
+                    >
+                      ยืนยันลบ
+                      <IconTrash size={18} />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmDelete(true)}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl border-[0.5px] border-[#D64545]/40 px-4 py-2.5 text-base font-medium text-[#D64545] transition hover:bg-[#FBEBEB]"
+                  >
+                    <IconTrash size={18} />
+                    ลบหุ้นกู้นี้
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ) : !selected ? (
           // Search field + results together in one sub-card (like the holdings list).
-          <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-4">
+          <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-3">
             <SearchField
               value={term}
               onChange={setTerm}
@@ -519,16 +811,22 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                 <SearchField.SearchIcon />
                 <SearchField.Input
                   autoFocus
-                  placeholder="พิมพ์รหัสหุ้นกู้ / ชื่อบริษัท เช่น ORI288B, PTT298A, CPALL285A"
+                  placeholder="พิมพ์รหัสหุ้นกู้ / ชื่อบริษัท เช่น ORI288B, SIRI266A, BTSG28OA"
                 />
                 <SearchField.ClearButton />
               </SearchField.Group>
             </SearchField>
 
             <div className="mt-3 min-h-0 flex-1 overflow-hidden">
-              <div className="h-full overflow-y-auto">
-                {searching && results.length === 0 && <ResultSkeleton />}
-                {!searching && term.trim().length >= 2 && results.length === 0 && (
+              <div
+                ref={resultsFade.ref}
+                onScroll={resultsFade.onScroll}
+                style={{ WebkitMaskImage: resultsFade.mask, maskImage: resultsFade.mask }}
+                className="h-full overflow-y-auto"
+              >
+                {/* Realtime empty state — shows the moment the local catalog has
+                    no match. */}
+                {term.trim().length >= 2 && results.length === 0 && (
                   <div className="flex flex-col items-center gap-3 py-6 text-center">
                     <img src={emptyBonds} alt="" aria-hidden className="h-28 w-auto opacity-90" />
                     <p className="text-sm text-black/40">ไม่พบหุ้นกู้ที่ตรงกับ "{term}"</p>
@@ -564,7 +862,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           {b.couponRate != null && (
                             <p className="font-nunito text-base font-bold text-[#43507F]">{b.couponRate}%</p>
                           )}
-                          {b.maturityDate && <p>ครบกำหนด {b.maturityDate}</p>}
+                          {b.maturityDate && <p>ครบกำหนด {fmtThaiDate(b.maturityDate)}</p>}
                         </div>
                       </button>
                     </li>
@@ -574,7 +872,18 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             </div>
           </div>
         ) : (
-          <div className="relative z-10 mt-4 flex flex-col gap-4">
+          <div className="relative z-10 mt-4 flex flex-col gap-4 rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-4">
+            {/* Add = folder-head tab above the card, like every other page. */}
+            <button
+              onClick={() => handleSave()}
+              disabled={saving}
+              className="absolute bottom-full right-5 z-10 flex items-center gap-2 rounded-t-2xl border-[0.5px] border-b-0 border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7] disabled:opacity-60"
+            >
+              {saving ? "กำลังบันทึก..." : "เพิ่มเข้าพอร์ต"}
+              <span className="flex size-6 items-center justify-center rounded-full border-[1.5px] border-current text-ink">
+                <IconCheck size={14} stroke={2.5} />
+              </span>
+            </button>
             <div className="rounded-2xl bg-[#F6F4F1] p-4">
               <div className="flex items-start justify-between gap-2">
                 {/* Company profile: issuer logo + brand name */}
@@ -621,13 +930,13 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
               <Label className="text-sm font-medium text-black/60">จำนวนเงินลงทุน (บาท)</Label>
 
               {/* Quick-pick presets */}
-              <div className="flex flex-wrap gap-2">
+              <div className="flex gap-2">
                 {AMOUNT_PRESETS.map((v) => (
                   <button
                     key={v}
                     type="button"
                     onClick={() => setAmount(v)}
-                    className={`rounded-full border px-3 py-1 font-nunito text-xs transition-colors ${
+                    className={`flex-1 whitespace-nowrap rounded-full border px-3 py-1 font-nunito text-xs transition-colors ${
                       amount === v
                         ? "border-[#43507F] bg-[#43507F]/10 font-bold text-[#43507F]"
                         : "border-[#E7E7E7] text-black/60 hover:border-[#43507F]/40"
@@ -649,22 +958,13 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
               >
                 <NumberField.Group>
                   <NumberField.DecrementButton />
-                  <NumberField.Input autoFocus placeholder="เช่น 100,000" className="text-center font-nunito" />
+                  <NumberField.Input autoFocus placeholder="เช่น 100,000" className="text-center font-nunito text-base font-medium" />
                   <NumberField.IncrementButton />
                 </NumberField.Group>
               </NumberField>
             </div>
 
             {error && <p className="text-sm text-red-500">{error}</p>}
-
-            <div className="flex gap-3">
-              <Button variant="secondary" fullWidth onPress={() => setSelected(null)}>
-                ย้อนกลับ
-              </Button>
-              <Button variant="primary" fullWidth isDisabled={saving} onPress={() => handleSave()}>
-                {saving ? "กำลังบันทึก..." : "เพิ่มเข้าพอร์ต"}
-              </Button>
-            </div>
           </div>
         )}
     </>
