@@ -6,7 +6,7 @@ import TaxCreditModal from "./TaxCreditModal";
 import moneyIllustration from "../assets/money-illustration.svg";
 
 function formatTHB(value: number): string {
-  return new Intl.NumberFormat("th-TH").format(value);
+  return new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 }
 
 // Withholding-tax summary for the current year (left column, below the
@@ -44,7 +44,7 @@ export default function TaxCard() {
             <span className="mt-1.5 block h-6 w-28 animate-pulse rounded-lg bg-[#43507F]/10" />
           ) : (
             <p className="mt-1 text-xl font-bold text-[#43507F]">
-              ฿<span className="font-nunito">{formatTHB(Math.round(credit))}</span>
+              ฿<span className="font-nunito">{formatTHB(credit)}</span>
             </p>
           )}
           {pendingCount > 0 && (

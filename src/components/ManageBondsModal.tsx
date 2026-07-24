@@ -4,6 +4,7 @@ import {
   Button, CloseButton, Tooltip, TextField, Label, Input, toast,
 } from "@heroui/react";
 import { IconPencil, IconTrash, IconCheck, IconAlertTriangle } from "@tabler/icons-react";
+import { useT } from "../lib/i18n";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
 import { useHoldings, notifyPortfolioChanged, type HoldingDetail } from "../hooks/usePortfolio";
 import { supabase } from "../lib/supabase";
@@ -57,6 +58,7 @@ async function regeneratePayouts(h: HoldingDetail, faceValue: number): Promise<v
 }
 
 export default function ManageBondsModal({ open, onClose, onChanged }: ManageBondsModalProps) {
+  const t = useT();
   const { holdings, refetch } = useHoldings();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
@@ -82,12 +84,12 @@ export default function ManageBondsModal({ open, onClose, onChanged }: ManageBon
     try {
       await regeneratePayouts(h, faceValue);
       notifyPortfolioChanged();
-      toast.success(`อัปเดต ${h.symbol} เป็น ฿${formatTHB(faceValue)} แล้ว`);
+      toast.success(t("toast_updated_amount", { symbol: h.symbol, amount: formatTHB(faceValue) }));
       setEditingId(null);
       refetch();
       onChanged();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "บันทึกไม่สำเร็จ";
+      const msg = e instanceof Error ? e.message : t("err_save_failed_short");
       setError(msg);
       toast.danger(msg);
     } finally {
@@ -102,14 +104,14 @@ export default function ManageBondsModal({ open, onClose, onChanged }: ManageBon
     const { error: delErr } = await supabase.from("holdings").delete().eq("id", id);
     setBusyId(null);
     if (delErr) {
-      setError(`ลบไม่สำเร็จ: ${delErr.message}`);
-      toast.danger(`ลบไม่สำเร็จ: ${delErr.message}`);
+      setError(`${t("toast_remove_failed")}: ${delErr.message}`);
+      toast.danger(`${t("toast_remove_failed")}: ${delErr.message}`);
       return;
     }
     const symbol = holdings.find((h) => h.id === id)?.symbol;
     setConfirmId(null);
     notifyPortfolioChanged();
-    toast.success(symbol ? `ลบ ${symbol} ออกจากพอร์ตแล้ว` : "ลบหุ้นกู้แล้ว");
+    toast.success(symbol ? t("toast_removed", { symbol }) : t("toast_removed_generic"));
     refetch();
     onChanged();
   };

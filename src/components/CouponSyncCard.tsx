@@ -147,7 +147,7 @@ export default function CouponSyncCard() {
                 <p className="truncate font-nunito text-xs font-bold text-[#1A2233]">{p.symbol}</p>
                 <p className="text-[10px] text-black/45">
                   งวด <span className="font-nunito">{p.installment}</span> · ฿
-                  <span className="font-nunito">{p.amount.toLocaleString("th-TH")}</span>
+                  <span className="font-nunito">{p.amount.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </p>
               </div>
               {r.status === "synced" ? (

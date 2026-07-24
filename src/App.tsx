@@ -1,6 +1,4 @@
 import { useEffect, useState } from "react";
-import { Toast } from "@heroui/react";
-import DashboardShell from "./components/home/DashboardShell";
 import LoginPage from "./components/LoginPage";
 import AdminDashboard from "./components/AdminDashboard";
 import DashboardSkeleton from "./components/DashboardSkeleton";
@@ -150,15 +148,20 @@ function App() {
     return <HomeDashboard profile={profile ?? { displayName: "beond" }} onLogout={v2Logout} />;
   }
 
-  // `?skeleton` — preview the loading skeleton without auth. Show the real
-  // sidebar rail alongside it (the rail is never skeletonised).
-  if (!ready || new URLSearchParams(window.location.search).has("skeleton")) {
+  // `?skeleton` — preview the old dashboard loading skeleton without auth.
+  if (new URLSearchParams(window.location.search).has("skeleton")) {
     return (
       <>
         <SidebarRail view="home" onSelect={() => {}} />
         <DashboardSkeleton railSpace />
       </>
     );
+  }
+
+  // Auth still resolving — show the real home dashboard with a placeholder
+  // profile so its own loading skeletons fill in (no stale/old layout flash).
+  if (!ready) {
+    return <HomeDashboard profile={{ displayName: "beond" }} onLogout={() => {}} />;
   }
 
   if (!profile) {
@@ -173,7 +176,7 @@ function App() {
 
   return (
     <>
-      <DashboardShell profile={profile} onLogout={handleLogout} />
+      <HomeDashboard profile={profile} onLogout={handleLogout} />
       {reviewId && (
         <ScanFlow
           open
@@ -182,7 +185,6 @@ function App() {
           onSubmit={() => notifyPortfolioChanged()}
         />
       )}
-      <Toast.Provider placement="bottom end" />
     </>
   );
 }

@@ -18,6 +18,7 @@ import emptyBonds from "../assets/empty-bonds.svg";
 import addBondMain from "../assets/add-bond-main.png";
 import bondEx1 from "../assets/bond-ex-1.png";
 import bondEx2 from "../assets/bond-ex-2.png";
+import { useT } from "../lib/i18n";
 
 interface AddBondModalProps {
   open: boolean;
@@ -37,12 +38,12 @@ const FALLBACK_SECTOR_ID = "other";
 const MIN_FACE_VALUE = 100_000;
 const AMOUNT_PRESETS = [100_000, 500_000, 1_000_000];
 
-const FREQ_LABEL: Record<number, string> = {
-  1: "ปีละครั้ง",
-  2: "ทุก 6 เดือน",
-  4: "ทุก 3 เดือน",
-  12: "ทุกเดือน",
-};
+const FREQ_KEY = {
+  1: "freq_annual",
+  2: "freq_semi",
+  4: "freq_quarter",
+  12: "freq_monthly",
+} as const;
 
 const THAI_MONTHS_ABBR = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 
@@ -78,6 +79,7 @@ function useScrollFade<T extends HTMLElement>(dep: unknown) {
 // heroUI date picker for the issue date. Bridges the ISO string state
 // (mIssue) to react-aria's DateValue.
 function IssueDatePicker({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
+  const t = useT();
   let dv: DateValue | null = null;
   try { dv = value ? parseDate(value) : null; } catch { dv = null; }
   return (
@@ -85,17 +87,17 @@ function IssueDatePicker({ value, onChange }: { value: string; onChange: (iso: s
     // rest of the app's dates; onChange converts back to a Gregorian ISO string.
     <I18nProvider locale="th-TH-u-ca-buddhist">
     <DatePicker
-      aria-label="วันที่ออก"
+      aria-label={t("issue_date")}
       value={dv}
       onChange={(v) => onChange(v ? toCalendar(v, new GregorianCalendar()).toString() : "")}
       className="flex flex-1 flex-col gap-1"
     >
-      <Label className="text-sm font-medium text-black/60">วันที่ออก</Label>
+      <Label className="text-sm font-medium text-black/60">{t("issue_date")}</Label>
       {/* Whole field opens the calendar: the trigger covers the group and the
           segments are click-through (display only). */}
       <Group className="input relative flex cursor-pointer items-center gap-2">
-        <DatePicker.Trigger className="absolute inset-0 z-0" aria-label="เปิดปฏิทิน">
-          <span className="sr-only">เปิดปฏิทิน</span>
+        <DatePicker.Trigger className="absolute inset-0 z-0" aria-label={t("open_calendar")}>
+          <span className="sr-only">{t("open_calendar")}</span>
         </DatePicker.Trigger>
         <DateInput className="pointer-events-none flex flex-1 font-normal">
           {(segment) => (
@@ -137,6 +139,7 @@ function IssueDatePicker({ value, onChange }: { value: string; onChange: (iso: s
 }
 
 export default function AddBondModal({ open, onClose, onAdded, initialTerm, inline = false, editHolding = null, onDelete }: AddBondModalProps) {
+  const t = useT();
   const editing = !!editHolding;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [manualReview, setManualReview] = useState(false); // summary step before saving a manual entry
@@ -265,7 +268,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   // Build a candidate from the manual form fields.
   const buildManualCandidate = (): BondCandidate | null => {
     const sym = mSymbol.trim().toUpperCase();
-    if (!sym) { setError("กรอกชื่อรุ่นหุ้นกู้"); return null; }
+    if (!sym) { setError(t("err_enter_symbol")); return null; }
     const y = Number.isFinite(mTermY) ? mTermY : 0;
     const m = Number.isFinite(mTermM) ? mTermM : 0;
     const totalMonths = y * 12 + m;
@@ -299,9 +302,9 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
 
   // Manual flow: the header button opens a summary step; the summary confirms.
   const goManualReview = () => {
-    if (!infoValid) { setError("กรอกชื่อรุ่นและชื่อบริษัท"); return; }
-    if (!yieldValid) { setError("กรอกดอกเบี้ยและมูลค่าที่ลงทุน"); return; }
-    if (!termValid) { setError("กรอกวันที่ออกและอายุหุ้นกู้"); return; }
+    if (!infoValid) { setError(t("err_enter_symbol_company")); return; }
+    if (!yieldValid) { setError(t("err_enter_coupon_amount")); return; }
+    if (!termValid) { setError(t("err_enter_date_term")); return; }
     setError(null);
     setManualReview(true);
   };
@@ -331,7 +334,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
       // app_metadata (set by the line-auth function). RLS keys on it.
       const { data: authData } = await supabase.auth.getUser();
       const publicUserId = authData.user?.app_metadata?.public_user_id as string | undefined;
-      if (!publicUserId) throw new Error("ไม่พบผู้ใช้ กรุณาเข้าสู่ระบบใหม่");
+      if (!publicUserId) throw new Error(t("err_no_user"));
 
       // Real coupon schedule derived from the bond's attributes.
       const schedule = deriveCouponSchedule({
@@ -373,7 +376,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
           if (payErr) throw payErr;
         }
         notifyPortfolioChanged();
-        toast.success(`อัปเดต ${cand.symbol} แล้ว`);
+        toast.success(t("toast_updated", { symbol: cand.symbol }));
         handleClose();
         onAdded();
         return;
@@ -432,11 +435,11 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
       }
 
       notifyPortfolioChanged();
-      toast.success(`เพิ่ม ${cand.symbol} เข้าพอร์ตแล้ว`);
+      toast.success(t("toast_added", { symbol: cand.symbol }));
       handleClose();
       onAdded();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง";
+      const msg = e instanceof Error ? e.message : t("err_save_failed");
       setError(msg);
       toast.danger(msg);
     } finally {
@@ -453,32 +456,32 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             <Breadcrumbs separator="/">
               {editing ? (
                 <>
-                  <Breadcrumbs.Item onPress={handleClose}>หุ้นกู้ที่ถืออยู่</Breadcrumbs.Item>
-                  <Breadcrumbs.Item>แก้ไข</Breadcrumbs.Item>
+                  <Breadcrumbs.Item onPress={handleClose}>{t("holdings_title")}</Breadcrumbs.Item>
+                  <Breadcrumbs.Item>{t("edit")}</Breadcrumbs.Item>
                 </>
               ) : (
                 <>
-                  <Breadcrumbs.Item onPress={handleClose}>เพิ่มหุ้นกู้</Breadcrumbs.Item>
-                  <Breadcrumbs.Item onPress={() => { setSelected(null); setManual(false); setError(null); }}>ค้นหา</Breadcrumbs.Item>
-                  {selected && <Breadcrumbs.Item>ยืนยัน</Breadcrumbs.Item>}
-                  {manual && <Breadcrumbs.Item>กรอกเอง</Breadcrumbs.Item>}
+                  <Breadcrumbs.Item onPress={handleClose}>{t("add_bond")}</Breadcrumbs.Item>
+                  <Breadcrumbs.Item onPress={() => { setSelected(null); setManual(false); setError(null); }}>{t("search")}</Breadcrumbs.Item>
+                  {selected && <Breadcrumbs.Item>{t("confirm")}</Breadcrumbs.Item>}
+                  {manual && <Breadcrumbs.Item>{t("manual_entry")}</Breadcrumbs.Item>}
                 </>
               )}
             </Breadcrumbs>
             <h3 className="mt-1 text-3xl font-medium text-[#181D20]">
-              {editing ? "แก้ไข" : selected ? "ยืนยัน" : manual ? "กรอกเอง" : "ค้นหา"}
+              {editing ? t("edit") : selected ? t("confirm") : manual ? t("manual_entry") : t("search")}
             </h3>
             {editing && (
               <p className="mt-1 font-nunito text-sm text-black/80">{mSymbol}</p>
             )}
             {!editing && !selected && !manual && (
               <p className="mt-1 text-sm text-black/80">
-                ข้อมูลตราสารหนี้จาก SEC Open Data API (ก.ล.ต.)
+                {t("sec_source")}
               </p>
             )}
             {manual && !editing && (
               <p className="mt-1 max-w-md text-sm text-black/80">
-                สำหรับหุ้นกู้ที่ยังไม่มีในระบบ SEC
+                {t("manual_hint")}
               </p>
             )}
           </div>
@@ -499,12 +502,12 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
               disabled={saving}
               className="absolute bottom-full right-5 z-10 flex items-center gap-2 rounded-t-2xl border-[0.5px] border-b-0 border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7] disabled:opacity-60"
             >
-              {saving ? "กำลังบันทึก..." : "บันทึก"}
+              {saving ? t("saving") : t("save")}
               <span className="flex size-6 items-center justify-center rounded-full border-[1.5px] border-current text-ink">
                 <IconCheck size={14} stroke={2.5} />
               </span>
             </button>
-            <p className="text-sm text-black/50">ตรวจสอบข้อมูลก่อนบันทึก</p>
+            <p className="text-sm text-black/50">{t("review_before_save")}</p>
             {/* Company profile card — same look as the search→confirm page. */}
             <div className="mt-3 rounded-2xl bg-[#F6F4F1] p-4">
               <div className="flex items-start justify-between gap-2">
@@ -529,23 +532,23 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   </span>
                 ) : (
                   <span className="shrink-0 rounded-lg bg-black/5 px-2 py-1 text-xs text-black/40">
-                    ไม่มีข้อมูลเครดิต
+                    {t("no_credit_info")}
                   </span>
                 )}
               </div>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-black/60">
                 <span>
-                  ดอกเบี้ย <b className="font-nunito">{Number.isFinite(mCoupon) ? mCoupon : 0}%</b> ต่อปี
+                  {t("coupon_word")} <b className="font-nunito">{Number.isFinite(mCoupon) ? mCoupon : 0}%</b> {t("per_year")}
                 </span>
-                <span>จ่ายดอกเบี้ย {FREQ_LABEL[freq]}</span>
-                {manualMaturity && <span>ครบกำหนด {fmtThaiDate(manualMaturity)}</span>}
+                <span>{t("pays_interest")} {t(FREQ_KEY[freq as 1 | 2 | 4 | 12] ?? "freq_semi")}</span>
+                {manualMaturity && <span>{t("maturity")} {fmtThaiDate(manualMaturity)}</span>}
               </div>
             </div>
             <div className="mt-3 min-h-0 flex-1 divide-y divide-[#F0F0F0] overflow-y-auto">
               {[
-                ["มูลค่าที่ลงทุน", `฿${(Number.isFinite(amount) ? amount : 0).toLocaleString("th-TH")}`],
-                ["วันที่ออก", mIssue ? fmtThaiDate(mIssue) : "—"],
-                ["อายุหุ้นกู้", `${Number.isFinite(mTermY) ? mTermY : 0} ปี ${Number.isFinite(mTermM) ? mTermM : 0} เดือน`],
+                [t("invested_amount"), `฿${(Number.isFinite(amount) ? amount : 0).toLocaleString("th-TH")}`],
+                [t("issue_date"), mIssue ? fmtThaiDate(mIssue) : "—"],
+                [t("term"), `${Number.isFinite(mTermY) ? mTermY : 0} ${t("year_unit")} ${Number.isFinite(mTermM) ? mTermM : 0} ${t("month_unit")}`],
               ].map(([label, value]) => (
                 <div key={label} className="flex items-center justify-between gap-4 py-2.5">
                   <span className="text-sm text-black/55">{label}</span>
@@ -556,7 +559,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
             <div className="mt-3 shrink-0">
               <Button variant="secondary" fullWidth onPress={() => setManualReview(false)}>
-                แก้ไข
+                {t("edit")}
               </Button>
             </div>
           </div>
@@ -568,7 +571,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
               onClick={goManualReview}
               className="absolute bottom-full right-5 z-10 flex items-center gap-2 rounded-t-2xl border-[0.5px] border-b-0 border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7]"
             >
-              ตรวจสอบ
+              {t("review")}
               <span className="flex size-6 items-center justify-center rounded-full border-[1.5px] border-current text-ink">
                 <IconCheck size={14} stroke={2.5} />
               </span>
@@ -583,7 +586,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   <Accordion.Heading>
                     <Accordion.Trigger className="flex w-full items-center justify-between py-3 text-base font-medium text-[#181D20]">
                       <span className="flex items-center gap-2">
-                        ข้อมูลหุ้นกู้
+                        {t("bond_info")}
                         {infoValid && <IconCheck size={18} className="text-[#3FA35B]" stroke={3} />}
                       </span>
                       <Accordion.Indicator><IconChevronDown size={18} /></Accordion.Indicator>
@@ -592,7 +595,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   <Accordion.Panel>
                     <Accordion.Body className="flex gap-3 pb-4">
                       <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
-                        ชื่อรุ่น *
+                        {t("symbol_field")} *
                         <Input
                           autoFocus
                           value={mSymbol}
@@ -607,12 +610,12 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                             // Rating is derived reactively from symbol + company
                             // (see manualRating) — no need to set it here.
                           }}
-                          placeholder="เช่น ORI288B"
+                          placeholder={t("eg_symbol")}
                           className="font-nunito text-base font-medium uppercase sm:text-base"
                         />
                       </label>
                       <ComboBox
-                        aria-label="ชื่อบริษัท"
+                        aria-label={t("company_name")}
                         allowsCustomValue
                         menuTrigger="input"
                         inputValue={mIssuer}
@@ -623,9 +626,9 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                         items={issuerMatches}
                         className="flex flex-1 flex-col gap-1"
                       >
-                        <Label className="text-sm font-medium text-black/60">ชื่อบริษัท</Label>
+                        <Label className="text-sm font-medium text-black/60">{t("company_name")}</Label>
                         <ComboBox.InputGroup className="[&_input]:!font-normal">
-                          <Input placeholder="เช่น ออริจิ้น พร็อพเพอร์ตี้" className="py-2 text-base !font-normal sm:text-base" />
+                          <Input placeholder={t("eg_company")} className="py-2 text-base !font-normal sm:text-base" />
                           <ComboBox.Trigger />
                         </ComboBox.InputGroup>
                         <ComboBox.Popover>
@@ -644,7 +647,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   <Accordion.Heading>
                     <Accordion.Trigger className="flex w-full items-center justify-between py-3 text-base font-medium text-[#181D20]">
                       <span className="flex items-center gap-2">
-                        ผลตอบแทน
+                        {t("yield_section")}
                         {yieldValid && <IconCheck size={18} className="text-[#3FA35B]" stroke={3} />}
                       </span>
                       <Accordion.Indicator><IconChevronDown size={18} /></Accordion.Indicator>
@@ -654,42 +657,42 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                     <Accordion.Body className="flex flex-col gap-3 pb-4">
                       <div className="flex gap-3">
                         <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
-                          ดอกเบี้ย (% ต่อปี)
+                          {t("coupon_label")}
                           <NumberField
                             value={mCoupon}
                             onChange={setMCoupon}
                             minValue={0}
                             step={0.1}
                             formatOptions={{ maximumFractionDigits: 2 }}
-                            aria-label="ดอกเบี้ย (% ต่อปี)"
+                            aria-label={t("coupon_label")}
                           >
                             <NumberField.Group>
                               <NumberField.DecrementButton />
-                              <NumberField.Input placeholder="เช่น 5.5" className="text-center font-nunito text-base font-medium" />
+                              <NumberField.Input placeholder={t("eg_coupon")} className="text-center font-nunito text-base font-medium" />
                               <NumberField.IncrementButton />
                             </NumberField.Group>
                           </NumberField>
                         </label>
                         <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
-                          มูลค่าที่ลงทุน (บาท)
+                          {t("invested_baht")}
                           <NumberField
                             value={amount}
                             onChange={setAmount}
                             minValue={MIN_FACE_VALUE}
                             step={MIN_FACE_VALUE}
                             formatOptions={{ useGrouping: true, maximumFractionDigits: 0 }}
-                            aria-label="มูลค่าที่ลงทุน (บาท)"
+                            aria-label={t("invested_baht")}
                           >
                             <NumberField.Group>
                               <NumberField.DecrementButton />
-                              <NumberField.Input placeholder="เช่น 100,000" className="text-center font-nunito text-base font-medium" />
+                              <NumberField.Input placeholder={t("eg_amount")} className="text-center font-nunito text-base font-medium" />
                               <NumberField.IncrementButton />
                             </NumberField.Group>
                           </NumberField>
                         </label>
                       </div>
                       <div className="flex flex-col gap-1.5">
-                        <span className="text-sm font-medium text-black/60">จ่ายดอกเบี้ย</span>
+                        <span className="text-sm font-medium text-black/60">{t("pays_interest")}</span>
                         <div className="flex gap-2">
                           {[1, 2, 4, 12].map((f) => {
                             const on = freq === f;
@@ -704,7 +707,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                                     : "border-[#d9d9d9] bg-white text-ink hover:bg-[#F0F2F7]"
                                 }`}
                               >
-                                {FREQ_LABEL[f]}
+                                {t(FREQ_KEY[f as 1 | 2 | 4 | 12])}
                               </button>
                             );
                           })}
@@ -718,7 +721,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   <Accordion.Heading>
                     <Accordion.Trigger className="flex w-full items-center justify-between py-3 text-base font-medium text-[#181D20]">
                       <span className="flex items-center gap-2">
-                        อายุหุ้นกู้
+                        {t("term")}
                         {termValid && <IconCheck size={18} className="text-[#3FA35B]" stroke={3} />}
                       </span>
                       <Accordion.Indicator><IconChevronDown size={18} /></Accordion.Indicator>
@@ -728,7 +731,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                     <Accordion.Body className="flex gap-3 pb-4">
                       <IssueDatePicker value={mIssue} onChange={setMIssue} />
                       <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
-                        อายุหุ้นกู้
+                        {t("term")}
                         <div className="flex gap-2">
                           <NumberField
                             value={mTermY}
@@ -736,12 +739,12 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                             minValue={0}
                             step={1}
                             formatOptions={{ maximumFractionDigits: 0 }}
-                            aria-label="อายุหุ้นกู้ (ปี)"
+                            aria-label={t("term_years")}
                             className="flex-1"
                           >
                             <NumberField.Group className="relative [grid-template-columns:1fr]">
-                              <NumberField.Input placeholder="ปี" className="text-center font-nunito text-base font-medium" />
-                              {Number.isFinite(mTermY) && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-black/50">ปี</span>}
+                              <NumberField.Input placeholder={t("year_unit")} className="text-center font-nunito text-base font-medium" />
+                              {Number.isFinite(mTermY) && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-black/50">{t("year_unit")}</span>}
                             </NumberField.Group>
                           </NumberField>
                           <NumberField
@@ -751,12 +754,12 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                             maxValue={11}
                             step={1}
                             formatOptions={{ maximumFractionDigits: 0 }}
-                            aria-label="อายุหุ้นกู้ (เดือน)"
+                            aria-label={t("term_months")}
                             className="flex-1"
                           >
                             <NumberField.Group className="relative [grid-template-columns:1fr]">
-                              <NumberField.Input placeholder="เดือน" className="text-center font-nunito text-base font-medium" />
-                              {Number.isFinite(mTermM) && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-black/50">เดือน</span>}
+                              <NumberField.Input placeholder={t("month_unit")} className="text-center font-nunito text-base font-medium" />
+                              {Number.isFinite(mTermM) && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-black/50">{t("month_unit")}</span>}
                             </NumberField.Group>
                           </NumberField>
                         </div>
@@ -805,13 +808,13 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             <SearchField
               value={term}
               onChange={setTerm}
-              aria-label="ค้นหาหุ้นกู้"
+              aria-label={t("search_bond")}
             >
               <SearchField.Group className="h-12">
                 <SearchField.SearchIcon />
                 <SearchField.Input
                   autoFocus
-                  placeholder="พิมพ์รหัสหุ้นกู้ / ชื่อบริษัท เช่น ORI288B, SIRI266A, BTSG28OA"
+                  placeholder={t("search_hint")}
                 />
                 <SearchField.ClearButton />
               </SearchField.Group>
@@ -829,13 +832,13 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                 {term.trim().length >= 2 && results.length === 0 && (
                   <div className="flex flex-col items-center gap-3 py-6 text-center">
                     <img src={emptyBonds} alt="" aria-hidden className="h-28 w-auto opacity-90" />
-                    <p className="text-sm text-black/40">ไม่พบหุ้นกู้ที่ตรงกับ "{term}"</p>
+                    <p className="text-sm text-black/40">{t("no_match")} "{term}"</p>
                     {/* Fallback for bonds not yet in the SEC feed. */}
                     <button
                       onClick={() => { setManual(true); setMSymbol(term.trim().toUpperCase()); setError(null); }}
                       className="mt-1 w-full rounded-2xl border border-dashed border-[#43507F]/40 px-3 py-3 text-sm font-medium text-[#43507F] transition-colors hover:bg-[#43507F]/5"
                     >
-                      เพิ่ม "{term.trim()}" เอง
+                      {t("add_own", { term: term.trim() })}
                     </button>
                   </div>
                 )}
@@ -862,7 +865,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           {b.couponRate != null && (
                             <p className="font-nunito text-base font-bold text-[#43507F]">{b.couponRate}%</p>
                           )}
-                          {b.maturityDate && <p>ครบกำหนด {fmtThaiDate(b.maturityDate)}</p>}
+                          {b.maturityDate && <p>{t("maturity")} {fmtThaiDate(b.maturityDate)}</p>}
                         </div>
                       </button>
                     </li>
@@ -879,7 +882,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
               disabled={saving}
               className="absolute bottom-full right-5 z-10 flex items-center gap-2 rounded-t-2xl border-[0.5px] border-b-0 border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7] disabled:opacity-60"
             >
-              {saving ? "กำลังบันทึก..." : "เพิ่มเข้าพอร์ต"}
+              {saving ? t("saving") : t("add_to_portfolio")}
               <span className="flex size-6 items-center justify-center rounded-full border-[1.5px] border-current text-ink">
                 <IconCheck size={14} stroke={2.5} />
               </span>
@@ -910,24 +913,24 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   </span>
                 ) : (
                   <span className="shrink-0 rounded-lg bg-black/5 px-2 py-1 text-xs text-black/40">
-                    ไม่มีข้อมูลเครดิต
+                    {t("no_credit_info")}
                   </span>
                 )}
               </div>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-black/60">
                 {selected.couponRate != null && (
                   <span>
-                    ดอกเบี้ย <b className="font-nunito">{selected.couponRate}%</b> ต่อปี
+                    {t("coupon_word")} <b className="font-nunito">{selected.couponRate}%</b> {t("per_year")}
                   </span>
                 )}
                 {/* Frequency auto-parsed from the SEC coupon text / master map. */}
-                <span>จ่ายดอกเบี้ย {FREQ_LABEL[freq] ?? "ทุก 6 เดือน"}</span>
-                {selected.maturityDate && <span>ครบกำหนด {selected.maturityDate}</span>}
+                <span>{t("pays_interest")} {t(FREQ_KEY[freq as 1 | 2 | 4 | 12] ?? "freq_semi")}</span>
+                {selected.maturityDate && <span>{t("maturity")} {selected.maturityDate}</span>}
               </div>
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label className="text-sm font-medium text-black/60">จำนวนเงินลงทุน (บาท)</Label>
+              <Label className="text-sm font-medium text-black/60">{t("investment_baht")}</Label>
 
               {/* Quick-pick presets */}
               <div className="flex gap-2">
@@ -954,11 +957,11 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                 minValue={MIN_FACE_VALUE}
                 step={MIN_FACE_VALUE}
                 formatOptions={{ useGrouping: true, maximumFractionDigits: 0 }}
-                aria-label="จำนวนเงินลงทุน (บาท)"
+                aria-label={t("investment_baht")}
               >
                 <NumberField.Group>
                   <NumberField.DecrementButton />
-                  <NumberField.Input autoFocus placeholder="เช่น 100,000" className="text-center font-nunito text-base font-medium" />
+                  <NumberField.Input autoFocus placeholder={t("eg_amount")} className="text-center font-nunito text-base font-medium" />
                   <NumberField.IncrementButton />
                 </NumberField.Group>
               </NumberField>

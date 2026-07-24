@@ -43,7 +43,7 @@ export default function JarPOC() {
         </button>
       </div>
 
-      <Canvas orthographic camera={{ position: [5, 5, 5], zoom: 120 }} className="h-full! w-full!">
+      <Canvas orthographic camera={{ position: [5, 5, 5], zoom: 73 }} className="h-full! w-full!">
         {/* Flat, even 2.5D lighting: strong ambient + one soft key for the toon step. */}
         <ambientLight intensity={0.9} />
         <directionalLight position={[3, 5, 4]} intensity={0.9} />
