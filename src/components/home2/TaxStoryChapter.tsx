@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import Folder3D from "./Folder3D";
 import PaperFly from "./PaperFly";
+import { useT, useLang } from "../../lib/i18n";
 
 const fmtTHB = (n: number) => new Intl.NumberFormat("th-TH").format(Math.round(n));
 
@@ -35,6 +36,9 @@ export default function TaxStoryChapter({
   active: boolean;
   onDone?: () => void;
 }) {
+  const t = useT();
+  const lang = useLang();
+  const year = lang === "en" ? String(Number(data.year) - 543) : data.year;
   const [phase, setPhase] = useState(0);
   const [closed, setClosed] = useState(false);
   const started = useRef(false);
@@ -85,15 +89,15 @@ export default function TaxStoryChapter({
       {/* Goal text — centred, matching the income chapter's layout. */}
       <div className="pointer-events-none absolute inset-x-0 top-12 z-10 flex flex-col items-center text-center">
         <motion.div initial="hidden" animate={leaving ? "gone" : "show"} variants={{ show: { transition: { staggerChildren: 0.13, delayChildren: 0.1 } }, gone: { transition: { staggerChildren: 0.05 } } }}>
-          <motion.p variants={LINE} className="text-sm text-ink/55">เป้าหมายภาษีปี {data.year}</motion.p>
+          <motion.p variants={LINE} className="text-sm text-ink/55">{t("goal_year_title", { year })}</motion.p>
           <motion.p variants={LINE} className="mt-1 text-2xl font-medium leading-snug text-ink">
-            สะสมสลิป 50 ทวิให้ครบ<br />ขอคืนได้สูงสุด
+            {t("goal_collect_all")}<br />{t("goal_max_refund")}
           </motion.p>
           <motion.p variants={LINE} className="mt-2 font-nunito text-4xl font-extrabold text-[#2E8B57]">
             ฿{fmtTHB(data.fullRefund)}
           </motion.p>
           <motion.p variants={LINE} className="mt-2 text-xs text-ink/55">
-            ฐานภาษี {data.rate}%
+            {t("tax_base_rate", { rate: data.rate })}
           </motion.p>
         </motion.div>
       </div>

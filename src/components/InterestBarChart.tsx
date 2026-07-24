@@ -3,6 +3,7 @@ import { motion, useReducedMotion } from "motion/react";
 import type { TimelineMonth } from "../data/mockData";
 import { issuerName } from "../lib/issuerLogo";
 import IssuerLogo from "./IssuerLogo";
+import { useLang } from "../lib/i18n";
 
 // Coupon interest is taxed 15% at source; the chart plots the net received.
 const WHT_RATE = 0.15;
@@ -14,7 +15,7 @@ function formatShortTHB(v: number): string {
   return `฿${Number.isInteger(k) ? k : k.toFixed(1)}k`;
 }
 function formatTHB(v: number): string {
-  return new Intl.NumberFormat("th-TH").format(v);
+  return new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 }
 
 const THAI_MONTH_NAMES = [
@@ -27,6 +28,8 @@ const MONTH_ABBR: Record<string, string> = {
   พฤษภาคม: "พ.ค.", มิถุนายน: "มิ.ย.", กรกฎาคม: "ก.ค.", สิงหาคม: "ส.ค.",
   กันยายน: "ก.ย.", ตุลาคม: "ต.ค.", พฤศจิกายน: "พ.ย.", ธันวาคม: "ธ.ค.",
 };
+
+const EN_MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // Distinct palette assigned PER BOND (symbol), not per sector — so two bonds
 // paying in the same month always get different colours and the stacked
@@ -65,11 +68,16 @@ interface Bar {
 
 // Stacked bar chart of monthly net coupon income — HeroUI-Pro-style bars with a
 // dark hover tooltip breaking the month down by bond.
-export default function InterestBarChart({ months }: { months: TimelineMonth[] }) {
+export default function InterestBarChart({ months, fill = false }: { months: TimelineMonth[]; fill?: boolean }) {
   const [hover, setHover] = useState<number | null>(null);
   // Cursor position within the plot, so the tooltip can follow the pointer.
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const reduce = useReducedMotion();
+  const lang = useLang();
+  // Localised month abbreviation + year (BE→CE in English).
+  const locLabel = (thaiMonth: string) =>
+    lang === "en" ? EN_MONTH_ABBR[THAI_MONTH_NAMES.indexOf(thaiMonth)] ?? thaiMonth : MONTH_ABBR[thaiMonth] ?? thaiMonth;
+  const locYr = (beYear: string) => (lang === "en" ? String(Number(beYear) - 543) : beYear);
 
   // Stable colour per bond across the whole chart (sorted for determinism).
   const symbols = [...new Set(months.flatMap((m) => m.payouts.map((p) => p.symbol)))].sort();
@@ -92,8 +100,8 @@ export default function InterestBarChart({ months }: { months: TimelineMonth[] }
     }));
     return {
       key: m.id,
-      label: MONTH_ABBR[m.month] ?? m.month,
-      year: m.year,
+      label: locLabel(m.month),
+      year: locYr(m.year),
       total: segments.reduce((s, x) => s + x.amount, 0),
       segments,
       isCurrent: m.month === curMonth && Number(m.year) === curYearBE,
@@ -108,19 +116,30 @@ export default function InterestBarChart({ months }: { months: TimelineMonth[] }
   const yearKey = bars[0]?.year ?? "none";
 
   return (
-    <div className="mt-4 flex h-88 flex-col rounded-3xl border border-[#E7E7E7] bg-white p-5">
-      <div className="flex gap-3">
+    <div className={`relative flex flex-col rounded-3xl bg-white p-5 ${fill ? "h-full" : "mt-4 h-88 border border-[#E7E7E7]"}`}>
+      {/* Legend — one swatch per bond (symbol), pinned to the card's top-right. */}
+      {fill && symbols.length > 0 && (
+        <div className="absolute right-5 top-5 z-10 flex max-w-[55%] flex-wrap justify-end gap-x-3 gap-y-1.5">
+          {symbols.map((s) => (
+            <div key={s} className="flex items-center gap-1.5 text-[11px]">
+              <span className="size-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: colorBySymbol.get(s) ?? PALETTE[0] }} />
+              <span className="font-nunito font-bold text-black/70">{s}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className={`flex gap-3 ${fill ? "min-h-0 flex-1" : ""}`}>
         {/* Y axis */}
-        <div className="flex h-64 flex-col justify-between py-0.5 text-right font-nunito text-[11px] text-black/40">
+        <div className={`flex flex-col justify-between py-0.5 text-right font-nunito text-[11px] text-black/40 ${fill ? "h-auto" : "h-64"}`}>
           {ticks.map((t, i) => (
             <span key={i}>{formatShortTHB(t)}</span>
           ))}
         </div>
 
         {/* Plot */}
-        <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
           <div
-            className="relative h-64"
+            className={`relative ${fill ? "min-h-0 flex-1" : "h-64"}`}
             onMouseMove={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
               setPos({ x: e.clientX - r.left, y: e.clientY - r.top });

@@ -341,6 +341,29 @@ html {
   }
 }
 
+/* heroUI toasts slide in from the top on mount. heroUI's own slide relies on
+   the View Transitions API, which doesn't fire reliably here — so animate the
+   toast element directly. It overrides the inline stacking transform only
+   during entry, then settles back to it (no animation-fill-mode). */
+@keyframes beond-toast-in {
+  from {
+    opacity: 0;
+    translate: 0 -140% 0;
+  }
+}
+.toast--top,
+.toast--top-start,
+.toast--top-end {
+  animation: beond-toast-in 340ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast--top,
+  .toast--top-start,
+  .toast--top-end {
+    animation: none;
+  }
+}
+
 body {
   margin: 0;
   overscroll-behavior: none;
@@ -353,6 +376,13 @@ body {
 button,
 [role="button"],
 [role="tab"],
+[role="slider"],
+[role="switch"],
+[role="checkbox"],
+[role="radio"],
+[role="menuitem"],
+[role="option"],
+[role="link"],
 a[href],
 label[for],
 select,

@@ -23,18 +23,29 @@ export default function JarWidget({ coins }: { coins: { id: string; symbol: stri
   // re-drop the whole pile. A stable per-id spawn = coins fall once, then rest.
   const spawns = useRef(new Map<string, Spawn>());
   const seen = spawns.current;
-  shown.forEach((c, i) => {
+  shown.forEach((c) => {
     if (!seen.has(c.id)) {
-      seen.set(c.id, [(Math.random() - 0.5) * 0.5, JAR_H / 2 + 1 + (i % 14) * 0.32, (Math.random() - 0.5) * 0.5]);
+      // Unique spawn per coin: each new id gets the NEXT slot in a rising column
+      // (monotonic height via the map size, never a repeating modulo), so no two
+      // coins are ever born at the same point — that co-location was what left the
+      // pile interpenetrating. A golden-angle spiral spreads XZ so they don't
+      // stack in one vertical line either.
+      const n = seen.size;
+      const a = n * 2.399963; // golden angle (rad)
+      // Spread across the jar floor (not one central column) so coins land apart.
+      const r = 0.12 + ((n * 0.618) % 1) * 0.42;
+      // Big vertical gap between successive coins → they arrive ONE AT A TIME and
+      // settle before the next lands, instead of dropping as a fused column.
+      seen.set(c.id, [Math.cos(a) * r, JAR_H / 2 + 1 + n * 0.42, Math.sin(a) * r]);
     }
   });
 
   return (
-    <div className="pointer-events-none h-56 w-40">
-      <Canvas orthographic camera={{ position: [5, 5, 5], zoom: 42 }} className="h-full! w-full!">
+    <div className="pointer-events-none h-80 w-60">
+      <Canvas orthographic camera={{ position: [5, 5, 5], zoom: 38 }} className="h-full! w-full!">
         <ambientLight intensity={0.9} />
         <directionalLight position={[3, 5, 4]} intensity={0.9} />
-        <Physics gravity={[0, -9.81, 0]} timeStep={1 / 120} numSolverIterations={12}>
+        <Physics gravity={[0, -9.81, 0]} timeStep={1 / 144} numSolverIterations={28}>
           <JarColliders />
           {shown.map((c) => (
             <Coin key={c.id} logoUrl={getIssuerLogoUrl(c.symbol)} position={seen.get(c.id)!} />
