@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Modal, ModalBackdrop, ModalContainer, ModalDialog,
-  Breadcrumbs, Button, SearchField, Label, NumberField, Accordion, ComboBox, ListBox, Input, DatePicker, Calendar, toast,
+  Breadcrumbs, Button, SearchField, Label, NumberField, Tabs, ComboBox, ListBox, Input, DatePicker, Calendar, toast,
 } from "@heroui/react";
 import { Group, DateInput, DateSegment, Dialog, I18nProvider } from "react-aria-components";
 import { parseDate, toCalendar, GregorianCalendar, type DateValue } from "@internationalized/date";
@@ -9,13 +9,14 @@ import { ensureCatalog, searchLocal, issuerNames, issuerForSymbol, symbolForIssu
 import { deriveCouponSchedule } from "../lib/couponSchedule";
 import { overrideFor } from "../data/couponOverrides";
 import { ratingFor } from "../data/bondRatings";
-import { notifyPortfolioChanged, type HoldingDetail } from "../hooks/usePortfolio";
+import { notifyPortfolioChanged, useHoldings, type HoldingDetail } from "../hooks/usePortfolio";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import IssuerLogo from "./IssuerLogo";
 import { issuerName } from "../lib/issuerLogo";
-import { IconCheck, IconChevronDown, IconTrash, IconCalendar } from "@tabler/icons-react";
+import { IconCheck, IconTrash, IconCalendar, IconPercentage } from "@tabler/icons-react";
 import emptyBonds from "../assets/empty-bonds.svg";
 import addBondMain from "../assets/add-bond-main.png";
+import bondDec1 from "../assets/bond-dec-1.png";
 import bondEx1 from "../assets/bond-ex-1.png";
 import bondEx2 from "../assets/bond-ex-2.png";
 import { useT } from "../lib/i18n";
@@ -46,6 +47,20 @@ const FREQ_KEY = {
 } as const;
 
 const THAI_MONTHS_ABBR = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+
+// "X ปี Y เดือน" from a candidate's dates (or its term in years).
+function fmtTermThai(b: BondCandidate): string | null {
+  let months: number | null = null;
+  if (b.issueDate && b.maturityDate) {
+    months = Math.max(0, Math.round((new Date(b.maturityDate).getTime() - new Date(b.issueDate).getTime()) / (30.4375 * 864e5)));
+  } else if (b.termYears != null) {
+    months = Math.round(b.termYears * 12);
+  }
+  if (months == null || months <= 0) return null;
+  const y = Math.floor(months / 12);
+  const m = months % 12;
+  return [y ? `${y} ปี` : "", m ? `${m} เดือน` : ""].filter(Boolean).join(" ") || null;
+}
 
 // ISO date → Thai Buddhist-era short date, e.g. "2028-08-13" → "13 ส.ค. 2571".
 function fmtThaiDate(iso: string): string {
@@ -152,11 +167,21 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Symbols already in the portfolio → disabled in search results (can't add the
+  // same bond twice). The bond being edited is excluded so its row stays usable.
+  const { holdings } = useHoldings();
+  const heldSymbols = useMemo(() => {
+    const set = new Set(holdings.map((h) => h.symbol));
+    if (editHolding) set.delete(editHolding.symbol);
+    return set;
+  }, [holdings, editHolding]);
+
   // Manual entry — for bonds not yet in the SEC feed (e.g. a PO that just closed
   // and isn't settled/registered on ThaiBMA yet).
   const [manual, setManual] = useState(false);
   const [mSymbol, setMSymbol] = useState("");
   const [mIssuer, setMIssuer] = useState("");
+  const [mTaxId, setMTaxId] = useState(""); // payer 13-digit tax id (bonds.payer_tax_id)
   const [mCoupon, setMCoupon] = useState<number>(NaN);
   const [mIssue, setMIssue] = useState("");
   const [mTermY, setMTermY] = useState<number>(NaN); // bond term — years
@@ -224,6 +249,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     setManual(true);
     setMSymbol(h.symbol);
     setMIssuer(h.issuer);
+    setMTaxId(h.payerTaxId ?? "");
     setMCoupon(h.couponRate);
     setAmount(h.faceValue);
     setFreq(h.couponFreq ?? 2);
@@ -257,6 +283,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     setManual(false);
     setMSymbol("");
     setMIssuer("");
+    setMTaxId("");
     setMCoupon(NaN);
     setMIssue("");
     setMTermY(NaN);
@@ -329,6 +356,9 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     }
     setSaving(true);
     setError(null);
+    // Normalize the payer tax id → 13 digits or null (never a partial string).
+    const taxIdDigits = mTaxId.replace(/\D/g, "");
+    const payerTaxId = taxIdDigits.length === 13 ? taxIdDigits : null;
     try {
       // The signed-in user's public.users id is carried in the session JWT's
       // app_metadata (set by the line-auth function). RLS keys on it.
@@ -357,6 +387,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             issue_date: cand.issueDate,
             coupon_freq: freq,
             rating: rating || null,
+            payer_tax_id: payerTaxId,
           })
           .eq("id", editHolding.bondId);
         if (bondErr) throw bondErr;
@@ -403,12 +434,23 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             issue_date: cand.issueDate,
             coupon_freq: freq,
             rating: rating || null,
+            payer_tax_id: payerTaxId,
           })
           .select("id")
           .single();
         if (bondErr) throw bondErr;
         bond = inserted;
       }
+
+      // Block adding a bond that's already in this user's portfolio (same
+      // symbol → same shared bond row → dup holding).
+      const { data: existing } = await supabase
+        .from("holdings")
+        .select("id")
+        .eq("user_id", publicUserId)
+        .eq("bond_id", bond!.id)
+        .limit(1);
+      if (existing && existing.length) throw new Error(t("err_duplicate_bond", { symbol: cand.symbol }));
 
       const { data: holding, error: holdErr } = await supabase
         .from("holdings")
@@ -447,6 +489,71 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     }
   };
 
+  // Live preview (desktop sidebar) — reflects the selected bond or the manual
+  // fields as they're typed.
+  const pvSymbol = selected?.symbol || mSymbol;
+  const pvCompany = selected ? issuerName(selected.symbol, selected.issuer) : mIssuer;
+  const pvCoupon = selected?.couponRate ?? (Number.isFinite(mCoupon) ? mCoupon : null);
+  const pvMaturity =
+    selected?.maturityDate ??
+    (() => {
+      if (!mIssue) return null;
+      const totalM = (Number.isFinite(mTermY) ? mTermY * 12 : 0) + (Number.isFinite(mTermM) ? mTermM : 0);
+      if (!totalM) return null;
+      const d = new Date(mIssue);
+      d.setMonth(d.getMonth() + totalM);
+      return d.toISOString().slice(0, 10);
+    })();
+  const pvAnnualInterest = Number.isFinite(amount) && pvCoupon != null ? amount * (pvCoupon / 100) : null;
+  const pvWht = pvAnnualInterest != null ? pvAnnualInterest * 0.15 : null;
+  const pvFmt = (n: number) => new Intl.NumberFormat("th-TH", { maximumFractionDigits: 2 }).format(n);
+
+  const preview = (
+    <aside className="mt-4 hidden w-80 shrink-0 flex-col gap-4 rounded-3xl border-[0.5px] border-[#d9d9d9] bg-[#F6F4F1] p-5 lg:flex">
+      <div className="flex items-center gap-3">
+        {pvSymbol ? (
+          <IssuerLogo symbol={pvSymbol} name={pvCompany || pvSymbol} size={48} />
+        ) : (
+          <div className="size-12 shrink-0 rounded-full bg-black/5" />
+        )}
+        <div className="min-w-0">
+          <p className="font-nunito text-lg font-bold text-[#181D20]">{pvSymbol || "—"}</p>
+          <p className="truncate text-xs text-black/60">{pvCompany || t("company_name")}</p>
+        </div>
+      </div>
+      <div className="h-px bg-black/10" />
+      <dl className="flex flex-col gap-2.5 text-sm">
+        {[
+          [t("coupon_word"), pvCoupon != null ? `${pvCoupon}% ${t("per_year")}` : "—"],
+          [t("invested_amount"), Number.isFinite(amount) ? `฿${pvFmt(amount)}` : "—"],
+          [t("pays_interest"), t(FREQ_KEY[freq as 1 | 2 | 4 | 12] ?? "freq_semi")],
+          [t("maturity"), pvMaturity ? fmtThaiDate(pvMaturity) : "—"],
+          [t("payer_tax_id_label"), mTaxId ? mTaxId : "—"],
+        ].map(([k, v]) => (
+          <div key={k} className="flex items-start justify-between gap-3">
+            <dt className="shrink-0 text-black/50">{k}</dt>
+            <dd className="text-right font-nunito font-medium text-[#181D20]">{v}</dd>
+          </div>
+        ))}
+      </dl>
+      {pvAnnualInterest != null && (
+        <>
+          <div className="h-px bg-black/10" />
+          <div className="flex flex-col gap-1.5 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-black/50">{t("interest_per_month")}</span>
+              <span className="font-nunito font-medium text-[#181D20]">฿{pvFmt(pvAnnualInterest / 12)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-black/50">{t("wht")} (15%)</span>
+              <span className="font-nunito font-medium text-[#2E8B57]">฿{pvFmt((pvWht ?? 0) / 12)}</span>
+            </div>
+          </div>
+        </>
+      )}
+    </aside>
+  );
+
   const body = (
     <>
         <div className="relative flex items-start justify-between">
@@ -462,9 +569,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
               ) : (
                 <>
                   <Breadcrumbs.Item onPress={handleClose}>{t("add_bond")}</Breadcrumbs.Item>
-                  <Breadcrumbs.Item onPress={() => { setSelected(null); setManual(false); setError(null); }}>{t("search")}</Breadcrumbs.Item>
-                  {selected && <Breadcrumbs.Item>{t("confirm")}</Breadcrumbs.Item>}
-                  {manual && <Breadcrumbs.Item>{t("manual_entry")}</Breadcrumbs.Item>}
+                  <Breadcrumbs.Item>{t("search")}</Breadcrumbs.Item>
                 </>
               )}
             </Breadcrumbs>
@@ -474,26 +579,25 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             {editing && (
               <p className="mt-1 font-nunito text-sm text-black/80">{mSymbol}</p>
             )}
-            {!editing && !selected && !manual && (
-              <p className="mt-1 text-sm text-black/80">
-                {t("sec_source")}
-              </p>
-            )}
             {manual && !editing && (
               <p className="mt-1 max-w-md text-sm text-black/80">
                 {t("manual_hint")}
               </p>
             )}
           </div>
-          {/* Add-bond art — same position + scale as the holdings card's
-              hover-settled cluster. */}
-          <div className="pointer-events-none absolute -top-8 right-6 z-0 h-36 w-60" aria-hidden>
-            <img src={bondEx2} alt="" className="absolute left-24 top-0 h-6 w-auto" />
-            <img src={bondEx1} alt="" className="absolute left-2 top-20 h-12 w-auto" />
-            <img src={addBondMain} alt="" className="absolute right-0 top-2 h-28 w-auto" />
-          </div>
+          {/* Add-bond art — search shows it inside the search card instead, so
+              only the manual/edit header keeps this cluster. */}
+          {manual && (
+            <div className="pointer-events-none absolute -top-8 right-6 z-0 h-36 w-60" aria-hidden>
+              <img src={bondEx2} alt="" className="absolute left-24 top-0 h-6 w-auto" />
+              <img src={bondEx1} alt="" className="absolute left-2 top-20 h-12 w-auto" />
+              <img src={addBondMain} alt="" className="absolute right-0 top-2 h-28 w-auto" />
+            </div>
+          )}
         </div>
 
+        <div className="flex min-h-0 flex-1 gap-6">
+        <div className="flex min-h-0 flex-1 flex-col">
         {!selected && manual && manualReview ? (
           <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-4">
             {/* Save = folder-head tab above the card, like every other page. */}
@@ -578,22 +682,29 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             </button>
             {/* Fields grouped under collapsible headings. */}
             <div className="min-h-0 flex-1 overflow-y-auto">
-              <Accordion
-                allowsMultipleExpanded
-                defaultExpandedKeys={["info", "yield", "term"]}
-              >
-                <Accordion.Item id="info">
-                  <Accordion.Heading>
-                    <Accordion.Trigger className="flex w-full items-center justify-between py-3 text-base font-medium text-[#181D20]">
-                      <span className="flex items-center gap-2">
-                        {t("bond_info")}
-                        {infoValid && <IconCheck size={18} className="text-[#3FA35B]" stroke={3} />}
-                      </span>
-                      <Accordion.Indicator><IconChevronDown size={18} /></Accordion.Indicator>
-                    </Accordion.Trigger>
-                  </Accordion.Heading>
-                  <Accordion.Panel>
-                    <Accordion.Body className="flex gap-3 pb-4">
+              <Tabs defaultSelectedKey="info" variant="secondary" className="flex flex-col gap-3">
+                <Tabs.ListContainer>
+                  <Tabs.List aria-label={t("bond_info")} className="gap-4">
+                    <Tabs.Tab id="info" className="flex items-center gap-1.5">
+                      {t("bond_info")}
+                      {infoValid && <IconCheck size={16} className="text-[#3FA35B]" stroke={3} />}
+                      <Tabs.Indicator />
+                    </Tabs.Tab>
+                    <Tabs.Tab id="yield" className="flex items-center gap-1.5">
+                      {t("yield_section")}
+                      {yieldValid && <IconCheck size={16} className="text-[#3FA35B]" stroke={3} />}
+                      <Tabs.Indicator />
+                    </Tabs.Tab>
+                    <Tabs.Tab id="term" className="flex items-center gap-1.5">
+                      {t("term")}
+                      {termValid && <IconCheck size={16} className="text-[#3FA35B]" stroke={3} />}
+                      <Tabs.Indicator />
+                    </Tabs.Tab>
+                  </Tabs.List>
+                </Tabs.ListContainer>
+                <Tabs.Panel id="info">
+                    <div className="flex flex-col gap-3 pb-4">
+                      <div className="flex gap-3">
                       <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
                         {t("symbol_field")} *
                         <Input
@@ -639,22 +750,24 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           </ListBox>
                         </ComboBox.Popover>
                       </ComboBox>
-                    </Accordion.Body>
-                  </Accordion.Panel>
-                </Accordion.Item>
+                      </div>
+                      {/* Payer 13-digit tax id — own row; also auto-filled from the
+                          50-ทวิ OCR, editable here. */}
+                      <label className="flex flex-col gap-1 text-sm font-medium text-black/60">
+                        {t("payer_tax_id_label")}
+                        <Input
+                          value={mTaxId}
+                          onChange={(e) => setMTaxId(e.target.value.replace(/\D/g, "").slice(0, 13))}
+                          inputMode="numeric"
+                          placeholder={t("payer_tax_id_ph")}
+                          className="font-nunito text-base font-medium sm:text-base"
+                        />
+                      </label>
+                    </div>
+                </Tabs.Panel>
 
-                <Accordion.Item id="yield">
-                  <Accordion.Heading>
-                    <Accordion.Trigger className="flex w-full items-center justify-between py-3 text-base font-medium text-[#181D20]">
-                      <span className="flex items-center gap-2">
-                        {t("yield_section")}
-                        {yieldValid && <IconCheck size={18} className="text-[#3FA35B]" stroke={3} />}
-                      </span>
-                      <Accordion.Indicator><IconChevronDown size={18} /></Accordion.Indicator>
-                    </Accordion.Trigger>
-                  </Accordion.Heading>
-                  <Accordion.Panel>
-                    <Accordion.Body className="flex flex-col gap-3 pb-4">
+                <Tabs.Panel id="yield">
+                    <div className="flex flex-col gap-3 pb-4">
                       <div className="flex gap-3">
                         <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
                           {t("coupon_label")}
@@ -713,22 +826,11 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           })}
                         </div>
                       </div>
-                    </Accordion.Body>
-                  </Accordion.Panel>
-                </Accordion.Item>
+                    </div>
+                </Tabs.Panel>
 
-                <Accordion.Item id="term">
-                  <Accordion.Heading>
-                    <Accordion.Trigger className="flex w-full items-center justify-between py-3 text-base font-medium text-[#181D20]">
-                      <span className="flex items-center gap-2">
-                        {t("term")}
-                        {termValid && <IconCheck size={18} className="text-[#3FA35B]" stroke={3} />}
-                      </span>
-                      <Accordion.Indicator><IconChevronDown size={18} /></Accordion.Indicator>
-                    </Accordion.Trigger>
-                  </Accordion.Heading>
-                  <Accordion.Panel>
-                    <Accordion.Body className="flex gap-3 pb-4">
+                <Tabs.Panel id="term">
+                    <div className="flex gap-3 pb-4">
                       <IssueDatePicker value={mIssue} onChange={setMIssue} />
                       <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
                         {t("term")}
@@ -764,10 +866,9 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           </NumberField>
                         </div>
                       </label>
-                    </Accordion.Body>
-                  </Accordion.Panel>
-                </Accordion.Item>
-              </Accordion>
+                    </div>
+                </Tabs.Panel>
+              </Tabs>
               {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
             </div>
             {/* Delete lives at the bottom of the details/edit card. */}
@@ -802,181 +903,198 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
               </div>
             )}
           </div>
-        ) : !selected ? (
-          // Search field + results together in one sub-card (like the holdings list).
-          <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-3">
-            <SearchField
-              value={term}
-              onChange={setTerm}
-              aria-label={t("search_bond")}
-            >
-              <SearchField.Group className="h-12">
-                <SearchField.SearchIcon />
-                <SearchField.Input
-                  autoFocus
-                  placeholder={t("search_hint")}
-                />
-                <SearchField.ClearButton />
-              </SearchField.Group>
-            </SearchField>
+        ) : (
+          <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4">
+            {/* Search panel — full width above the two columns (Figma 1104:3786). */}
+            <div className="relative shrink-0 overflow-hidden rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-6">
+              <div className="flex items-center gap-4">
+                <SearchField value={term} onChange={setTerm} aria-label={t("search_bond")} className="w-full max-w-[520px]">
+                  <SearchField.Group className="h-14 rounded-2xl border-[0.5px] border-black/10 bg-[#F0F2F5] px-4">
+                    <SearchField.SearchIcon />
+                    <SearchField.Input autoFocus placeholder={t("search_hint")} className="font-normal!" />
+                    <SearchField.ClearButton />
+                  </SearchField.Group>
+                </SearchField>
+                <button
+                  type="button"
+                  className="flex h-14 shrink-0 items-center justify-center rounded-2xl bg-brand-blue px-10 text-base font-medium text-white transition hover:bg-[#215688]"
+                >
+                  {t("search")}
+                </button>
+                {/* Illustration pinned to the card's right edge. */}
+                <div className="pointer-events-none relative ml-auto hidden h-24 w-52 shrink-0 lg:block" aria-hidden>
+                  <img src={bondEx2} alt="" className="absolute right-40 top-3 h-5 w-auto" />
+                  <img src={bondEx1} alt="" className="absolute right-36 top-12 h-8 w-auto" />
+                  <img src={addBondMain} alt="" className="absolute right-0 top-0 h-24 w-auto" />
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-black/80">{t("sec_source")}</p>
+            </div>
 
-            <div className="mt-3 min-h-0 flex-1 overflow-hidden">
-              <div
-                ref={resultsFade.ref}
-                onScroll={resultsFade.onScroll}
-                style={{ WebkitMaskImage: resultsFade.mask, maskImage: resultsFade.mask }}
-                className="h-full overflow-y-auto"
-              >
-                {/* Realtime empty state — shows the moment the local catalog has
-                    no match. */}
-                {term.trim().length >= 2 && results.length === 0 && (
-                  <div className="flex flex-col items-center gap-3 py-6 text-center">
-                    <img src={emptyBonds} alt="" aria-hidden className="h-28 w-auto opacity-90" />
-                    <p className="text-sm text-black/40">{t("no_match")} "{term}"</p>
-                    {/* Fallback for bonds not yet in the SEC feed. */}
+            {/* Results (left) + selected panel (right) */}
+            <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+              {/* LEFT — one card per result */}
+              <div className="flex min-h-0 flex-col gap-3">
+                <p className="shrink-0 text-base text-black">{t("search_results")}</p>
+                <div
+                  ref={resultsFade.ref}
+                  onScroll={resultsFade.onScroll}
+                  style={{ WebkitMaskImage: resultsFade.mask, maskImage: resultsFade.mask }}
+                  className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1"
+                >
+                  {term.trim().length >= 2 && results.length === 0 && (
+                    <div className="flex flex-col items-center gap-3 rounded-3xl bg-white p-8 text-center">
+                      <img src={emptyBonds} alt="" aria-hidden className="h-28 w-auto opacity-90" />
+                      <p className="text-sm text-black/40">{t("no_match")} "{term}"</p>
+                      <button
+                        onClick={() => { setManual(true); setMSymbol(term.trim().toUpperCase()); setError(null); }}
+                        className="mt-1 w-full rounded-2xl border border-dashed border-[#43507F]/40 px-3 py-3 text-sm font-medium text-[#43507F] transition-colors hover:bg-[#43507F]/5"
+                      >
+                        {t("add_own", { term: term.trim() })}
+                      </button>
+                    </div>
+                  )}
+                  {results.map((b) => {
+                    const owned = heldSymbols.has(b.symbol);
+                    const termStr = fmtTermThai(b);
+                    const rate = ratingFor(b.symbol);
+                    return (
+                      <div
+                        key={b.symbol}
+                        className={`flex shrink-0 flex-col gap-4 rounded-3xl bg-white p-6 transition ${owned ? "opacity-50" : ""}`}
+                      >
+                        <p className="font-nunito text-xl font-medium text-black">{b.symbol}</p>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-base text-black">{b.nameTh}</p>
+                            {rate && <p className="font-nunito text-base text-black/60">{rate}</p>}
+                          </div>
+                          <IssuerLogo symbol={b.symbol} name={issuerName(b.symbol, b.issuer)} size={64} className="!rounded-2xl" />
+                        </div>
+                        <div className="flex flex-col gap-2 text-base text-black">
+                          {b.couponRate != null && (
+                            <span className="flex items-center gap-2"><IconPercentage size={22} className="text-black/50" />{b.couponRate}% {t("per_year")}</span>
+                          )}
+                          {termStr && (
+                            <span className="flex items-center gap-2"><IconCalendar size={22} className="text-black/50" />{t("redeem_term")} {termStr}</span>
+                          )}
+                        </div>
+                        {owned ? (
+                          <p className="rounded-2xl bg-black/5 py-3.5 text-center text-base font-medium text-black/50">{t("owned_badge")}</p>
+                        ) : (
+                          <button
+                            onClick={() => { setSelected(b); setFreq(overrideFor(b.symbol)?.frequency ?? b.frequency ?? 2); setRating(ratingFor(b.symbol) ?? ""); }}
+                            className="flex h-14 w-full items-center justify-center rounded-2xl bg-brand-blue text-base font-medium text-white transition hover:bg-[#215688]"
+                          >
+                            {t("select")}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* RIGHT — white panel holding the selected bond + amount + add */}
+              <div className="min-h-0 overflow-y-auto rounded-3xl bg-white p-6">
+                {selected ? (
+                  <div className="flex flex-col gap-4">
+                    <div className="rounded-2xl border-[0.5px] border-black/10 p-6">
+                      <p className="font-nunito text-xl font-medium text-black">{selected.symbol}</p>
+                      <div className="mt-3 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-base text-black">{issuerName(selected.symbol, selected.issuer)}</p>
+                          <p className="font-nunito text-base text-black/60">{rating || t("no_credit_info")}</p>
+                        </div>
+                        <IssuerLogo symbol={selected.symbol} name={issuerName(selected.symbol, selected.issuer)} size={64} className="!rounded-2xl" />
+                      </div>
+                      <div className="mt-3 flex flex-col gap-2 text-base text-black">
+                        {selected.couponRate != null && (
+                          <span className="flex items-center gap-2"><IconPercentage size={22} className="text-black/50" />{selected.couponRate}% {t("per_year")}</span>
+                        )}
+                        {selected.maturityDate && (
+                          <span className="flex items-center gap-2"><IconCalendar size={22} className="text-black/50" />{t("maturity")} {fmtThaiDate(selected.maturityDate)}</span>
+                        )}
+                        <span className="text-black/60">{t("pays_interest")} {t(FREQ_KEY[freq as 1 | 2 | 4 | 12] ?? "freq_semi")}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <Label className="text-sm font-medium text-black/60">{t("investment_baht")}</Label>
+                      <div className="flex gap-2">
+                        {AMOUNT_PRESETS.map((v) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => setAmount(v)}
+                            className={`flex-1 whitespace-nowrap rounded-full border px-3 py-1 font-nunito text-xs transition-colors ${
+                              amount === v
+                                ? "border-[#43507F] bg-[#43507F]/10 font-bold text-[#43507F]"
+                                : "border-[#E7E7E7] text-black/60 hover:border-[#43507F]/40"
+                            }`}
+                          >
+                            {v.toLocaleString("th-TH")}
+                          </button>
+                        ))}
+                      </div>
+                      <NumberField
+                        value={amount}
+                        onChange={setAmount}
+                        minValue={MIN_FACE_VALUE}
+                        step={MIN_FACE_VALUE}
+                        formatOptions={{ useGrouping: true, maximumFractionDigits: 0 }}
+                        aria-label={t("investment_baht")}
+                      >
+                        <NumberField.Group>
+                          <NumberField.DecrementButton />
+                          <NumberField.Input placeholder={t("eg_amount")} className="text-center font-nunito text-base font-medium" />
+                          <NumberField.IncrementButton />
+                        </NumberField.Group>
+                      </NumberField>
+                    </div>
+
+                    {error && <p className="text-sm text-red-500">{error}</p>}
+
                     <button
-                      onClick={() => { setManual(true); setMSymbol(term.trim().toUpperCase()); setError(null); }}
-                      className="mt-1 w-full rounded-2xl border border-dashed border-[#43507F]/40 px-3 py-3 text-sm font-medium text-[#43507F] transition-colors hover:bg-[#43507F]/5"
+                      onClick={() => handleSave()}
+                      disabled={saving}
+                      className="flex h-14 w-full items-center justify-center rounded-2xl bg-brand-blue text-base font-medium text-white transition hover:bg-[#215688] disabled:opacity-60"
                     >
-                      {t("add_own", { term: term.trim() })}
+                      {saving ? t("saving") : t("add_to_portfolio")}
                     </button>
                   </div>
-                )}
-                <ul className="flex flex-col">
-                  {results.map((b, i) => (
-                    <li key={b.symbol}>
-                      <button
-                        onClick={() => {
-                          setSelected(b);
-                          // Frequency + rating are auto-derived, not user-entered.
-                          setFreq(overrideFor(b.symbol)?.frequency ?? b.frequency ?? 2);
-                          setRating(ratingFor(b.symbol) ?? "");
-                        }}
-                        className={`flex w-full items-center justify-between gap-3 py-3 text-left transition-colors hover:bg-[#43507F]/5 ${i < results.length - 1 ? "border-b-[0.5px] border-black/10" : ""}`}
-                      >
-                        <div className="flex min-w-0 items-center gap-3">
-                          <IssuerLogo symbol={b.symbol} name={issuerName(b.symbol, b.issuer)} size={44} />
-                          <div className="min-w-0">
-                            <p className="font-nunito text-base font-bold text-[#181D20]">{b.symbol}</p>
-                            <p className="truncate text-xs text-black/60">{b.nameTh}</p>
-                          </div>
-                        </div>
-                        <div className="shrink-0 text-right text-xs text-black/60">
-                          {b.couponRate != null && (
-                            <p className="font-nunito text-base font-bold text-[#43507F]">{b.couponRate}%</p>
-                          )}
-                          {b.maturityDate && <p>{t("maturity")} {fmtThaiDate(b.maturityDate)}</p>}
-                        </div>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="relative z-10 mt-4 flex flex-col gap-4 rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-4">
-            {/* Add = folder-head tab above the card, like every other page. */}
-            <button
-              onClick={() => handleSave()}
-              disabled={saving}
-              className="absolute bottom-full right-5 z-10 flex items-center gap-2 rounded-t-2xl border-[0.5px] border-b-0 border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7] disabled:opacity-60"
-            >
-              {saving ? t("saving") : t("add_to_portfolio")}
-              <span className="flex size-6 items-center justify-center rounded-full border-[1.5px] border-current text-ink">
-                <IconCheck size={14} stroke={2.5} />
-              </span>
-            </button>
-            <div className="rounded-2xl bg-[#F6F4F1] p-4">
-              <div className="flex items-start justify-between gap-2">
-                {/* Company profile: issuer logo + brand name */}
-                <div className="flex min-w-0 items-center gap-3">
-                  <IssuerLogo
-                    symbol={selected.symbol}
-                    name={issuerName(selected.symbol, selected.issuer)}
-                    size={44}
-                  />
-                  <div className="min-w-0">
-                    <p className="font-nunito text-base font-bold text-[#181D20]">
-                      {selected.symbol}
-                    </p>
-                    <p className="truncate text-xs text-black/60">
-                      {issuerName(selected.symbol, selected.issuer)}
-                    </p>
-                  </div>
-                </div>
-                {/* Rating auto-derived — read-only. Shown only when known; an
-                    unknown rating is not asserted as "unrated". */}
-                {rating ? (
-                  <span className="shrink-0 rounded-lg bg-[#43507F]/10 px-2 py-1 font-nunito text-xs font-bold text-[#43507F]">
-                    {rating}
-                  </span>
                 ) : (
-                  <span className="shrink-0 rounded-lg bg-black/5 px-2 py-1 text-xs text-black/40">
-                    {t("no_credit_info")}
-                  </span>
+                  <div className="flex h-full min-h-60 flex-col items-center justify-center p-8 text-center">
+                    <img src={emptyBonds} alt="" aria-hidden className="h-24 w-auto opacity-70" />
+                    <p className="mt-3 text-sm text-black/40">{t("no_selection")}</p>
+                  </div>
                 )}
               </div>
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-black/60">
-                {selected.couponRate != null && (
-                  <span>
-                    {t("coupon_word")} <b className="font-nunito">{selected.couponRate}%</b> {t("per_year")}
-                  </span>
-                )}
-                {/* Frequency auto-parsed from the SEC coupon text / master map. */}
-                <span>{t("pays_interest")} {t(FREQ_KEY[freq as 1 | 2 | 4 | 12] ?? "freq_semi")}</span>
-                {selected.maturityDate && <span>{t("maturity")} {selected.maturityDate}</span>}
-              </div>
             </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label className="text-sm font-medium text-black/60">{t("investment_baht")}</Label>
-
-              {/* Quick-pick presets */}
-              <div className="flex gap-2">
-                {AMOUNT_PRESETS.map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setAmount(v)}
-                    className={`flex-1 whitespace-nowrap rounded-full border px-3 py-1 font-nunito text-xs transition-colors ${
-                      amount === v
-                        ? "border-[#43507F] bg-[#43507F]/10 font-bold text-[#43507F]"
-                        : "border-[#E7E7E7] text-black/60 hover:border-[#43507F]/40"
-                    }`}
-                  >
-                    {v.toLocaleString("th-TH")}
-                  </button>
-                ))}
-              </div>
-
-              {/* Stepper — step 100,000, min 100,000 */}
-              <NumberField
-                value={amount}
-                onChange={setAmount}
-                minValue={MIN_FACE_VALUE}
-                step={MIN_FACE_VALUE}
-                formatOptions={{ useGrouping: true, maximumFractionDigits: 0 }}
-                aria-label={t("investment_baht")}
-              >
-                <NumberField.Group>
-                  <NumberField.DecrementButton />
-                  <NumberField.Input autoFocus placeholder={t("eg_amount")} className="text-center font-nunito text-base font-medium" />
-                  <NumberField.IncrementButton />
-                </NumberField.Group>
-              </NumberField>
-            </div>
-
-            {error && <p className="text-sm text-red-500">{error}</p>}
           </div>
         )}
+        </div>
+        {inline && manual && !manualReview && preview}
+        </div>
     </>
   );
 
-  // Inline mode: fill the host panel, no Modal chrome.
+  // Inline mode: fill the host panel, no Modal chrome. In the search state the
+  // panel stays transparent so its inner cards (search / results / selected)
+  // read as separate cards; other states sit on a single white card.
   if (inline) {
     if (!open) return null;
-    return <div className="relative flex h-full w-full flex-col">{body}</div>;
+    const searchState = !manual; // search/results/selected all render as separate cards
+    return (
+      <div
+        className={`relative flex h-full w-full flex-col ${searchState ? "" : "overflow-hidden rounded-3xl bg-white p-6"}`}
+      >
+        {!searchState && (
+          <img src={bondDec1} alt="" aria-hidden className="pointer-events-none absolute -right-2 -top-1 h-10 w-auto rotate-18" />
+        )}
+        {body}
+      </div>
+    );
   }
 
   return (

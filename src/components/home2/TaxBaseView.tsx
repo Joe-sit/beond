@@ -51,7 +51,7 @@ export default function TaxBaseView({ rate, wht, loading = false, onSaved }: { r
   };
 
   return (
-    <section className="relative mx-auto flex h-full min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-gradient-to-b from-white from-[28%] to-[#779BC6] p-10">
+    <section className="relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-3xl bg-gradient-to-b from-white from-[28%] to-[#779BC6] p-10">
       {/* three.js staircase + falling cash (physics) — cash lands on the top
           step whenever the bracket changes. */}
       {!loading && (

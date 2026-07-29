@@ -12,6 +12,9 @@ import lineIcon from "../assets/landing-line-icon.png";
 
 interface LoginPageProps {
   onLogin: () => void;
+  // Shown as a top banner when the user landed here because their session
+  // expired (vs. a fresh visit).
+  notice?: string;
 }
 
 // Toggles `.is-visible` on `.reveal` children once they scroll into view, so
@@ -41,7 +44,7 @@ function useScrollReveal() {
 
 // Desktop/marketing landing page (Figma node 239:441). The LINE button starts
 // the auth flow; the extension button is a Phase-4 placeholder.
-export default function LoginPage({ onLogin }: LoginPageProps) {
+export default function LoginPage({ onLogin, notice }: LoginPageProps) {
   const [loading, setLoading] = useState(false);
   const featureRef = useScrollReveal();
 
@@ -54,6 +57,11 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[#F6F4F1]">
+      {notice && (
+        <div className="sticky top-0 z-50 bg-[#F2C94C] px-4 py-2.5 text-center text-sm font-medium text-ink">
+          {notice}
+        </div>
+      )}
       {/* ── Hero ─────────────────────────────────────────────────────────── */}
       <section className="relative overflow-hidden bg-linear-to-b from-[#779BC6] to-[#F6F4F1] lg:min-h-176">
         {/* Cloud skyline drifting along the bottom of the gradient */}

@@ -29,19 +29,17 @@ export function levelIndex(value: number): number {
 export default function ProfileLevelModal({
   open,
   onClose,
-  currentIndex,
 }: {
   open: boolean;
   onClose: () => void;
-  currentIndex: number;
 }) {
   return (
     <Modal isOpen={open} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}>
       <ModalBackdrop isDismissable>
         <ModalContainer placement="center">
-          <ModalDialog className="flex w-full max-w-md flex-col rounded-3xl bg-white p-6">
+          <ModalDialog className="font-kanit flex w-full max-w-md flex-col rounded-3xl bg-white p-6">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-ink">ระดับนักสะสมบอนด์</h3>
+              <h3 className="text-lg font-medium text-ink">ระดับนักสะสมบอนด์</h3>
               <CloseButton onPress={onClose} aria-label="ปิด" />
             </div>
 
@@ -51,23 +49,15 @@ export default function ProfileLevelModal({
 
             <ul className="mt-4 flex flex-col gap-2">
               {LEVELS.map((lvl, i) => {
-                const active = i === currentIndex;
                 return (
                   <li
                     key={lvl.label}
-                    className={`flex items-center gap-3 rounded-2xl border p-3 ${
-                      active ? "border-brand bg-brand/5" : "border-line"
-                    }`}
+                    className="flex items-center gap-3 rounded-2xl border border-line p-3"
                   >
                     <img src={lvl.mascot} alt="" className="h-12 w-12 shrink-0 object-contain" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <p className="truncate font-bold text-ink">{lvl.label}</p>
-                        {active && (
-                          <span className="shrink-0 rounded-full bg-brand px-2 py-0.5 text-[11px] font-medium text-white">
-                            ระดับปัจจุบัน
-                          </span>
-                        )}
+                        <p className="truncate font-medium text-ink">{lvl.label}</p>
                       </div>
                       <p className="text-sm text-ink-soft">
                         LVL {i + 1} · {lvl.range}

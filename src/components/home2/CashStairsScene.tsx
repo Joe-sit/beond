@@ -186,7 +186,7 @@ export default function CashStairsScene({
   refundZone: (i: number) => boolean;
 }) {
   const [cfg, setCfg] = useState<Cfg>(DEFAULTS);
-  const tuneOn = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("stairtune");
+  const tuneOn = import.meta.env.DEV && typeof window !== "undefined" && new URLSearchParams(window.location.search).has("stairtune");
   const [drops, setDrops] = useState<Drop[]>([]);
   const dropId = useRef(0);
 

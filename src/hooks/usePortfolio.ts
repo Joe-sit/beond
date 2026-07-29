@@ -204,6 +204,7 @@ export interface HoldingDetail {
   issueDate: string | null;
   maturityDate: string | null;
   totalInstallments: number;
+  payerTaxId: string | null; // bonds.payer_tax_id — 13-digit payer id (e-filing)
 }
 
 interface HoldingDetailRow {
@@ -220,6 +221,7 @@ interface HoldingDetailRow {
     issue_date: string | null;
     maturity_date: string | null;
     total_installments: number;
+    payer_tax_id: string | null;
   } | null;
 }
 
@@ -228,20 +230,29 @@ interface HoldingDetailRow {
 export function useHoldings(): {
   holdings: HoldingDetail[];
   loading: boolean;
+  error: boolean;
   refetch: () => void;
 } {
   const [holdings, setHoldings] = useState<HoldingDetail[]>([]);
   const [loading, setLoading] = useState(supabaseEnabled);
+  const [error, setError] = useState(false);
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
+    setError(false);
     const { data, error } = await supabase
       .from("holdings")
       .select(
-        "id, bond_id, face_value, bonds(symbol, issuer, sector_id, rating, coupon_rate, coupon_freq, issue_date, maturity_date, total_installments)",
+        "id, bond_id, face_value, bonds(symbol, issuer, sector_id, rating, coupon_rate, coupon_freq, issue_date, maturity_date, total_installments, payer_tax_id)",
       )
       .order("id");
-    if (error) return;
+    // Surface the failure (don't leave the UI stuck on the skeleton, and don't
+    // render a real empty state as if the user genuinely has no holdings).
+    if (error) {
+      setError(true);
+      setLoading(false);
+      return;
+    }
     const rows = (data as unknown as HoldingDetailRow[])
       .filter((r) => r.bonds)
       .map((r) => ({
@@ -257,6 +268,7 @@ export function useHoldings(): {
         issueDate: r.bonds!.issue_date,
         maturityDate: r.bonds!.maturity_date,
         totalInstallments: r.bonds!.total_installments,
+        payerTaxId: r.bonds!.payer_tax_id,
       }));
     setHoldings(rows);
     setLoading(false);
@@ -268,7 +280,7 @@ export function useHoldings(): {
   useEffect(() => subscribePortfolio(load), [load]);
   useRealtimeRefetch("holdings", load);
 
-  return { holdings, loading, refetch: load };
+  return { holdings, loading, error, refetch: load };
 }
 
 // Twelve-month payout timeline (BE year). Real data only; live-refreshes on
@@ -568,12 +580,13 @@ export interface PortfolioStats {
   avgCoupon: number;
   avgRemainingYears: number;
   loading: boolean;
+  error: boolean;
 }
 
 export function usePortfolioStats(): PortfolioStats {
-  const { holdings, loading } = useHoldings();
+  const { holdings, loading, error } = useHoldings();
   const totalValue = holdings.reduce((s, h) => s + h.faceValue, 0);
-  if (!holdings.length) return { totalValue: 0, avgCoupon: 0, avgRemainingYears: 0, loading };
+  if (!holdings.length) return { totalValue: 0, avgCoupon: 0, avgRemainingYears: 0, loading, error };
 
   // Coupon = yield on invested capital, so it's face-value-weighted (a big
   // holding pulls the average toward its rate). Remaining years = a plain
@@ -593,5 +606,5 @@ export function usePortfolioStats(): PortfolioStats {
       ) / dated.length
     : 0;
 
-  return { totalValue, avgCoupon, avgRemainingYears, loading };
+  return { totalValue, avgCoupon, avgRemainingYears, loading, error };
 }
