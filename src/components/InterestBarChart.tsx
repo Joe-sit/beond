@@ -7,7 +7,9 @@ import { useLang } from "../lib/i18n";
 
 // Coupon interest is taxed 15% at source; the chart plots the net received.
 const WHT_RATE = 0.15;
-const net = (gross: number) => Math.round(gross * (1 - WHT_RATE));
+// Net = gross − WHT, matching the 50-ทวิ slip's own arithmetic: WHT is rounded
+// to satang (2 decimals) first, then subtracted. Keeps satang precision.
+const net = (gross: number) => gross - Math.round(gross * WHT_RATE * 100) / 100;
 
 function formatShortTHB(v: number): string {
   if (v === 0) return "0";

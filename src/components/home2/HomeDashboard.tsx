@@ -190,6 +190,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
 
   const delHolding = async (h: HoldingDetail) => {
     if (!supabase) { setEditHolding(null); return; }
+    // Remove the accumulated slips for this bond first. holding_id now cascades,
+    // but slips linked only by bond_id (holding_id null) won't — delete those
+    // explicitly. RLS scopes the delete to the caller's own rows.
+    await supabase.from("tax_documents").delete().eq("bond_id", h.bondId);
     const { error: delErr } = await supabase.from("holdings").delete().eq("id", h.id);
     if (delErr) { toast.danger(`${t("toast_remove_failed")}: ${delErr.message}`); return; }
     notifyPortfolioChanged();
@@ -560,6 +564,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
               inline
               open
               editHolding={editHolding}
+              slipCount={editHolding ? docs.filter((d) => d.symbol === editHolding.symbol && d.status === "confirmed").length : 0}
               onDelete={editHolding ? () => delHolding(editHolding) : undefined}
               onClose={() => { setAddBondOpen(false); setEditHolding(null); }}
               onAdded={() => refetchHoldings()}

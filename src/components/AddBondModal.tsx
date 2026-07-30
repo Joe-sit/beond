@@ -28,6 +28,7 @@ interface AddBondModalProps {
   initialTerm?: string; // prefill the search (e.g. a bond code OCR'd from a slip)
   inline?: boolean; // render the body in place (no Modal chrome), filling its parent
   editHolding?: HoldingDetail | null; // edit an existing holding instead of adding
+  slipCount?: number; // confirmed slips accumulated for this bond (delete warning)
   onDelete?: () => void | Promise<void>; // delete the holding being edited
 }
 
@@ -153,7 +154,7 @@ function IssueDatePicker({ value, onChange }: { value: string; onChange: (iso: s
   );
 }
 
-export default function AddBondModal({ open, onClose, onAdded, initialTerm, inline = false, editHolding = null, onDelete }: AddBondModalProps) {
+export default function AddBondModal({ open, onClose, onAdded, initialTerm, inline = false, editHolding = null, slipCount = 0, onDelete }: AddBondModalProps) {
   const t = useT();
   const editing = !!editHolding;
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -874,9 +875,34 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             {/* Delete lives at the bottom of the details/edit card. */}
             {editing && onDelete && (
               <div className="mt-2 shrink-0 border-t border-black/5 px-2 pt-3">
-                {confirmDelete ? (
-                  <div className="flex items-center gap-2">
-                    <span className="flex-1 text-sm text-black/70">ลบ {mSymbol} ออกจากพอร์ต?</span>
+                <button
+                  onClick={() => setConfirmDelete(true)}
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl border-[0.5px] border-[#D64545]/40 px-4 py-2.5 text-base font-medium text-[#D64545] transition hover:bg-[#FBEBEB]"
+                >
+                  <IconTrash size={18} />
+                  ลบหุ้นกู้นี้
+                </button>
+              </div>
+            )}
+
+          {/* Delete confirmation — heroUI modal. Warns that accumulated slips
+              go with the holding. */}
+          <Modal isOpen={confirmDelete} onOpenChange={(o) => { if (!o) setConfirmDelete(false); }}>
+            <ModalBackdrop isDismissable>
+              <ModalContainer placement="center">
+                <ModalDialog className="flex w-full max-w-sm flex-col gap-4 rounded-3xl bg-white p-6">
+                  <div className="flex flex-col gap-2">
+                    <div className="flex size-11 items-center justify-center rounded-full bg-[#FBEBEB] text-[#D64545]">
+                      <IconTrash size={22} />
+                    </div>
+                    <h3 className="text-lg font-medium text-ink">ลบ {mSymbol} ออกจากพอร์ต?</h3>
+                    <p className="text-sm text-black/60">
+                      {slipCount > 0
+                        ? `คุณสะสมสลิปจากหุ้นกู้นี้ไว้ ${slipCount} ใบ — ลบแล้วสลิปจะถูกลบไปด้วย`
+                        : "การลบนี้ไม่สามารถกู้คืนได้"}
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={() => setConfirmDelete(false)}
                       className="rounded-2xl border-[0.5px] border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7]"
@@ -884,24 +910,17 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                       ยกเลิก
                     </button>
                     <button
-                      onClick={() => onDelete()}
+                      onClick={() => onDelete?.()}
                       className="flex items-center gap-2 rounded-2xl bg-[#D64545] px-4 py-2.5 text-base font-medium text-white transition hover:bg-[#c23c3c]"
                     >
                       ยืนยันลบ
                       <IconTrash size={18} />
                     </button>
                   </div>
-                ) : (
-                  <button
-                    onClick={() => setConfirmDelete(true)}
-                    className="flex w-full items-center justify-center gap-2 rounded-2xl border-[0.5px] border-[#D64545]/40 px-4 py-2.5 text-base font-medium text-[#D64545] transition hover:bg-[#FBEBEB]"
-                  >
-                    <IconTrash size={18} />
-                    ลบหุ้นกู้นี้
-                  </button>
-                )}
-              </div>
-            )}
+                </ModalDialog>
+              </ModalContainer>
+            </ModalBackdrop>
+          </Modal>
           </div>
         ) : (
           <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4">

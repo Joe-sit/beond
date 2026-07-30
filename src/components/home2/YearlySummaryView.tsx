@@ -116,6 +116,7 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
           monthLabel: monthAbbr(m.month),
           collected: !!doc,
           wht: doc?.whtAmount ?? p.amount * 0.15,
+          gross: doc?.grossAmount ?? p.amount,
         });
       }
     }
@@ -131,6 +132,7 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
         monthLabel: d.payDate ? THAI_MONTHS_ABBR[new Date(d.payDate).getMonth()] : "",
         collected: true,
         wht: d.whtAmount ?? 0,
+        gross: d.grossAmount ?? 0,
       });
     }
     return out;
@@ -174,6 +176,15 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
     () => coins.reduce((s, c) => (c.collected ? s + c.wht : s), 0),
     [coins],
   );
+  // Total gross coupon interest (before WHT): "collected" = only confirmed
+  // slips; "all" = every expected coupon this year (collected or not).
+  const grossCollected = useMemo(
+    () => coins.reduce((s, c) => (c.collected ? s + c.gross : s), 0),
+    [coins],
+  );
+  const grossAll = useMemo(() => coins.reduce((s, c) => s + c.gross, 0), [coins]);
+  const [grossMode, setGrossMode] = useState<"collected" | "all">("collected");
+  const grossTotal = grossMode === "collected" ? grossCollected : grossAll;
 
   // Extension presence — gates the sync button.
   const [hasExt, setHasExt] = useState<boolean | null>(null);
@@ -281,6 +292,27 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
         <div className="flex items-center justify-between">
           <span className="text-sm text-ink/60">เก็บแล้ว</span>
           <span className="font-nunito text-lg font-medium text-ink">{collectedSlips}/{totalSlips} ใบ</span>
+        </div>
+        <div className="h-px bg-black/10" />
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm leading-snug text-ink/60">รายได้ดอกเบี้ย<br />(ก่อนหักภาษี)</span>
+            {/* Toggle: collected slips vs every expected coupon this year. */}
+            <div className="flex shrink-0 rounded-full bg-black/5 p-0.5 text-xs">
+              {(["collected", "all"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setGrossMode(m)}
+                  className={`cursor-pointer rounded-full px-2.5 py-1 font-medium transition ${
+                    grossMode === m ? "bg-white text-ink shadow-sm" : "text-ink/50 hover:text-ink/80"
+                  }`}
+                >
+                  {m === "collected" ? "สะสมได้" : "ทั้งปี"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <span className="text-right font-nunito text-lg font-medium text-ink">฿{fmtTHB(grossTotal)}</span>
         </div>
         <div className="h-px bg-black/10" />
         <div className="flex items-end justify-between">

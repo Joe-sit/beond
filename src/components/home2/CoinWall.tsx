@@ -8,6 +8,7 @@ export interface CoinItem {
   monthLabel: string; // short Thai month of the payout (e.g. "ม.ค.")
   collected: boolean; // has a confirmed slip matched to this payout
   wht: number; // tax credit the coin is worth
+  gross: number; // gross coupon interest before WHT
 }
 
 const fmtTHB = (n: number) =>
