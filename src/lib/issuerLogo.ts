@@ -1,5 +1,6 @@
 // Company logo helpers using SET's public direct-link endpoint.
 import { DISCOVERED_DOMAINS } from "../data/issuerDomains";
+import { catalogIssuer } from "./secApi";
 
 // Bond symbols are ISSUER_TICKER + numbers + optional series letters:
 //   BRI267A -> BRI, SIRI288B -> SIRI, CPALL266A -> CPALL.
@@ -110,10 +111,16 @@ const ISSUER_NAMES: Record<string, string> = {
 // Resolve a clean, consistent issuer name: known ticker → curated name;
 // otherwise strip Thai legal prefixes/suffixes from the raw name.
 export function issuerName(symbol: string, fallback = ""): string {
+  // The SEC catalog is the source of truth for the full registered name (e.g.
+  // "บริษัท บีทีเอส กรุ๊ป โฮลดิ้งส์ จำกัด (มหาชน)"), so a stale/short issuer
+  // string saved on an old bond row still displays consistently. Fall back to
+  // the passed name, then the curated short map / ticker.
+  const cat = catalogIssuer(symbol);
+  if (cat) return cat;
+  const full = (fallback ?? "").trim();
+  if (full) return full;
   const ticker = issuerTicker(symbol);
-  if (ISSUER_NAMES[ticker]) return ISSUER_NAMES[ticker];
-  const cleaned = cleanCompanyName(fallback);
-  return cleaned || fallback || ticker;
+  return ISSUER_NAMES[ticker] || ticker;
 }
 
 // Strip Thai legal wrappers so "บริษัท บีทีเอส กรุ๊ป โฮลดิงส์ จำกัด (มหาชน)"

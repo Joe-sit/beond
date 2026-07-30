@@ -205,6 +205,8 @@ export interface HoldingDetail {
   maturityDate: string | null;
   totalInstallments: number;
   payerTaxId: string | null; // bonds.payer_tax_id — 13-digit payer id (e-filing)
+  payerTaxIdVerified: boolean; // true once DBD confirmed the id belongs to the issuer
+  payerVerifiedName: string | null; // official juristic name DBD returned
 }
 
 interface HoldingDetailRow {
@@ -222,6 +224,8 @@ interface HoldingDetailRow {
     maturity_date: string | null;
     total_installments: number;
     payer_tax_id: string | null;
+    payer_tax_id_verified: boolean | null;
+    payer_verified_name: string | null;
   } | null;
 }
 
@@ -243,7 +247,7 @@ export function useHoldings(): {
     const { data, error } = await supabase
       .from("holdings")
       .select(
-        "id, bond_id, face_value, bonds(symbol, issuer, sector_id, rating, coupon_rate, coupon_freq, issue_date, maturity_date, total_installments, payer_tax_id)",
+        "id, bond_id, face_value, bonds(symbol, issuer, sector_id, rating, coupon_rate, coupon_freq, issue_date, maturity_date, total_installments, payer_tax_id, payer_tax_id_verified, payer_verified_name)",
       )
       .order("id");
     // Surface the failure (don't leave the UI stuck on the skeleton, and don't
@@ -269,6 +273,8 @@ export function useHoldings(): {
         maturityDate: r.bonds!.maturity_date,
         totalInstallments: r.bonds!.total_installments,
         payerTaxId: r.bonds!.payer_tax_id,
+        payerTaxIdVerified: r.bonds!.payer_tax_id_verified ?? false,
+        payerVerifiedName: r.bonds!.payer_verified_name,
       }));
     setHoldings(rows);
     setLoading(false);

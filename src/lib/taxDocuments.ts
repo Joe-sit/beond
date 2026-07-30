@@ -1,6 +1,7 @@
 import { supabase, supabaseEnabled } from "./supabase";
 import { notifyPortfolioChanged } from "../hooks/usePortfolio";
-import { mockExtract, type SlipFields } from "./scanTypes";
+import { type SlipFields } from "./scanTypes";
+import { verifyTaxId } from "./verifyTaxId";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 
@@ -14,11 +15,12 @@ function toBase64(blob: Blob): Promise<string> {
   });
 }
 
-// OCR a slip image → structured fields. Real path calls the ocr-extract edge fn
-// with the user's session token; mock mode returns sample fields so the flow is
-// testable without a backend.
+// OCR a slip image → structured fields via the ocr-extract edge fn (real data
+// only). No backend configured → fail loudly; never fabricate slip fields.
 export async function extractSlip(image: Blob): Promise<SlipFields> {
-  if (!supabaseEnabled || !supabase || !SUPABASE_URL) return mockExtract(image);
+  if (!supabaseEnabled || !supabase || !SUPABASE_URL) {
+    throw new Error("ระบบ OCR ยังไม่พร้อมใช้งาน (ไม่ได้ตั้งค่า backend)");
+  }
 
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -45,9 +47,7 @@ export interface SaveResult {
 // equal the caller's public_user_id (from the session JWT app_metadata).
 export async function saveTaxDocument(fields: SlipFields): Promise<SaveResult> {
   if (!supabaseEnabled || !supabase) {
-    // Mock mode: pretend success so the UI flow completes in local dev.
-    notifyPortfolioChanged();
-    return { ok: true };
+    return { ok: false, error: "ระบบยังไม่พร้อมใช้งาน (ไม่ได้ตั้งค่า backend)" };
   }
 
   const { data: sess } = await supabase.auth.getSession();
@@ -97,10 +97,20 @@ async function resolveBondId(symbol: string | null): Promise<string | null> {
 // the bond code and a tax id are present.
 async function bindBondPayerTaxId(symbol: string | null, taxId: string | null): Promise<void> {
   if (!supabase || !symbol || !taxId) return;
-  await supabase
+  const sym = symbol.toUpperCase();
+  // Store the raw OCR value on this bond as UNVERIFIED — it's what the slip said,
+  // but not yet trusted. Only overwrite if the bond has no verified id (a verified
+  // id outranks a fresh scan). Then try a DBD verification, which — on a match —
+  // upgrades it to verified and propagates issuer-wide. A wrong number never
+  // spreads, because only DBD-verified ids propagate.
+  const { data: bond } = await supabase
     .from("bonds")
-    .update({ payer_tax_id: taxId })
-    .eq("symbol", symbol.toUpperCase());
+    .update({ payer_tax_id: taxId, payer_tax_id_verified: false })
+    .eq("symbol", sym)
+    .eq("payer_tax_id_verified", false)
+    .select("issuer")
+    .maybeSingle();
+  if (bond?.issuer) await verifyTaxId(taxId, bond.issuer as string, sym);
 }
 
 // The editable columns of a tax document. `bond_symbol` is resolved to a

@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useAnimationControls } from "motion/react";
-import { IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconInfoCircle, IconCheck, IconCircleDotted, IconRestore, IconLogout, IconSettings, IconPlus, IconHome, IconReportAnalytics, IconPuzzle, IconReceiptTax } from "@tabler/icons-react";
+import { IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconInfoCircle, IconCheck, IconCircleDotted, IconRestore, IconLogout, IconSettings, IconPlus, IconHome, IconReportAnalytics, IconPuzzle, IconReceiptTax, IconShieldLock } from "@tabler/icons-react";
 import { toast, Toast } from "@heroui/react";
 import type { AuthProfile } from "../../lib/auth";
+import { useIsAdmin } from "../../lib/adminAccess";
+import { ensureCatalog } from "../../lib/secApi";
 import {
   usePortfolioStats,
   useHoldings,
@@ -127,6 +129,10 @@ function popStyle(on: boolean, delay: number): React.CSSProperties {
 export default function HomeDashboard({ profile, onLogout }: { profile: AuthProfile; onLogout?: () => void }) {
   const t = useT();
   const lang = useLang();
+  const isAdmin = useIsAdmin();
+  // Load the SEC catalog so issuer names resolve to their full registered form
+  // (self-heals stale issuer strings on older bond rows).
+  useEffect(() => { ensureCatalog(); }, []);
   const { totalValue, avgCoupon, avgRemainingYears, loading } = usePortfolioStats();
   const { holdings, error: holdingsError, refetch: refetchHoldings } = useHoldings();
   const { months } = useTimeline();
@@ -508,6 +514,17 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             <IconReportAnalytics size={20} stroke={1.75} />
             {t("nav_annual")}
           </button>
+          {/* Admin — only shown to allow-listed admins; the /admin page + its
+              endpoints re-check server-side. */}
+          {isAdmin && (
+            <a
+              href="/admin"
+              className="flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium text-ink/60 transition hover:bg-black/5 hover:text-ink"
+            >
+              <IconShieldLock size={20} stroke={1.75} />
+              Admin
+            </a>
+          )}
         </nav>
 
         {/* Bottom group — language switch + download extension + settings. */}

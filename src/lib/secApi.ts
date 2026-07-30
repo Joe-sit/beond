@@ -72,19 +72,34 @@ function isActive(c: BondCandidate): boolean {
 let catalog: BondCandidate[] | null = null;
 let catalogPromise: Promise<void> | null = null;
 
+// Admin-uploaded snapshot in Supabase Storage (refreshed from the dashboard);
+// falls back to the build-time bundle. Loading the Storage copy first means an
+// admin import goes live without a redeploy.
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const CATALOG_SOURCES = [
+  SUPABASE_URL ? `${SUPABASE_URL}/storage/v1/object/public/catalog/bond-catalog.json` : null,
+  "/bond-catalog.json",
+].filter((u): u is string => !!u);
+
 export function ensureCatalog(): void {
   if (catalog || catalogPromise) return;
-  catalogPromise = fetch("/bond-catalog.json")
-    .then((res) => (res.ok ? res.json() : null))
-    .then((body: { items?: BondCandidate[] } | null) => {
-      if (body?.items?.length) catalog = body.items.filter(isActive);
-    })
-    .catch(() => {
-      /* no snapshot — remote search still works */
-    })
-    .finally(() => {
-      catalogPromise = null;
-    });
+  catalogPromise = (async () => {
+    for (const src of CATALOG_SOURCES) {
+      try {
+        const res = await fetch(src, { cache: "no-cache" });
+        if (!res.ok) continue;
+        const body = (await res.json()) as { items?: BondCandidate[] } | null;
+        if (body?.items?.length) {
+          catalog = body.items.filter(isActive);
+          return;
+        }
+      } catch {
+        /* try the next source */
+      }
+    }
+  })().finally(() => {
+    catalogPromise = null;
+  });
 }
 
 // ── Issuer suggestions (for manual entry) ──────────────────────────────────
@@ -93,8 +108,18 @@ export function ensureCatalog(): void {
 const symbolPrefix = (s: string) => (s.match(/^[A-Za-z]+/)?.[0] ?? "").toUpperCase();
 
 // Unique issuer names from the loaded catalog, for an autocomplete datalist.
+// The authoritative full issuer name for a symbol, from the SEC catalog. Lets
+// display self-heal stale/short issuer strings saved on older bond rows.
+export function catalogIssuer(symbol: string): string | null {
+  if (!catalog || !symbol) return null;
+  const s = symbol.toUpperCase();
+  return catalog.find((c) => c.symbol.toUpperCase() === s)?.issuer ?? null;
+}
+
 export function issuerNames(): string[] {
   if (!catalog) return [];
+  // Full registered names verbatim — same string issuerName() shows elsewhere,
+  // so the dropdown options match search / list / summary exactly.
   return [...new Set(catalog.map((c) => c.issuer).filter((x) => x && x !== "-"))].sort();
 }
 
@@ -151,7 +176,8 @@ function searchCatalog(term: string): BondCandidate[] {
     .sort(
       (a, b) =>
         a.score - b.score ||
-        (a.c.maturityDate ?? "9999").localeCompare(b.c.maturityDate ?? "9999"),
+        // Newest issued first (issueDate desc) within the same relevance tier.
+        (b.c.issueDate ?? "").localeCompare(a.c.issueDate ?? ""),
     )
     .map((s) => s.c);
 }

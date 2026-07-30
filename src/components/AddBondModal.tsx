@@ -7,19 +7,29 @@ import { Group, DateInput, DateSegment, Dialog, I18nProvider } from "react-aria-
 import { parseDate, toCalendar, GregorianCalendar, type DateValue } from "@internationalized/date";
 import { ensureCatalog, searchLocal, issuerNames, issuerForSymbol, symbolForIssuer, type BondCandidate } from "../lib/secApi";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
+import { verifyTaxId, lookupTaxIdName, companyNamesMatch } from "../lib/verifyTaxId";
 import { overrideFor } from "../data/couponOverrides";
 import { ratingFor } from "../data/bondRatings";
 import { notifyPortfolioChanged, useHoldings, type HoldingDetail } from "../hooks/usePortfolio";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import IssuerLogo from "./IssuerLogo";
 import { issuerName } from "../lib/issuerLogo";
-import { IconCheck, IconTrash, IconCalendar, IconPercentage } from "@tabler/icons-react";
+import { IconCheck, IconTrash, IconCalendar, IconPercentage, IconAlertTriangle, IconX } from "@tabler/icons-react";
 import emptyBonds from "../assets/empty-bonds.svg";
 import addBondMain from "../assets/add-bond-main.png";
 import bondDec1 from "../assets/bond-dec-1.png";
 import bondEx1 from "../assets/bond-ex-1.png";
 import bondEx2 from "../assets/bond-ex-2.png";
 import { useT } from "../lib/i18n";
+
+// A bond queued in the add-cart, with the user's chosen face value + coupon
+// frequency / rating snapshot for that bond.
+interface CartItem {
+  cand: BondCandidate;
+  amount: number;
+  freq: number;
+  rating: string;
+}
 
 interface AddBondModalProps {
   open: boolean;
@@ -161,10 +171,24 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   const [manualReview, setManualReview] = useState(false); // summary step before saving a manual entry
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<BondCandidate[]>([]);
+  const [sortDir, setSortDir] = useState<"new" | "old">("new"); // issue-date order
+  const sortedResults = useMemo(
+    () =>
+      [...results].sort((a, b) =>
+        sortDir === "new"
+          ? (b.issueDate ?? "").localeCompare(a.issueDate ?? "")
+          : (a.issueDate ?? "").localeCompare(b.issueDate ?? ""),
+      ),
+    [results, sortDir],
+  );
   const [selected, setSelected] = useState<BondCandidate | null>(null);
   const [amount, setAmount] = useState<number>(NaN);
   const [rating, setRating] = useState(""); // credit rating; "" → nonRate
   const [freq, setFreq] = useState(2); // coupon payments per year (SEC omits this)
+  // Cart (SEC multi-add): bonds queued from the results list, each with its own
+  // face value, added to the portfolio together via saveCart().
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const inCart = (sym: string) => cart.some((it) => it.cand.symbol === sym);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -183,6 +207,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   const [mSymbol, setMSymbol] = useState("");
   const [mIssuer, setMIssuer] = useState("");
   const [mTaxId, setMTaxId] = useState(""); // payer 13-digit tax id (bonds.payer_tax_id)
+  const [taxIdUnlocked, setTaxIdUnlocked] = useState(false); // allow editing a DBD-verified id
   const [mCoupon, setMCoupon] = useState<number>(NaN);
   const [mIssue, setMIssue] = useState("");
   const [mTermY, setMTermY] = useState<number>(NaN); // bond term — years
@@ -205,6 +230,46 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     const t = setTimeout(() => setIssuerQuery(mIssuer.trim().toLowerCase()), 200);
     return () => clearTimeout(t);
   }, [mIssuer]);
+
+  // Live DBD check as the user types the 13-digit id — no write, just feedback.
+  // `checking` while in-flight; `liveName` = official name DBD returned (null =
+  // not found), or undefined when the field isn't a full 13 digits.
+  const [liveName, setLiveName] = useState<string | null | undefined>(undefined);
+  const [checkingTax, setCheckingTax] = useState(false);
+  useEffect(() => {
+    const digits = mTaxId.replace(/\D/g, "");
+    if (digits.length !== 13) { setLiveName(undefined); setCheckingTax(false); return; }
+    let alive = true;
+    setCheckingTax(true);
+    const timer = setTimeout(async () => {
+      const name = await lookupTaxIdName(digits);
+      if (alive) { setLiveName(name); setCheckingTax(false); }
+    }, 400);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [mTaxId]);
+  const liveMatch = liveName ? companyNamesMatch(liveName, mIssuer) : false;
+
+  // Prefill the payer tax id from a sibling bond of the same issuer that already
+  // has one (self-populated from earlier slips). Only fills a blank field, never
+  // overrides what the user typed. Reacts to the debounced issuer query.
+  useEffect(() => {
+    if (!supabase || editing || mTaxId.trim() !== "") return;
+    const issuer = mIssuer.trim();
+    if (issuer.length < 2) return;
+    let alive = true;
+    supabase
+      .from("bonds")
+      .select("payer_tax_id")
+      .eq("issuer", issuer)
+      .not("payer_tax_id", "is", null)
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (alive && data?.payer_tax_id && mTaxId.trim() === "") setMTaxId(data.payer_tax_id as string);
+      });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [issuerQuery, editing]);
 
   // Credit rating for the manual entry — from the symbol prefix, or, when the
   // symbol doesn't resolve, from the chosen company's other bonds. Reactive so
@@ -249,7 +314,8 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     const h = editHolding;
     setManual(true);
     setMSymbol(h.symbol);
-    setMIssuer(h.issuer);
+    setTaxIdUnlocked(false);
+    setMIssuer(issuerName(h.symbol, h.issuer));
     setMTaxId(h.payerTaxId ?? "");
     setMCoupon(h.couponRate);
     setAmount(h.faceValue);
@@ -269,14 +335,15 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   // keystroke. No remote round-trip — bonds too new for the snapshot are added
   // via manual entry, and the catalog is refreshed daily.
   useEffect(() => {
-    if (!open || selected) return;
+    if (!open) return;
     setResults(term.trim().length < 2 ? [] : searchLocal(term));
-  }, [term, open, selected]);
+  }, [term, open]);
 
   const reset = () => {
     setTerm("");
     setResults([]);
     setSelected(null);
+    setCart([]);
     setAmount(NaN);
     setRating("");
     setFreq(2);
@@ -341,8 +408,101 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     if (c) handleSave(c);
   };
 
-  // `cand` defaults to the selected bond (SEC flow); the manual flow passes its
-  // freshly-built candidate so it can save without a separate confirm step.
+  // Verify a saved payer tax id against DBD and surface the result. Only a
+  // 13-digit id is checked; a match upgrades the shared catalog to verified.
+  const verifyAndToast = async (taxId: string | null, issuer: string, symbol: string) => {
+    if (!taxId || taxId.length !== 13) return;
+    const res = await verifyTaxId(taxId, issuer, symbol);
+    if (res.verified) toast.success(`ยืนยันเลขผู้จ่าย: ${res.officialName ?? ""}`);
+    else if (res.officialName) toast.danger(`เลขนี้เป็นของ "${res.officialName}" ไม่ตรงกับผู้ออก — โปรดตรวจสอบ`);
+    else toast.danger("ยืนยันกับ DBD ไม่ได้ — บันทึกแบบยังไม่ยืนยัน");
+  };
+
+  // Core: insert one bond holding (+ its payout schedule) for the given user.
+  // Throws on any failure; shared by the manual/edit single-save flow and the
+  // cart (multi-add) flow so DB logic lives in one place.
+  const insertHolding = async (
+    cand: BondCandidate,
+    faceValue: number,
+    freqV: number,
+    ratingV: string,
+    payerTaxId: string | null,
+    publicUserId: string,
+  ) => {
+    if (!supabase) return;
+    const schedule = deriveCouponSchedule({
+      issueDate: cand.issueDate,
+      maturityDate: cand.maturityDate,
+      termYears: cand.termYears,
+      frequency: freqV, // user-picked; SEC omits payment frequency
+      couponRate: cand.couponRate,
+      faceValue,
+    });
+
+    let { data: bond } = await supabase
+      .from("bonds")
+      .select("id")
+      .eq("symbol", cand.symbol)
+      .maybeSingle();
+
+    if (!bond) {
+      const { data: inserted, error: bondErr } = await supabase
+        .from("bonds")
+        .insert({
+          symbol: cand.symbol,
+          issuer: cand.issuer,
+          sector_id: FALLBACK_SECTOR_ID,
+          coupon_rate: cand.couponRate ?? 0,
+          total_installments:
+            schedule.length ||
+            (cand.termYears ? Math.max(1, Math.round(cand.termYears * 2)) : 4),
+          maturity_date: cand.maturityDate,
+          issue_date: cand.issueDate,
+          coupon_freq: freqV,
+          rating: ratingV || null,
+          payer_tax_id: payerTaxId,
+        })
+        .select("id")
+        .single();
+      if (bondErr) throw bondErr;
+      bond = inserted;
+    }
+
+    // Block adding a bond that's already in this user's portfolio (same
+    // symbol → same shared bond row → dup holding).
+    const { data: existing } = await supabase
+      .from("holdings")
+      .select("id")
+      .eq("user_id", publicUserId)
+      .eq("bond_id", bond!.id)
+      .limit(1);
+    if (existing && existing.length) throw new Error(t("err_duplicate_bond", { symbol: cand.symbol }));
+
+    const { data: holding, error: holdErr } = await supabase
+      .from("holdings")
+      .insert({ user_id: publicUserId, bond_id: bond!.id, face_value: faceValue })
+      .select("id")
+      .single();
+    if (holdErr) throw holdErr;
+
+    // Seed this holding's payout timeline from the derived schedule.
+    if (holding && schedule.length) {
+      const { error: payErr } = await supabase.from("payouts").insert(
+        schedule.map((p) => ({
+          holding_id: holding.id,
+          installment: p.installment,
+          amount: p.amount,
+          payout_date: p.date,
+        })),
+      );
+      if (payErr) throw payErr;
+    }
+
+    await verifyAndToast(payerTaxId, cand.issuer, cand.symbol);
+  };
+
+  // Single save — manual entry and edit mode. `cand` defaults to the manual
+  // candidate flow; the SEC multi-add flow uses `saveCart` instead.
   const handleSave = async (cand: BondCandidate | null = selected) => {
     if (!cand || saving) return;
     const faceValue = amount;
@@ -361,24 +521,20 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     const taxIdDigits = mTaxId.replace(/\D/g, "");
     const payerTaxId = taxIdDigits.length === 13 ? taxIdDigits : null;
     try {
-      // The signed-in user's public.users id is carried in the session JWT's
-      // app_metadata (set by the line-auth function). RLS keys on it.
       const { data: authData } = await supabase.auth.getUser();
       const publicUserId = authData.user?.app_metadata?.public_user_id as string | undefined;
       if (!publicUserId) throw new Error(t("err_no_user"));
 
-      // Real coupon schedule derived from the bond's attributes.
-      const schedule = deriveCouponSchedule({
-        issueDate: cand.issueDate,
-        maturityDate: cand.maturityDate,
-        termYears: cand.termYears,
-        frequency: freq, // user-picked; SEC omits payment frequency
-        couponRate: cand.couponRate,
-        faceValue,
-      });
-
       // Edit mode: update the existing bond + holding, regenerate payouts.
       if (editHolding) {
+        const schedule = deriveCouponSchedule({
+          issueDate: cand.issueDate,
+          maturityDate: cand.maturityDate,
+          termYears: cand.termYears,
+          frequency: freq,
+          couponRate: cand.couponRate,
+          faceValue,
+        });
         const { error: bondErr } = await supabase
           .from("bonds")
           .update({
@@ -389,6 +545,8 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             coupon_freq: freq,
             rating: rating || null,
             payer_tax_id: payerTaxId,
+            payer_tax_id_verified: false,
+            payer_verified_name: null,
           })
           .eq("id", editHolding.bondId);
         if (bondErr) throw bondErr;
@@ -407,6 +565,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
           );
           if (payErr) throw payErr;
         }
+        await verifyAndToast(payerTaxId, cand.issuer, cand.symbol);
         notifyPortfolioChanged();
         toast.success(t("toast_updated", { symbol: cand.symbol }));
         handleClose();
@@ -414,73 +573,58 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
         return;
       }
 
-      let { data: bond } = await supabase
-        .from("bonds")
-        .select("id")
-        .eq("symbol", cand.symbol)
-        .maybeSingle();
-
-      if (!bond) {
-        const { data: inserted, error: bondErr } = await supabase
-          .from("bonds")
-          .insert({
-            symbol: cand.symbol,
-            issuer: cand.issuer,
-            sector_id: FALLBACK_SECTOR_ID,
-            coupon_rate: cand.couponRate ?? 0,
-            total_installments:
-              schedule.length ||
-              (cand.termYears ? Math.max(1, Math.round(cand.termYears * 2)) : 4),
-            maturity_date: cand.maturityDate,
-            issue_date: cand.issueDate,
-            coupon_freq: freq,
-            rating: rating || null,
-            payer_tax_id: payerTaxId,
-          })
-          .select("id")
-          .single();
-        if (bondErr) throw bondErr;
-        bond = inserted;
-      }
-
-      // Block adding a bond that's already in this user's portfolio (same
-      // symbol → same shared bond row → dup holding).
-      const { data: existing } = await supabase
-        .from("holdings")
-        .select("id")
-        .eq("user_id", publicUserId)
-        .eq("bond_id", bond!.id)
-        .limit(1);
-      if (existing && existing.length) throw new Error(t("err_duplicate_bond", { symbol: cand.symbol }));
-
-      const { data: holding, error: holdErr } = await supabase
-        .from("holdings")
-        .insert({
-          user_id: publicUserId,
-          bond_id: bond!.id,
-          face_value: faceValue,
-        })
-        .select("id")
-        .single();
-      if (holdErr) throw holdErr;
-
-      // Seed this holding's payout timeline from the derived schedule.
-      if (holding && schedule.length) {
-        const { error: payErr } = await supabase.from("payouts").insert(
-          schedule.map((p) => ({
-            holding_id: holding.id,
-            installment: p.installment,
-            amount: p.amount,
-            payout_date: p.date,
-          })),
-        );
-        if (payErr) throw payErr;
-      }
-
+      await insertHolding(cand, faceValue, freq, rating, payerTaxId, publicUserId);
       notifyPortfolioChanged();
       toast.success(t("toast_added", { symbol: cand.symbol }));
+      onAdded();
+      handleClose(); // manual single-shot form
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : t("err_save_failed");
+      setError(msg);
+      toast.danger(msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Add every bond in the cart to the portfolio in one go. Each item carries its
+  // own face value; the search results stay put so the user can keep adding.
+  const saveCart = async () => {
+    if (!cart.length || saving) return;
+    const bad = cart.find((it) => !Number.isFinite(it.amount) || it.amount < MIN_FACE_VALUE);
+    if (bad) {
+      setError(`จำนวนเงินลงทุนขั้นต่ำ ${MIN_FACE_VALUE.toLocaleString("th-TH")} บาท (${bad.cand.symbol})`);
+      return;
+    }
+    if (!supabaseEnabled || !supabase) {
       handleClose();
       onAdded();
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const publicUserId = authData.user?.app_metadata?.public_user_id as string | undefined;
+      if (!publicUserId) throw new Error(t("err_no_user"));
+
+      const done: string[] = [];
+      const failed: string[] = [];
+      for (const it of cart) {
+        try {
+          await insertHolding(it.cand, it.amount, it.freq, it.rating, null, publicUserId);
+          done.push(it.cand.symbol);
+        } catch (e) {
+          failed.push(it.cand.symbol);
+          console.error("cart add failed:", it.cand.symbol, e);
+        }
+      }
+      notifyPortfolioChanged();
+      onAdded();
+      if (done.length) toast.success(`เพิ่ม ${done.length} รุ่นเข้าพอร์ตแล้ว`);
+      if (failed.length) toast.danger(`เพิ่มไม่สำเร็จ: ${failed.join(", ")}`);
+      // Keep only the ones that failed so the user can retry; clear the rest.
+      setCart((prev) => prev.filter((it) => failed.includes(it.cand.symbol)));
     } catch (e) {
       const msg = e instanceof Error ? e.message : t("err_save_failed");
       setError(msg);
@@ -574,9 +718,12 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                 </>
               )}
             </Breadcrumbs>
-            <h3 className="mt-1 text-3xl font-medium text-[#181D20]">
-              {editing ? t("edit") : selected ? t("confirm") : manual ? t("manual_entry") : t("search")}
-            </h3>
+            {/* Search state shows its title inside the search card instead. */}
+            {manual && (
+              <h3 className="mt-1 text-3xl font-medium text-[#181D20]">
+                {editing ? t("edit") : t("manual_entry")}
+              </h3>
+            )}
             {editing && (
               <p className="mt-1 font-nunito text-sm text-black/80">{mSymbol}</p>
             )}
@@ -755,13 +902,58 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                       {/* Payer 13-digit tax id — own row; also auto-filled from the
                           50-ทวิ OCR, editable here. */}
                       <label className="flex flex-col gap-1 text-sm font-medium text-black/60">
-                        {t("payer_tax_id_label")}
+                        <span className="flex items-center gap-1.5">
+                          {t("payer_tax_id_label")}
+                          {checkingTax && (
+                            <span className="text-[11px] font-medium text-black/40">กำลังตรวจสอบ…</span>
+                          )}
+                          {!checkingTax && liveName && liveMatch && (
+                            <span className="flex items-center gap-0.5 rounded-full bg-[#E7F5EC] px-1.5 py-0.5 text-[11px] font-medium text-[#2E8B57]" title={liveName}>
+                              <IconCheck size={12} /> ตรงกับ DBD
+                            </span>
+                          )}
+                          {!checkingTax && liveName && !liveMatch && (
+                            <span className="flex items-center gap-0.5 rounded-full bg-[#FBEEDC] px-1.5 py-0.5 text-[11px] font-medium text-[#B7791F]" title={`DBD: ${liveName}`}>
+                              <IconAlertTriangle size={12} /> เป็นของ "{liveName}"
+                            </span>
+                          )}
+                          {!checkingTax && liveName === null && (
+                            <span className="flex items-center gap-0.5 rounded-full bg-[#FBEEDC] px-1.5 py-0.5 text-[11px] font-medium text-[#B7791F]">
+                              <IconAlertTriangle size={12} /> ไม่พบใน DBD
+                            </span>
+                          )}
+                          {/* Stored state when the field isn't being actively checked. */}
+                          {liveName === undefined && editing && editHolding?.payerTaxId && (
+                            editHolding.payerTaxIdVerified ? (
+                              <span className="flex items-center gap-0.5 rounded-full bg-[#E7F5EC] px-1.5 py-0.5 text-[11px] font-medium text-[#2E8B57]" title={editHolding.payerVerifiedName ?? "ยืนยันกับ DBD แล้ว"}>
+                                <IconCheck size={12} /> ยืนยันแล้ว
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-0.5 rounded-full bg-[#FBEEDC] px-1.5 py-0.5 text-[11px] font-medium text-[#B7791F]" title="ยังไม่ยืนยันกับ DBD">
+                                <IconAlertTriangle size={12} /> ยังไม่ยืนยัน
+                              </span>
+                            )
+                          )}
+                          {/* Unlock a verified value only after an explicit warning. */}
+                          {editing && editHolding?.payerTaxIdVerified && !taxIdUnlocked && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (window.confirm("เลขนี้ยืนยันแล้วจาก DBD และสลิป 50-ทวิ (OCR) — การแก้ไขอาจทำให้ข้อมูลผิด ยืนยันที่จะแก้ไข?")) setTaxIdUnlocked(true);
+                              }}
+                              className="text-[11px] font-medium text-brand-blue underline"
+                            >
+                              แก้ไข
+                            </button>
+                          )}
+                        </span>
                         <Input
                           value={mTaxId}
                           onChange={(e) => setMTaxId(e.target.value.replace(/\D/g, "").slice(0, 13))}
                           inputMode="numeric"
+                          readOnly={editing && !!editHolding?.payerTaxIdVerified && !taxIdUnlocked}
                           placeholder={t("payer_tax_id_ph")}
-                          className="font-nunito text-base font-medium sm:text-base"
+                          className={`font-nunito text-base font-medium sm:text-base ${editing && editHolding?.payerTaxIdVerified && !taxIdUnlocked ? "opacity-60" : ""}`}
                         />
                       </label>
                     </div>
@@ -925,7 +1117,14 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
         ) : (
           <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4">
             {/* Search panel — full width above the two columns (Figma 1104:3786). */}
-            <div className="relative shrink-0 overflow-hidden rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-6">
+            <div className="relative shrink-0 overflow-hidden rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white px-6 py-4">
+              {/* Illustration bleeds off the card's right edge, larger + offset. */}
+              <div className="pointer-events-none absolute right-8 -top-2 hidden h-40 w-72 lg:block" aria-hidden>
+                <img src={bondEx2} alt="" className="absolute right-52 top-6 h-7 w-auto" />
+                <img src={bondEx1} alt="" className="absolute right-44 top-20 h-12 w-auto" />
+                <img src={addBondMain} alt="" className="absolute right-0 top-0 h-40 w-auto" />
+              </div>
+              <h3 className="mb-2 text-3xl font-medium text-[#181D20]">{t("search")}</h3>
               <div className="flex items-center gap-4">
                 <SearchField value={term} onChange={setTerm} aria-label={t("search_bond")} className="w-full max-w-[520px]">
                   <SearchField.Group className="h-14 rounded-2xl border-[0.5px] border-black/10 bg-[#F0F2F5] px-4">
@@ -940,40 +1139,77 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                 >
                   {t("search")}
                 </button>
-                {/* Illustration pinned to the card's right edge. */}
-                <div className="pointer-events-none relative ml-auto hidden h-24 w-52 shrink-0 lg:block" aria-hidden>
-                  <img src={bondEx2} alt="" className="absolute right-40 top-3 h-5 w-auto" />
-                  <img src={bondEx1} alt="" className="absolute right-36 top-12 h-8 w-auto" />
-                  <img src={addBondMain} alt="" className="absolute right-0 top-0 h-24 w-auto" />
-                </div>
               </div>
-              <p className="mt-3 text-sm text-black/80">{t("sec_source")}</p>
+              <p className="mt-2 text-sm text-black/80">{t("sec_source")}</p>
             </div>
 
-            {/* Results (left) + selected panel (right) */}
+            {/* Results (left) + cart (right) — shown once a query is typed, and
+                kept visible while the cart has items even after clearing search. */}
+            {(term.trim().length >= 2 || cart.length > 0) && (
             <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
               {/* LEFT — one card per result */}
               <div className="flex min-h-0 flex-col gap-3">
-                <p className="shrink-0 text-base text-black">{t("search_results")}</p>
+                <div className="flex shrink-0 items-center justify-between gap-2">
+                  <p className="text-base text-black">
+                    {t("search_results")}
+                    {results.length > 0 && (
+                      <span className="text-black/50"> ({results.length} {t("items")})</span>
+                    )}
+                  </p>
+                  {/* Sort by issue date — newest / oldest. */}
+                  {results.length > 1 && (
+                    <div className="flex rounded-full bg-black/5 p-0.5 text-xs">
+                      {(["new", "old"] as const).map((d) => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => setSortDir(d)}
+                          className={`rounded-full px-2.5 py-1 font-medium transition ${
+                            sortDir === d ? "bg-white text-ink shadow-sm" : "text-ink/50 hover:text-ink/80"
+                          }`}
+                        >
+                          {d === "new" ? "ออกล่าสุด" : "ออกเก่าสุด"}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <div
                   ref={resultsFade.ref}
                   onScroll={resultsFade.onScroll}
                   style={{ WebkitMaskImage: resultsFade.mask, maskImage: resultsFade.mask }}
                   className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1"
                 >
+                  {term.trim().length < 2 && (
+                    <div className="flex flex-col items-center gap-3 rounded-3xl bg-white p-8 text-center">
+                      <img src={emptyBonds} alt="" aria-hidden className="h-28 w-auto opacity-90" />
+                      <p className="text-sm font-medium text-black/60">{t("search_to_add_more")}</p>
+                    </div>
+                  )}
                   {term.trim().length >= 2 && results.length === 0 && (
                     <div className="flex flex-col items-center gap-3 rounded-3xl bg-white p-8 text-center">
                       <img src={emptyBonds} alt="" aria-hidden className="h-28 w-auto opacity-90" />
-                      <p className="text-sm text-black/40">{t("no_match")} "{term}"</p>
+                      <p className="text-sm font-medium text-black/60">{t("not_in_sec")}</p>
+                      <p className="-mt-1 max-w-xs text-xs text-black/40">{t("not_in_sec_hint")}</p>
                       <button
-                        onClick={() => { setManual(true); setMSymbol(term.trim().toUpperCase()); setError(null); }}
+                        onClick={() => {
+                          const sym = term.trim().toUpperCase();
+                          setManual(true);
+                          setMSymbol(sym);
+                          // Prefill the issuer from other bonds sharing the symbol
+                          // prefix (e.g. ORI284C → the ORI* issuer), so a bond SEC
+                          // hasn't listed yet still gets its company name.
+                          const guessed = issuerForSymbol(sym);
+                          if (guessed) setMIssuer(guessed);
+                          setError(null);
+                        }}
                         className="mt-1 w-full rounded-2xl border border-dashed border-[#43507F]/40 px-3 py-3 text-sm font-medium text-[#43507F] transition-colors hover:bg-[#43507F]/5"
                       >
                         {t("add_own", { term: term.trim() })}
                       </button>
                     </div>
                   )}
-                  {results.map((b) => {
+                  {sortedResults.map((b) => {
                     const owned = heldSymbols.has(b.symbol);
                     const termStr = fmtTermThai(b);
                     const rate = ratingFor(b.symbol);
@@ -982,10 +1218,18 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                         key={b.symbol}
                         className={`flex shrink-0 flex-col gap-4 rounded-3xl bg-white p-6 transition ${owned ? "opacity-50" : ""}`}
                       >
-                        <p className="font-nunito text-xl font-medium text-black">{b.symbol}</p>
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-xl font-medium text-black">{b.symbol}</p>
+                          {b.maturityDate && (
+                            <span className="flex shrink-0 items-center gap-1 rounded-full bg-black/5 px-2.5 py-1 text-xs text-black/60">
+                              <IconCalendar size={14} className="text-black/40" />
+                              {t("maturity")} {fmtThaiDate(b.maturityDate)}
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="truncate text-base text-black">{b.nameTh}</p>
+                            <p className="truncate text-base text-black">{issuerName(b.symbol, b.issuer)}</p>
                             {rate && <p className="font-nunito text-base text-black/60">{rate}</p>}
                           </div>
                           <IssuerLogo symbol={b.symbol} name={issuerName(b.symbol, b.issuer)} size={64} className="!rounded-2xl" />
@@ -1000,12 +1244,29 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                         </div>
                         {owned ? (
                           <p className="rounded-2xl bg-black/5 py-3.5 text-center text-base font-medium text-black/50">{t("owned_badge")}</p>
+                        ) : inCart(b.symbol) ? (
+                          <button
+                            onClick={() => setCart((prev) => prev.filter((it) => it.cand.symbol !== b.symbol))}
+                            className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#43507F]/10 text-base font-medium text-[#43507F] transition hover:bg-[#43507F]/15"
+                          >
+                            <IconCheck size={20} /> {t("in_cart")}
+                          </button>
                         ) : (
                           <button
-                            onClick={() => { setSelected(b); setFreq(overrideFor(b.symbol)?.frequency ?? b.frequency ?? 2); setRating(ratingFor(b.symbol) ?? ""); }}
+                            onClick={() =>
+                              setCart((prev) => [
+                                ...prev,
+                                {
+                                  cand: b,
+                                  amount: NaN,
+                                  freq: overrideFor(b.symbol)?.frequency ?? b.frequency ?? 2,
+                                  rating: ratingFor(b.symbol) ?? "",
+                                },
+                              ])
+                            }
                             className="flex h-14 w-full items-center justify-center rounded-2xl bg-brand-blue text-base font-medium text-white transition hover:bg-[#215688]"
                           >
-                            {t("select")}
+                            {t("add_to_cart")}
                           </button>
                         )}
                       </div>
@@ -1014,82 +1275,87 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                 </div>
               </div>
 
-              {/* RIGHT — white panel holding the selected bond + amount + add */}
-              <div className="min-h-0 overflow-y-auto rounded-3xl bg-white p-6">
-                {selected ? (
-                  <div className="flex flex-col gap-4">
-                    <div className="rounded-2xl border-[0.5px] border-black/10 p-6">
-                      <p className="font-nunito text-xl font-medium text-black">{selected.symbol}</p>
-                      <div className="mt-3 flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="truncate text-base text-black">{issuerName(selected.symbol, selected.issuer)}</p>
-                          <p className="font-nunito text-base text-black/60">{rating || t("no_credit_info")}</p>
-                        </div>
-                        <IssuerLogo symbol={selected.symbol} name={issuerName(selected.symbol, selected.issuer)} size={64} className="!rounded-2xl" />
-                      </div>
-                      <div className="mt-3 flex flex-col gap-2 text-base text-black">
-                        {selected.couponRate != null && (
-                          <span className="flex items-center gap-2"><IconPercentage size={22} className="text-black/50" />{selected.couponRate}% {t("per_year")}</span>
-                        )}
-                        {selected.maturityDate && (
-                          <span className="flex items-center gap-2"><IconCalendar size={22} className="text-black/50" />{t("maturity")} {fmtThaiDate(selected.maturityDate)}</span>
-                        )}
-                        <span className="text-black/60">{t("pays_interest")} {t(FREQ_KEY[freq as 1 | 2 | 4 | 12] ?? "freq_semi")}</span>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <Label className="text-sm font-medium text-black/60">{t("investment_baht")}</Label>
-                      <div className="flex gap-2">
-                        {AMOUNT_PRESETS.map((v) => (
-                          <button
-                            key={v}
-                            type="button"
-                            onClick={() => setAmount(v)}
-                            className={`flex-1 whitespace-nowrap rounded-full border px-3 py-1 font-nunito text-xs transition-colors ${
-                              amount === v
-                                ? "border-[#43507F] bg-[#43507F]/10 font-bold text-[#43507F]"
-                                : "border-[#E7E7E7] text-black/60 hover:border-[#43507F]/40"
-                            }`}
-                          >
-                            {v.toLocaleString("th-TH")}
-                          </button>
-                        ))}
-                      </div>
-                      <NumberField
-                        value={amount}
-                        onChange={setAmount}
-                        minValue={MIN_FACE_VALUE}
-                        step={MIN_FACE_VALUE}
-                        formatOptions={{ useGrouping: true, maximumFractionDigits: 0 }}
-                        aria-label={t("investment_baht")}
-                      >
-                        <NumberField.Group>
-                          <NumberField.DecrementButton />
-                          <NumberField.Input placeholder={t("eg_amount")} className="text-center font-nunito text-base font-medium" />
-                          <NumberField.IncrementButton />
-                        </NumberField.Group>
-                      </NumberField>
-                    </div>
-
-                    {error && <p className="text-sm text-red-500">{error}</p>}
-
-                    <button
-                      onClick={() => handleSave()}
-                      disabled={saving}
-                      className="flex h-14 w-full items-center justify-center rounded-2xl bg-brand-blue text-base font-medium text-white transition hover:bg-[#215688] disabled:opacity-60"
-                    >
-                      {saving ? t("saving") : t("add_to_portfolio")}
-                    </button>
-                  </div>
-                ) : (
+              {/* RIGHT — cart: bonds queued to add, each with its own amount */}
+              <div className="flex min-h-0 flex-col rounded-3xl bg-white p-6">
+                {cart.length === 0 ? (
                   <div className="flex h-full min-h-60 flex-col items-center justify-center p-8 text-center">
                     <img src={emptyBonds} alt="" aria-hidden className="h-24 w-auto opacity-70" />
-                    <p className="mt-3 text-sm text-black/40">{t("no_selection")}</p>
+                    <p className="mt-3 text-sm text-black/40">{t("cart_empty")}</p>
                   </div>
+                ) : (
+                  <>
+                    <p className="shrink-0 pb-3 text-base font-medium text-black">
+                      {t("cart")} <span className="text-black/50">({cart.length})</span>
+                    </p>
+                    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+                      {cart.map((it) => (
+                        <div key={it.cand.symbol} className="rounded-2xl border-[0.5px] border-black/10 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-3">
+                              <IssuerLogo symbol={it.cand.symbol} name={issuerName(it.cand.symbol, it.cand.issuer)} size={40} className="!rounded-xl" />
+                              <div className="min-w-0">
+                                <p className="text-base font-medium text-black">{it.cand.symbol}</p>
+                                <p className="truncate text-sm text-black/60">{issuerName(it.cand.symbol, it.cand.issuer)}</p>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              aria-label={t("remove")}
+                              onClick={() => setCart((prev) => prev.filter((x) => x.cand.symbol !== it.cand.symbol))}
+                              className="shrink-0 rounded-full p-1.5 text-black/40 transition hover:bg-black/5 hover:text-[#D64545]"
+                            >
+                              <IconX size={18} />
+                            </button>
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                            {AMOUNT_PRESETS.map((v) => (
+                              <button
+                                key={v}
+                                type="button"
+                                onClick={() => setCart((prev) => prev.map((x) => (x.cand.symbol === it.cand.symbol ? { ...x, amount: v } : x)))}
+                                className={`flex-1 whitespace-nowrap rounded-full border px-2 py-1 font-nunito text-xs transition-colors ${
+                                  it.amount === v
+                                    ? "border-[#43507F] bg-[#43507F]/10 font-bold text-[#43507F]"
+                                    : "border-[#E7E7E7] text-black/60 hover:border-[#43507F]/40"
+                                }`}
+                              >
+                                {v.toLocaleString("th-TH")}
+                              </button>
+                            ))}
+                          </div>
+                          <NumberField
+                            value={it.amount}
+                            onChange={(v) => setCart((prev) => prev.map((x) => (x.cand.symbol === it.cand.symbol ? { ...x, amount: v } : x)))}
+                            minValue={MIN_FACE_VALUE}
+                            step={MIN_FACE_VALUE}
+                            formatOptions={{ useGrouping: true, maximumFractionDigits: 0 }}
+                            aria-label={t("investment_baht")}
+                            className="mt-2"
+                          >
+                            <NumberField.Group>
+                              <NumberField.DecrementButton />
+                              <NumberField.Input placeholder={t("eg_amount")} className="text-center font-nunito text-base font-medium" />
+                              <NumberField.IncrementButton />
+                            </NumberField.Group>
+                          </NumberField>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="shrink-0 pt-3">
+                      {error && <p className="pb-2 text-sm text-red-500">{error}</p>}
+                      <button
+                        onClick={() => saveCart()}
+                        disabled={saving}
+                        className="flex h-14 w-full items-center justify-center rounded-2xl bg-brand-blue text-base font-medium text-white transition hover:bg-[#215688] disabled:opacity-60"
+                      >
+                        {saving ? t("saving") : `${t("add_to_portfolio")} (${cart.length})`}
+                      </button>
+                    </div>
+                  </>
                 )}
               </div>
             </div>
+            )}
           </div>
         )}
         </div>

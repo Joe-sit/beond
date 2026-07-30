@@ -30,25 +30,3 @@ export const EMPTY_SLIP: SlipFields = {
   bond_symbol: null,
 };
 
-// Placeholder extractor: today it fakes a detection so the mobile flow can be
-// built + tested end-to-end. Swap for a real call to the `ocr-extract` edge fn
-// (POST the captured image, return SlipFields) once that lands.
-export function mockExtract(_image: Blob): Promise<SlipFields> {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve({
-        payer_name: "บริษัท บริทาเนีย จำกัด (มหาชน)",
-        payer_tax_id: "0107562000572",
-        income_subtype: "ดอกเบี้ยหุ้นกู้",
-        gross_amount: 12500,
-        net_amount: 10625,
-        wht_amount: 1875,
-        wht_rate: 15,
-        pay_date: "2026-04-30",
-        doc_ref: "BRI-2569-0042",
-        tax_year: 2569,
-        bond_symbol: "BRI275A",
-      });
-    }, 2200);
-  });
-}

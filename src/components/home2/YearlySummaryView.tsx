@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "@heroui/react";
-import { IconInfoCircle, IconCheck, IconX, IconPencil } from "@tabler/icons-react";
+import { IconInfoCircle, IconCheck, IconX, IconPencil, IconAlertTriangle } from "@tabler/icons-react";
+import { verifyTaxId } from "../../lib/verifyTaxId";
 import { matchConfirmedPayouts, notifyPortfolioChanged, useHoldings, useTimeline, useViewedYear, currentTaxYearBE, type TaxDoc } from "../../hooks/usePortfolio";
 import { supabase } from "../../lib/supabase";
 import {
@@ -11,7 +12,7 @@ import {
 } from "../../lib/efilingSync";
 import CoinWall, { type CoinItem } from "./CoinWall";
 import JarWidget from "./JarWidget";
-import { getIssuerLogoUrl } from "../../lib/issuerLogo";
+import { getIssuerLogoUrl, issuerName } from "../../lib/issuerLogo";
 
 const fmtTHB = (n: number) =>
   new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
@@ -54,8 +55,10 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
   // can be edited in place. Held bonds only; deleted ones fall back to the OCR
   // value from the slip.
   const bondBySymbol = useMemo(() => {
-    const m = new Map<string, { bondId: string; taxId: string | null }>();
-    for (const h of holdings) if (!m.has(h.symbol)) m.set(h.symbol, { bondId: h.bondId, taxId: h.payerTaxId });
+    const m = new Map<string, { bondId: string; issuer: string; taxId: string | null; verified: boolean; verifiedName: string | null }>();
+    for (const h of holdings)
+      if (!m.has(h.symbol))
+        m.set(h.symbol, { bondId: h.bondId, issuer: h.issuer, taxId: h.payerTaxId, verified: h.payerTaxIdVerified, verifiedName: h.payerVerifiedName });
     return m;
   }, [holdings]);
 
@@ -251,9 +254,12 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
                 <div className="flex min-w-0 flex-col gap-1">
                   <p className="truncate text-2xl font-medium text-ink">{g.symbol}</p>
                   <PayerTaxIdField
-                    issuer={g.issuer}
+                    issuer={issuerName(g.symbol, g.issuer)}
+                    symbol={g.symbol}
                     bondId={bondBySymbol.get(g.symbol)?.bondId ?? null}
                     value={bondBySymbol.get(g.symbol)?.taxId ?? taxIdBySymbol.get(g.symbol) ?? null}
+                    verified={bondBySymbol.get(g.symbol)?.verified ?? false}
+                    verifiedName={bondBySymbol.get(g.symbol)?.verifiedName ?? null}
                   />
                 </div>
                 <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-black/10 bg-white">
@@ -346,18 +352,28 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
 // OCR; this is the manual override. No bondId (deleted bond) → read-only.
 function PayerTaxIdField({
   issuer,
+  symbol,
   bondId,
   value,
+  verified,
+  verifiedName,
 }: {
   issuer: string;
+  symbol: string;
   bondId: string | null;
   value: string | null;
+  verified: boolean;
+  verifiedName: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
 
   const startEdit = () => {
+    // Guard verified values — they came from an OCR slip + passed DBD. Warn
+    // before letting the user overwrite one by hand, so a careless edit can't
+    // replace a confirmed number with a wrong one.
+    if (verified && !window.confirm("เลขนี้ยืนยันแล้วจาก DBD และสลิป 50-ทวิ (OCR) — การแก้ไขอาจทำให้ข้อมูลผิด ยืนยันที่จะแก้ไข?")) return;
     setDraft((value ?? "").replace(/\D/g, ""));
     setEditing(true);
   };
@@ -367,15 +383,24 @@ function PayerTaxIdField({
     const digits = draft.replace(/\D/g, "");
     if (digits.length && digits.length !== 13) return; // 13 digits or clear
     setSaving(true);
+    // Write the raw value as UNVERIFIED first; verification may upgrade it.
     const { error } = await supabase
       .from("bonds")
-      .update({ payer_tax_id: digits || null })
+      .update({ payer_tax_id: digits || null, payer_tax_id_verified: false, payer_verified_name: null })
       .eq("id", bondId);
-    setSaving(false);
     if (error) {
+      setSaving(false);
       toast.danger(`บันทึกไม่สำเร็จ: ${error.message}`);
       return;
     }
+    // Verify against DBD — a match upgrades to verified + propagates issuer-wide.
+    if (digits.length === 13) {
+      const res = await verifyTaxId(digits, issuer, symbol);
+      if (res.verified) toast.success(`ยืนยันแล้ว: ${res.officialName ?? ""}`);
+      else if (res.officialName) toast.danger(`เลขนี้เป็นของ "${res.officialName}" ไม่ตรงกับผู้ออก — โปรดตรวจสอบ`);
+      else toast.danger("ยืนยันกับ DBD ไม่ได้ — บันทึกไว้แบบยังไม่ยืนยัน");
+    }
+    setSaving(false);
     notifyPortfolioChanged();
     setEditing(false);
   };
@@ -419,6 +444,22 @@ function PayerTaxIdField({
         <span className="truncate font-nunito text-base text-ink/70">
           {value ? fmtTaxId(value) : issuer}
         </span>
+        {value && verified && (
+          <span
+            className="flex shrink-0 items-center gap-0.5 rounded-full bg-[#E7F5EC] px-1.5 py-0.5 text-[11px] font-medium text-[#2E8B57]"
+            title={verifiedName ? `ยืนยันกับ DBD: ${verifiedName}` : "ยืนยันกับ DBD แล้ว"}
+          >
+            <IconCheck size={12} /> ยืนยันแล้ว
+          </span>
+        )}
+        {value && !verified && (
+          <span
+            className="flex shrink-0 items-center gap-0.5 rounded-full bg-[#FBEEDC] px-1.5 py-0.5 text-[11px] font-medium text-[#B7791F]"
+            title="ยังไม่ยืนยันกับ DBD — โปรดตรวจสอบก่อนยื่น"
+          >
+            <IconAlertTriangle size={12} /> ยังไม่ยืนยัน
+          </span>
+        )}
         {bondId && (
           <button
             onClick={startEdit}
