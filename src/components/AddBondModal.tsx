@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   Modal, ModalBackdrop, ModalContainer, ModalDialog,
   Breadcrumbs, Button, SearchField, Label, NumberField, Tabs, ComboBox, ListBox, Input, DatePicker, Calendar, toast,
 } from "@heroui/react";
 import { Group, DateInput, DateSegment, Dialog, I18nProvider } from "react-aria-components";
 import { parseDate, toCalendar, GregorianCalendar, type DateValue } from "@internationalized/date";
-import { ensureCatalog, searchLocal, issuerNames, issuerForSymbol, symbolForIssuer, type BondCandidate } from "../lib/secApi";
+import { ensureCatalog, searchLocal, issuerNames, issuerForSymbol, symbolForIssuer, catalogUpdatedAt, type BondCandidate } from "../lib/secApi";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
 import { verifyTaxId, lookupTaxIdName, companyNamesMatch } from "../lib/verifyTaxId";
 import { overrideFor } from "../data/couponOverrides";
@@ -13,13 +14,20 @@ import { ratingFor } from "../data/bondRatings";
 import { notifyPortfolioChanged, useHoldings, type HoldingDetail } from "../hooks/usePortfolio";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import IssuerLogo from "./IssuerLogo";
+import BondDetailModal from "./BondDetailModal";
+import AddBondConfirm from "./AddBondConfirm";
 import { issuerName } from "../lib/issuerLogo";
-import { IconCheck, IconTrash, IconCalendar, IconPercentage, IconAlertTriangle, IconX } from "@tabler/icons-react";
+import { IconCheck, IconTrash, IconCalendar, IconAlertTriangle, IconPlus, IconChevronRight, IconChevronLeft } from "@tabler/icons-react";
 import emptyBonds from "../assets/empty-bonds.svg";
 import addBondMain from "../assets/add-bond-main.png";
 import bondDec1 from "../assets/bond-dec-1.png";
 import bondEx1 from "../assets/bond-ex-1.png";
 import bondEx2 from "../assets/bond-ex-2.png";
+import badgeCoupon from "../assets/badges/badge-coupon.svg";
+import badgeRating from "../assets/badges/badge-rating.svg";
+import badgeAge from "../assets/badges/badge-age.svg";
+import beondLogo from "../assets/badges/beond-logo.svg";
+import unknownBond from "../assets/badges/unknown-bond.svg";
 import { useT } from "../lib/i18n";
 
 // A bond queued in the add-cart, with the user's chosen face value + coupon
@@ -48,7 +56,6 @@ const FALLBACK_SECTOR_ID = "other";
 
 // Minimum face value a holding can be added with, and the counter's step.
 const MIN_FACE_VALUE = 100_000;
-const AMOUNT_PRESETS = [100_000, 500_000, 1_000_000];
 
 const FREQ_KEY = {
   1: "freq_annual",
@@ -71,6 +78,29 @@ function fmtTermThai(b: BondCandidate): string | null {
   const y = Math.floor(months / 12);
   const m = months % 12;
   return [y ? `${y} ปี` : "", m ? `${m} เดือน` : ""].filter(Boolean).join(" ") || null;
+}
+
+// A small coloured pill used on result cards (interest / rating / term).
+function Badge({
+  color,
+  icon,
+  children,
+}: {
+  color: "blue" | "teal" | "orange";
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const styles = {
+    blue: "bg-[rgba(31,129,216,0.1)] text-[#1F81D8]",
+    teal: "bg-[rgba(2,102,96,0.1)] text-[#016560]",
+    orange: "bg-[rgba(255,141,39,0.1)] text-[#FF7800]",
+  }[color];
+  return (
+    <span className={`flex items-center gap-1.5 rounded-full px-3 py-2.5 text-sm font-medium ${styles}`}>
+      {icon}
+      {children}
+    </span>
+  );
 }
 
 // ISO date → Thai Buddhist-era short date, e.g. "2028-08-13" → "13 ส.ค. 2571".
@@ -172,15 +202,23 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<BondCandidate[]>([]);
   const [sortDir, setSortDir] = useState<"new" | "old">("new"); // issue-date order
-  const sortedResults = useMemo(
-    () =>
-      [...results].sort((a, b) =>
-        sortDir === "new"
-          ? (b.issueDate ?? "").localeCompare(a.issueDate ?? "")
-          : (a.issueDate ?? "").localeCompare(b.issueDate ?? ""),
-      ),
-    [results, sortDir],
-  );
+  const sortedResults = useMemo(() => {
+    const cmp = (a: BondCandidate, b: BondCandidate) =>
+      sortDir === "new"
+        ? (b.issueDate ?? "").localeCompare(a.issueDate ?? "")
+        : (a.issueDate ?? "").localeCompare(b.issueDate ?? "");
+    // Group same-issuer bonds together (consecutive). Group order = the issuer's
+    // best bond by the active sort; within a group, bonds also follow the sort.
+    const groups = new Map<string, BondCandidate[]>();
+    for (const c of results) {
+      const key = issuerName(c.symbol, c.issuer);
+      (groups.get(key) ?? groups.set(key, []).get(key)!).push(c);
+    }
+    return [...groups.values()]
+      .map((g) => g.sort(cmp))
+      .sort((ga, gb) => cmp(ga[0], gb[0]))
+      .flat();
+  }, [results, sortDir]);
   const [selected, setSelected] = useState<BondCandidate | null>(null);
   const [amount, setAmount] = useState<number>(NaN);
   const [rating, setRating] = useState(""); // credit rating; "" → nonRate
@@ -189,6 +227,17 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   // face value, added to the portfolio together via saveCart().
   const [cart, setCart] = useState<CartItem[]>([]);
   const inCart = (sym: string) => cart.some((it) => it.cand.symbol === sym);
+  // A manual bond with no company resolved yet — shown as a "?" placeholder.
+  const isUnknown = (c: BondCandidate) => c.source === "manual" && !c.issuer.trim();
+  const [detailBond, setDetailBond] = useState<BondCandidate | null>(null); // bond-detail modal
+  const [cartStep, setCartStep] = useState<"select" | "amount">("select"); // add-flow step
+  // Thai date the loaded SEC catalog snapshot was taken (for the hero note).
+  const catalogDate = (() => {
+    const at = catalogUpdatedAt();
+    if (!at) return "";
+    const d = new Date(at);
+    return `${d.getDate()} ${THAI_MONTHS_ABBR[d.getMonth()]} ${d.getFullYear() + 543}`;
+  })();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -344,6 +393,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     setResults([]);
     setSelected(null);
     setCart([]);
+    setCartStep("select");
     setAmount(NaN);
     setRating("");
     setFreq(2);
@@ -625,6 +675,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
       if (failed.length) toast.danger(`เพิ่มไม่สำเร็จ: ${failed.join(", ")}`);
       // Keep only the ones that failed so the user can retry; clear the rest.
       setCart((prev) => prev.filter((it) => failed.includes(it.cand.symbol)));
+      if (!failed.length) setCartStep("select");
     } catch (e) {
       const msg = e instanceof Error ? e.message : t("err_save_failed");
       setError(msg);
@@ -1114,47 +1165,65 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             </ModalBackdrop>
           </Modal>
           </div>
+        ) : cartStep === "amount" && cart.length > 0 ? (
+          <div className="mt-4 flex min-h-0 flex-1 flex-col">
+            <AddBondConfirm
+              items={cart}
+              minFaceValue={MIN_FACE_VALUE}
+              saving={saving}
+              error={error}
+              onChangeAmount={(sym, v) => setCart((prev) => prev.map((x) => (x.cand.symbol === sym ? { ...x, amount: v } : x)))}
+              onChangeField={(sym, patch) => setCart((prev) => prev.map((x) => (x.cand.symbol === sym ? { ...x, cand: { ...x.cand, ...patch } } : x)))}
+              onBack={() => setCartStep("select")}
+              onSave={() => saveCart()}
+            />
+          </div>
         ) : (
-          <div className="mt-4 flex min-h-0 flex-1 flex-col gap-4">
-            {/* Search panel — full width above the two columns (Figma 1104:3786). */}
-            <div className="relative shrink-0 overflow-hidden rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white px-6 py-4">
-              {/* Illustration bleeds off the card's right edge, larger + offset. */}
-              <div className="pointer-events-none absolute right-8 -top-2 hidden h-40 w-72 lg:block" aria-hidden>
-                <img src={bondEx2} alt="" className="absolute right-52 top-6 h-7 w-auto" />
-                <img src={bondEx1} alt="" className="absolute right-44 top-20 h-12 w-auto" />
-                <img src={addBondMain} alt="" className="absolute right-0 top-0 h-40 w-auto" />
+          <div className="flex min-h-0 flex-1 flex-col gap-6">
+            {/* Hero — blue banner with back, title, search pill (Figma 1148:3732).
+                Right-side illustrations are assets, added later. */}
+            <div className="relative shrink-0 overflow-hidden rounded-3xl bg-[#2968a5] px-10 py-9">
+              {/* Right-side illustration cluster (Figma 1148:3762). */}
+              <div className="pointer-events-none absolute inset-y-0 right-6 hidden w-96 xl:block" aria-hidden>
+                <img src={addBondMain} alt="" className="absolute right-4 top-1/2 h-44 w-auto -translate-y-1/2" />
+                <img src={bondEx1} alt="" className="absolute bottom-8 right-64 h-16 w-auto" />
+                <img src={bondEx2} alt="" className="absolute right-72 top-10 h-10 w-auto blur-[0.5px]" />
+                <img src={bondDec1} alt="" className="absolute right-0 top-4 h-24 w-auto -scale-x-100 blur-[0.5px]" />
               </div>
-              <h3 className="mb-2 text-3xl font-medium text-[#181D20]">{t("search")}</h3>
-              <div className="flex items-center gap-4">
-                <SearchField value={term} onChange={setTerm} aria-label={t("search_bond")} className="w-full max-w-[520px]">
-                  <SearchField.Group className="h-14 rounded-2xl border-[0.5px] border-black/10 bg-[#F0F2F5] px-4">
-                    <SearchField.SearchIcon />
-                    <SearchField.Input autoFocus placeholder={t("search_hint")} className="font-normal!" />
+              <div className="relative flex max-w-2xl flex-col gap-4">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex w-fit items-center gap-1.5 rounded-full border-[0.5px] border-black/10 bg-[#f5f5f5] px-3 py-2 text-sm font-medium text-[#222] transition hover:bg-white"
+                >
+                  <IconChevronLeft size={18} /> {t("back")}
+                </button>
+                <h2 className="text-3xl font-medium text-white">{t("add_bond_hero_title")}</h2>
+                <p className="text-base leading-normal text-white/80">
+                  {t("add_bond_hero_sub1")}
+                  <br />
+                  {t("add_bond_hero_sub2")}
+                </p>
+                <SearchField value={term} onChange={setTerm} aria-label={t("search_bond")} className="w-full max-w-[542px]">
+                  <SearchField.Group className="h-14 rounded-full border border-black/10 bg-white px-4">
+                    <SearchField.SearchIcon className="text-brand-blue" />
+                    <SearchField.Input autoFocus placeholder={t("search_hint")} className="font-normal! text-brand-blue placeholder:text-brand-blue/70" />
                     <SearchField.ClearButton />
                   </SearchField.Group>
                 </SearchField>
-                <button
-                  type="button"
-                  className="flex h-14 shrink-0 items-center justify-center rounded-2xl bg-brand-blue px-10 text-base font-medium text-white transition hover:bg-[#215688]"
-                >
-                  {t("search")}
-                </button>
+                <p className="text-sm text-white/80">{t("sec_source_dated", { date: catalogDate })}</p>
               </div>
-              <p className="mt-2 text-sm text-black/80">{t("sec_source")}</p>
             </div>
 
             {/* Results (left) + cart (right) — shown once a query is typed, and
                 kept visible while the cart has items even after clearing search. */}
             {(term.trim().length >= 2 || cart.length > 0) && (
-            <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+            <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,492px)]">
               {/* LEFT — one card per result */}
               <div className="flex min-h-0 flex-col gap-3">
                 <div className="flex shrink-0 items-center justify-between gap-2">
-                  <p className="text-base text-black">
-                    {t("search_results")}
-                    {results.length > 0 && (
-                      <span className="text-black/50"> ({results.length} {t("items")})</span>
-                    )}
+                  <p className="text-base font-medium text-black">
+                    {t("found_n_items", { n: String(results.length) })}
                   </p>
                   {/* Sort by issue date — newest / oldest. */}
                   {results.length > 1 && (
@@ -1194,18 +1263,28 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                       <button
                         onClick={() => {
                           const sym = term.trim().toUpperCase();
-                          setManual(true);
-                          setMSymbol(sym);
-                          // Prefill the issuer from other bonds sharing the symbol
-                          // prefix (e.g. ORI284C → the ORI* issuer), so a bond SEC
-                          // hasn't listed yet still gets its company name.
-                          const guessed = issuerForSymbol(sym);
-                          if (guessed) setMIssuer(guessed);
+                          if (!sym || inCart(sym) || heldSymbols.has(sym)) return;
+                          // Queue an unknown (not-in-SEC) bond as a placeholder —
+                          // company/details filled in later. Shows "?" in the list.
+                          setCart((prev) => [
+                            ...prev,
+                            {
+                              cand: {
+                                symbol: sym, nameTh: sym, nameEn: "", isin: "", issuer: "",
+                                couponRate: null, maturityDate: null, issueDate: null,
+                                termYears: null, frequency: null, source: "manual",
+                              },
+                              amount: MIN_FACE_VALUE,
+                              freq: 2,
+                              rating: "",
+                            },
+                          ]);
+                          setTerm("");
                           setError(null);
                         }}
                         className="mt-1 w-full rounded-2xl border border-dashed border-[#43507F]/40 px-3 py-3 text-sm font-medium text-[#43507F] transition-colors hover:bg-[#43507F]/5"
                       >
-                        {t("add_own", { term: term.trim() })}
+                        {t("keep_unknown", { term: term.trim() })}
                       </button>
                     </div>
                   )}
@@ -1213,70 +1292,82 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                     const owned = heldSymbols.has(b.symbol);
                     const termStr = fmtTermThai(b);
                     const rate = ratingFor(b.symbol);
+                    const queued = inCart(b.symbol);
                     return (
                       <div
                         key={b.symbol}
                         className={`flex shrink-0 flex-col gap-4 rounded-3xl bg-white p-6 transition ${owned ? "opacity-50" : ""}`}
                       >
+                        {/* Top row: logo + symbol/issuer, bookmark far right */}
                         <div className="flex items-start justify-between gap-3">
-                          <p className="text-xl font-medium text-black">{b.symbol}</p>
-                          {b.maturityDate && (
-                            <span className="flex shrink-0 items-center gap-1 rounded-full bg-black/5 px-2.5 py-1 text-xs text-black/60">
-                              <IconCalendar size={14} className="text-black/40" />
-                              {t("maturity")} {fmtThaiDate(b.maturityDate)}
-                            </span>
+                          <div className="flex min-w-0 items-center gap-4">
+                            <IssuerLogo symbol={b.symbol} name={issuerName(b.symbol, b.issuer)} size={64} className="rounded-full!" />
+                            <div className="min-w-0">
+                              <p className="text-base font-medium text-black">{b.symbol}</p>
+                              <p className="truncate text-sm text-black/60">{issuerName(b.symbol, b.issuer)}</p>
+                            </div>
+                          </div>
+                          {owned ? (
+                            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-black/10 text-black/40" title={t("owned_badge")}>
+                              <IconCheck size={20} />
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              aria-label={queued ? t("in_cart") : t("add_to_cart")}
+                              onClick={() =>
+                                queued
+                                  ? setCart((prev) => prev.filter((it) => it.cand.symbol !== b.symbol))
+                                  : setCart((prev) => [
+                                      ...prev,
+                                      {
+                                        cand: b,
+                                        amount: MIN_FACE_VALUE,
+                                        freq: overrideFor(b.symbol)?.frequency ?? b.frequency ?? 2,
+                                        rating: ratingFor(b.symbol) ?? "",
+                                      },
+                                    ])
+                              }
+                              className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[#5FA548] text-white transition hover:bg-[#52913D]"
+                            >
+                              {queued ? <IconCheck size={20} /> : <IconPlus size={20} />}
+                            </button>
                           )}
                         </div>
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-base text-black">{issuerName(b.symbol, b.issuer)}</p>
-                            {rate && <p className="font-nunito text-base text-black/60">{rate}</p>}
-                          </div>
-                          <IssuerLogo symbol={b.symbol} name={issuerName(b.symbol, b.issuer)} size={64} className="!rounded-2xl" />
-                        </div>
-                        <div className="flex flex-col gap-2 text-base text-black">
-                          {b.couponRate != null && (
-                            <span className="flex items-center gap-2"><IconPercentage size={22} className="text-black/50" />{b.couponRate}% {t("per_year")}</span>
+                        {/* Badges + detail — full width, detail pinned right */}
+                        <div className="flex w-full flex-wrap items-center gap-2">
+                          {typeof b.couponRate === "number" && Number.isFinite(b.couponRate) && (
+                            <Badge color="blue" icon={<img src={badgeCoupon} alt="" className="h-5 w-auto" />}>
+                              {t("interest")} {b.couponRate}%
+                            </Badge>
+                          )}
+                          {rate && (
+                            <Badge color="teal" icon={<img src={badgeRating} alt="" className="h-5 w-auto" />}>
+                              {t("rating")} {rate}
+                            </Badge>
                           )}
                           {termStr && (
-                            <span className="flex items-center gap-2"><IconCalendar size={22} className="text-black/50" />{t("redeem_term")} {termStr}</span>
+                            <Badge color="orange" icon={<img src={badgeAge} alt="" className="h-5 w-auto" />}>
+                              {t("age")} {termStr}
+                            </Badge>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => setDetailBond(b)}
+                            className="ml-auto flex h-9 items-center rounded-lg border-[0.5px] border-black/10 px-3 text-sm font-medium text-black/60 transition hover:bg-black/5"
+                          >
+                            {t("bond_details")}
+                          </button>
                         </div>
-                        {owned ? (
-                          <p className="rounded-2xl bg-black/5 py-3.5 text-center text-base font-medium text-black/50">{t("owned_badge")}</p>
-                        ) : inCart(b.symbol) ? (
-                          <button
-                            onClick={() => setCart((prev) => prev.filter((it) => it.cand.symbol !== b.symbol))}
-                            className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#43507F]/10 text-base font-medium text-[#43507F] transition hover:bg-[#43507F]/15"
-                          >
-                            <IconCheck size={20} /> {t("in_cart")}
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() =>
-                              setCart((prev) => [
-                                ...prev,
-                                {
-                                  cand: b,
-                                  amount: NaN,
-                                  freq: overrideFor(b.symbol)?.frequency ?? b.frequency ?? 2,
-                                  rating: ratingFor(b.symbol) ?? "",
-                                },
-                              ])
-                            }
-                            className="flex h-14 w-full items-center justify-center rounded-2xl bg-brand-blue text-base font-medium text-white transition hover:bg-[#215688]"
-                          >
-                            {t("add_to_cart")}
-                          </button>
-                        )}
                       </div>
                     );
                   })}
                 </div>
               </div>
 
-              {/* RIGHT — cart: bonds queued to add, each with its own amount */}
-              <div className="flex min-h-0 flex-col rounded-3xl bg-white p-6">
+              {/* RIGHT — cart panel (Figma 1153:4202). Queued bonds +
+                  "ดำเนินการต่อ" → the amount-entry step (full page). */}
+              <div className="flex min-h-0 flex-col rounded-3xl bg-brand-blue/10 p-6">
                 {cart.length === 0 ? (
                   <div className="flex h-full min-h-60 flex-col items-center justify-center p-8 text-center">
                     <img src={emptyBonds} alt="" aria-hidden className="h-24 w-auto opacity-70" />
@@ -1284,72 +1375,58 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   </div>
                 ) : (
                   <>
-                    <p className="shrink-0 pb-3 text-base font-medium text-black">
-                      {t("cart")} <span className="text-black/50">({cart.length})</span>
-                    </p>
-                    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
-                      {cart.map((it) => (
-                        <div key={it.cand.symbol} className="rounded-2xl border-[0.5px] border-black/10 p-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex min-w-0 items-center gap-3">
-                              <IssuerLogo symbol={it.cand.symbol} name={issuerName(it.cand.symbol, it.cand.issuer)} size={40} className="!rounded-xl" />
-                              <div className="min-w-0">
-                                <p className="text-base font-medium text-black">{it.cand.symbol}</p>
-                                <p className="truncate text-sm text-black/60">{issuerName(it.cand.symbol, it.cand.issuer)}</p>
+                    <div className="flex shrink-0 items-center justify-between gap-3 pb-4">
+                      <img src={beondLogo} alt="beond" className="h-16 w-auto" />
+                      <button
+                        type="button"
+                        onClick={() => setCartStep("amount")}
+                        className="flex items-center gap-1.5 rounded-full bg-brand-blue py-2 pl-4 pr-3 text-sm font-medium text-white transition hover:bg-[#215688]"
+                      >
+                        {t("continue")}
+                        <IconChevronRight size={20} />
+                      </button>
+                    </div>
+                    <p className="shrink-0 pb-3 text-base font-medium text-black">{t("bonds_to_add")}</p>
+                    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
+                      <AnimatePresence>
+                        {cart.map((it) => (
+                          <motion.div
+                            key={it.cand.symbol}
+                            layout
+                            initial={{ opacity: 0, y: -10, scale: 0.98 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.98, height: 0, marginTop: 0 }}
+                            transition={{
+                              layout: { type: "spring", stiffness: 500, damping: 42, mass: 0.7 },
+                              default: { type: "spring", stiffness: 420, damping: 38, mass: 0.7 },
+                              opacity: { duration: 0.25, ease: "easeOut" },
+                            }}
+                            className="flex items-center gap-4 rounded-3xl bg-white p-4"
+                          >
+                            {isUnknown(it.cand) ? (
+                              <div className="flex size-16 shrink-0 items-center justify-center rounded-full border border-black/10">
+                                <img src={unknownBond} alt="" className="h-10 w-auto" />
                               </div>
+                            ) : (
+                              <IssuerLogo symbol={it.cand.symbol} name={issuerName(it.cand.symbol, it.cand.issuer)} size={64} className="rounded-full!" />
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <p className="text-base font-medium text-black">{it.cand.symbol}</p>
+                              <p className="truncate text-sm text-black/60">
+                                {isUnknown(it.cand) ? t("no_company_yet") : issuerName(it.cand.symbol, it.cand.issuer)}
+                              </p>
                             </div>
                             <button
                               type="button"
                               aria-label={t("remove")}
                               onClick={() => setCart((prev) => prev.filter((x) => x.cand.symbol !== it.cand.symbol))}
-                              className="shrink-0 rounded-full p-1.5 text-black/40 transition hover:bg-black/5 hover:text-[#D64545]"
+                              className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-black/10 text-black/50 transition hover:bg-[#D64545]/10 hover:text-[#D64545]"
                             >
-                              <IconX size={18} />
+                              <IconTrash size={20} />
                             </button>
-                          </div>
-                          <div className="mt-3 flex gap-2">
-                            {AMOUNT_PRESETS.map((v) => (
-                              <button
-                                key={v}
-                                type="button"
-                                onClick={() => setCart((prev) => prev.map((x) => (x.cand.symbol === it.cand.symbol ? { ...x, amount: v } : x)))}
-                                className={`flex-1 whitespace-nowrap rounded-full border px-2 py-1 font-nunito text-xs transition-colors ${
-                                  it.amount === v
-                                    ? "border-[#43507F] bg-[#43507F]/10 font-bold text-[#43507F]"
-                                    : "border-[#E7E7E7] text-black/60 hover:border-[#43507F]/40"
-                                }`}
-                              >
-                                {v.toLocaleString("th-TH")}
-                              </button>
-                            ))}
-                          </div>
-                          <NumberField
-                            value={it.amount}
-                            onChange={(v) => setCart((prev) => prev.map((x) => (x.cand.symbol === it.cand.symbol ? { ...x, amount: v } : x)))}
-                            minValue={MIN_FACE_VALUE}
-                            step={MIN_FACE_VALUE}
-                            formatOptions={{ useGrouping: true, maximumFractionDigits: 0 }}
-                            aria-label={t("investment_baht")}
-                            className="mt-2"
-                          >
-                            <NumberField.Group>
-                              <NumberField.DecrementButton />
-                              <NumberField.Input placeholder={t("eg_amount")} className="text-center font-nunito text-base font-medium" />
-                              <NumberField.IncrementButton />
-                            </NumberField.Group>
-                          </NumberField>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="shrink-0 pt-3">
-                      {error && <p className="pb-2 text-sm text-red-500">{error}</p>}
-                      <button
-                        onClick={() => saveCart()}
-                        disabled={saving}
-                        className="flex h-14 w-full items-center justify-center rounded-2xl bg-brand-blue text-base font-medium text-white transition hover:bg-[#215688] disabled:opacity-60"
-                      >
-                        {saving ? t("saving") : `${t("add_to_portfolio")} (${cart.length})`}
-                      </button>
+                          </motion.div>
+                        ))}
+                      </AnimatePresence>
                     </div>
                   </>
                 )}
@@ -1378,6 +1455,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
           <img src={bondDec1} alt="" aria-hidden className="pointer-events-none absolute -right-2 -top-1 h-10 w-auto rotate-18" />
         )}
         {body}
+        <BondDetailModal open={!!detailBond} candidate={detailBond} onClose={() => setDetailBond(null)} />
       </div>
     );
   }
@@ -1391,6 +1469,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
           </ModalDialog>
         </ModalContainer>
       </ModalBackdrop>
+      <BondDetailModal open={!!detailBond} candidate={detailBond} onClose={() => setDetailBond(null)} />
     </Modal>
   );
 }
