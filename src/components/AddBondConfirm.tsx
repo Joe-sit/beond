@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { IconChevronLeft, IconChevronDown, IconMinus, IconPlus, IconSearch } from "@tabler/icons-react";
+import { IconChevronLeft, IconChevronDown, IconMinus, IconPlus, IconSearch, IconLoader2, IconSparkles, IconAlertCircle } from "@tabler/icons-react";
 import { ComboBox, ListBox, Input } from "@heroui/react";
 import { animate, motion, AnimatePresence, useMotionValue, useTransform } from "motion/react";
-import { fetchBondDetail, issuerNames, type BondCandidate, type BondDetail } from "../lib/secApi";
+import { fetchBondDetail, fetchThaibmaFeature, issuerNames, type BondCandidate, type BondDetail } from "../lib/secApi";
 import { deriveCouponSchedule, parseFrequency } from "../lib/couponSchedule";
 import { overrideFor } from "../data/couponOverrides";
 import { ratingFor } from "../data/bondRatings";
 import { issuerName } from "../lib/issuerLogo";
 import IssuerLogo from "./IssuerLogo";
 import { useT } from "../lib/i18n";
-import beondLogo from "../assets/badges/beond-logo.svg";
+import addingBond from "../assets/badges/adding-bond.svg";
 import unknownBond from "../assets/badges/unknown-bond.svg";
 
 const THAI_MONTHS_ABBR = [
@@ -105,7 +105,7 @@ export default function AddBondConfirm({
               <p className="text-base font-medium text-black">{t("confirm_title")}</p>
               <p className="mt-1 text-sm text-black/60">{t("confirm_sub")}</p>
             </div>
-            <img src={beondLogo} alt="beond" className="h-16 w-auto shrink-0" />
+            <img src={addingBond} alt="" aria-hidden className="h-16 w-auto shrink-0" />
           </div>
 
           {/* Accordion list */}
@@ -189,6 +189,10 @@ export default function AddBondConfirm({
                           {/* Manual (not-in-SEC) bonds: fill in the missing details */}
                           {manual && (
                             <>
+                              <ThaibmaLookup
+                                symbol={it.cand.symbol}
+                                onFill={(patch) => onChangeField(it.cand.symbol, patch)}
+                              />
                               <div className="flex flex-col gap-2 rounded-3xl bg-[rgba(30,125,235,0.05)] p-4">
                                 <label className="text-base text-black/60">{t("company_name")}</label>
                                 <CompanyCombo
@@ -320,6 +324,10 @@ function DetailPanel({ cand }: { cand: BondCandidate }) {
   ];
 
   const maxAmt = Math.max(1, ...schedule.map((p) => p.amount));
+  // Round the axis top up to a clean step so bars have headroom and the near-
+  // equal coupons read against gridlines instead of all clamping to the top.
+  const axisTop = Math.max(500, Math.ceil(maxAmt / 500) * 500);
+  const ticks = [1, 0.75, 0.5, 0.25, 0].map((f) => Math.round(axisTop * f));
 
   return (
     <>
@@ -349,23 +357,45 @@ function DetailPanel({ cand }: { cand: BondCandidate }) {
         {schedule.length === 0 ? (
           <p className="py-8 text-center text-sm text-black/40">—</p>
         ) : (
-          <div className="flex items-end gap-2 overflow-x-auto">
-            {schedule.map((p) => (
-              <div key={p.installment} className="flex min-w-10 flex-1 flex-col items-center gap-2">
-                <span className="font-nunito text-[10px] text-black/60">
-                  {p.amount.toLocaleString("th-TH", { maximumFractionDigits: 0 })}
-                </span>
-                <div className="flex h-40 w-full items-end">
+          <div className="flex gap-3">
+            {/* Y-axis ticks */}
+            <div className="flex h-40 shrink-0 flex-col justify-between text-right font-nunito text-[10px] text-black/40">
+              {ticks.map((v) => (
+                <span key={v} className="leading-none">{v.toLocaleString("th-TH")}</span>
+              ))}
+            </div>
+            {/* Plot area */}
+            <div className="min-w-0 flex-1 overflow-x-auto">
+              <div className="relative h-40">
+                {/* gridlines */}
+                {ticks.map((v, i) => (
                   <div
-                    className="w-full rounded-t-lg bg-brand-blue/70"
-                    style={{ height: `${Math.max(6, (p.amount / maxAmt) * 160)}px` }}
+                    key={v}
+                    className="absolute inset-x-0 border-t border-black/10"
+                    style={{ top: `${(i / (ticks.length - 1)) * 100}%` }}
                   />
+                ))}
+                {/* bars */}
+                <div className="absolute inset-0 flex items-end gap-2">
+                  {schedule.map((p) => (
+                    <div
+                      key={p.installment}
+                      title={`${p.amount.toLocaleString("th-TH", { minimumFractionDigits: 2 })} บาท`}
+                      className="min-w-10 flex-1 rounded-t-lg bg-brand-blue/70 transition hover:bg-brand-blue"
+                      style={{ height: `${(p.amount / axisTop) * 100}%` }}
+                    />
+                  ))}
                 </div>
-                <span className="text-[10px] text-black/40">
-                  {new Date(p.date).getMonth() + 1}/{(new Date(p.date).getFullYear() + 543) % 100}
-                </span>
               </div>
-            ))}
+              {/* X-axis labels */}
+              <div className="mt-2 flex gap-2">
+                {schedule.map((p) => (
+                  <span key={p.installment} className="min-w-10 flex-1 text-center font-nunito text-[10px] text-black/40">
+                    {new Date(p.date).getMonth() + 1}/{(new Date(p.date).getFullYear() + 543) % 100}
+                  </span>
+                ))}
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -412,6 +442,60 @@ function CompanyCombo({ value, onChange }: { value: string; onChange: (v: string
         </ListBox>
       </ComboBox.Popover>
     </ComboBox>
+  );
+}
+
+// Pull a manually-added bond's details from ThaiBMA by its symbol. ThaiBMA
+// covers PP/II issues the SEC feed omits, so this fills issue/maturity dates,
+// company, coupon rate and frequency in one tap. Best-effort — a symbol not
+// registered there just reports "not found" and the user types it in.
+function ThaibmaLookup({ symbol, onFill }: { symbol: string; onFill: (patch: Partial<BondCandidate>) => void }) {
+  const t = useT();
+  const [state, setState] = useState<"idle" | "loading" | "done" | "notfound">("idle");
+
+  async function run() {
+    setState("loading");
+    const f = await fetchThaibmaFeature(symbol);
+    if (!f) {
+      setState("notfound");
+      return;
+    }
+    const patch: Partial<BondCandidate> = {};
+    if (f.issuer) patch.issuer = f.issuer;
+    if (f.issueDate) patch.issueDate = f.issueDate;
+    if (f.maturityDate) patch.maturityDate = f.maturityDate;
+    if (f.termYears != null) patch.termYears = f.termYears;
+    if (f.isin) patch.isin = f.isin;
+    if (f.frequency != null) patch.frequency = f.frequency;
+    if (f.couponRate != null) patch.couponRate = f.couponRate;
+    onFill(patch);
+    setState("done");
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <button
+        type="button"
+        onClick={run}
+        disabled={state === "loading"}
+        className="flex items-center justify-center gap-2 rounded-full bg-brand-blue px-4 py-3 text-sm font-medium text-white transition hover:bg-[#215688] disabled:opacity-60"
+      >
+        {state === "loading" ? (
+          <IconLoader2 size={18} className="animate-spin" />
+        ) : (
+          <IconSparkles size={18} />
+        )}
+        {state === "loading" ? t("thaibma_fetching") : t("thaibma_lookup")}
+      </button>
+      {state === "notfound" && (
+        <p className="flex items-center gap-1 px-1 text-xs text-black/40">
+          <IconAlertCircle size={14} /> {t("thaibma_not_found")}
+        </p>
+      )}
+      {state === "done" && (
+        <p className="px-1 text-xs text-[#5FA548]">{t("thaibma_filled")}</p>
+      )}
+    </div>
   );
 }
 

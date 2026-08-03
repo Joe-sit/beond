@@ -154,6 +154,46 @@ interface SecFeatureResponse {
   next_cursor?: string | null;
 }
 
+// Slim record returned by the ThaiBMA dev proxy (see vite.config.ts). Used to
+// enrich manually-added bonds that aren't in the SEC catalog — ThaiBMA covers
+// PP/II issues the SEC Open Data feed omits.
+export interface ThaibmaFeature {
+  symbol: string;
+  issuer: string;
+  issueDate: string | null;
+  maturityDate: string | null;
+  termYears: number | null;
+  isin: string | null;
+  frequency: number | null;
+  couponRate: number | null;
+  couponText: string | null;
+}
+
+const thaibmaCache = new Map<string, ThaibmaFeature | null>();
+
+// Look a symbol up on ThaiBMA via the dev proxy. Returns null when the symbol
+// isn't registered there or the lookup fails. Dev only — prod uses the edge fn.
+export async function fetchThaibmaFeature(
+  symbol: string,
+  signal?: AbortSignal,
+): Promise<ThaibmaFeature | null> {
+  const sym = symbol.trim().toUpperCase();
+  if (!sym) return null;
+  if (thaibmaCache.has(sym)) return thaibmaCache.get(sym)!;
+  try {
+    const res = await fetch(`/thaibma-feature?symbol=${encodeURIComponent(sym)}`, { signal });
+    if (!res.ok) {
+      thaibmaCache.set(sym, null);
+      return null;
+    }
+    const data = (await res.json()) as ThaibmaFeature;
+    thaibmaCache.set(sym, data);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 function toCandidate(r: SecFeatureRow): BondCandidate {
   const couponText = r.coupon?.desc_th ?? r.coupon?.name_th ?? r.coupon?.type ?? null;
   return {

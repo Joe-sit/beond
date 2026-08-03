@@ -412,6 +412,7 @@ function buildConfirmFlex(documentId: string, f: SlipFields): unknown {
     },
     { type: "separator", margin: "md" },
     row("ผู้จ่าย", f.payer_name ?? "-"),
+    row("เลขผู้จ่าย 13 หลัก", f.payer_tax_id ?? "-"),
     row("หุ้นกู้", f.bond_symbol ?? "-"),
     row("ดอกเบี้ย", `฿${fmtTHB(num(f.gross_amount))}`),
     row("ภาษีหัก", `฿${fmtTHB(num(f.wht_amount))} (${f.wht_rate ?? "-"}%)`),
@@ -430,25 +431,14 @@ function buildConfirmFlex(documentId: string, f: SlipFields): unknown {
     });
   }
 
-  const editButton = {
+  // One action only: open the web app (LIFF) to review/confirm thoroughly.
+  const reviewButton = {
     type: "button",
-    style: "secondary",
+    style: "primary",
     height: "sm",
-    // Open the web app's OCR-review screen (LIFF) for this pending slip.
-    action: { type: "uri", label: "แก้ไข", uri: `${LIFF_REVIEW_URL}?review=${documentId}` },
+    color: "#43507F",
+    action: { type: "uri", label: "ตรวจสอบในเว็บแอป", uri: `${LIFF_REVIEW_URL}?review=${documentId}` },
   };
-  const footerContents = complete
-    ? [
-        editButton,
-        {
-          type: "button",
-          style: "primary",
-          height: "sm",
-          color: "#43507F",
-          action: { type: "postback", label: "ยืนยัน", data: `action=confirm&id=${documentId}` },
-        },
-      ]
-    : [{ ...editButton, style: "primary", color: "#43507F", action: { ...editButton.action, label: "แก้ไขข้อมูล" } }];
 
   return {
     type: "flex",
@@ -456,7 +446,7 @@ function buildConfirmFlex(documentId: string, f: SlipFields): unknown {
     contents: {
       type: "bubble",
       body: { type: "box", layout: "vertical", spacing: "md", contents: body },
-      footer: { type: "box", layout: "horizontal", spacing: "sm", contents: footerContents },
+      footer: { type: "box", layout: "vertical", spacing: "sm", contents: [reviewButton] },
     },
   };
 }

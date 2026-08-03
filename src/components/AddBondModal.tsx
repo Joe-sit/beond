@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Modal, ModalBackdrop, ModalContainer, ModalDialog,
-  Breadcrumbs, Button, SearchField, Label, NumberField, Tabs, ComboBox, ListBox, Input, DatePicker, Calendar, toast,
+  Button, SearchField, Label, NumberField, Tabs, ComboBox, ListBox, Input, DatePicker, Calendar, toast,
 } from "@heroui/react";
 import { Group, DateInput, DateSegment, Dialog, I18nProvider } from "react-aria-components";
 import { parseDate, toCalendar, GregorianCalendar, type DateValue } from "@internationalized/date";
@@ -673,9 +673,13 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
       onAdded();
       if (done.length) toast.success(`เพิ่ม ${done.length} รุ่นเข้าพอร์ตแล้ว`);
       if (failed.length) toast.danger(`เพิ่มไม่สำเร็จ: ${failed.join(", ")}`);
-      // Keep only the ones that failed so the user can retry; clear the rest.
-      setCart((prev) => prev.filter((it) => failed.includes(it.cand.symbol)));
-      if (!failed.length) setCartStep("select");
+      if (failed.length) {
+        // Keep the ones that failed so the user can retry.
+        setCart((prev) => prev.filter((it) => failed.includes(it.cand.symbol)));
+      } else {
+        // All saved — reset and return to the home dashboard.
+        handleClose();
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : t("err_save_failed");
       setError(msg);
@@ -752,10 +756,11 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
 
   const body = (
     <>
+        {/* Header only in manual/edit — search state has its own hero. */}
+        {manual && (
         <div className="relative flex items-start justify-between">
           <div className="min-w-0">
-            {/* Breadcrumb replaces the close button — each crumb steps back a
-                level (เพิ่มหุ้นกู้ → closes; ค้นหา → back to search). */}
+            {/* Breadcrumb removed for now — kept commented until re-enabled.
             <Breadcrumbs separator="/">
               {editing ? (
                 <>
@@ -769,6 +774,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                 </>
               )}
             </Breadcrumbs>
+            */}
             {/* Search state shows its title inside the search card instead. */}
             {manual && (
               <h3 className="mt-1 text-3xl font-medium text-[#181D20]">
@@ -794,6 +800,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             </div>
           )}
         </div>
+        )}
 
         <div className="flex min-h-0 flex-1 gap-6">
         <div className="flex min-h-0 flex-1 flex-col">
@@ -1166,7 +1173,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
           </Modal>
           </div>
         ) : cartStep === "amount" && cart.length > 0 ? (
-          <div className="mt-4 flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col">
             <AddBondConfirm
               items={cart}
               minFaceValue={MIN_FACE_VALUE}
@@ -1188,7 +1195,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                 <img src={addBondMain} alt="" className="absolute right-4 top-1/2 h-44 w-auto -translate-y-1/2" />
                 <img src={bondEx1} alt="" className="absolute bottom-8 right-64 h-16 w-auto" />
                 <img src={bondEx2} alt="" className="absolute right-72 top-10 h-10 w-auto blur-[0.5px]" />
-                <img src={bondDec1} alt="" className="absolute right-0 top-4 h-24 w-auto -scale-x-100 blur-[0.5px]" />
+                <img src={bondDec1} alt="" className="absolute -right-6 -top-2 h-24 w-auto -scale-x-100 blur-[0.5px]" />
               </div>
               <div className="relative flex max-w-2xl flex-col gap-4">
                 <button
