@@ -582,6 +582,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
               open
               editHolding={editHolding}
               slipCount={editHolding ? docs.filter((d) => d.symbol === editHolding.symbol && d.status === "confirmed").length : 0}
+              slips={editHolding ? docs.filter((d) => d.symbol === editHolding.symbol && d.status === "confirmed") : []}
               onDelete={editHolding ? () => delHolding(editHolding) : undefined}
               onClose={() => { setAddBondOpen(false); setEditHolding(null); }}
               onAdded={() => refetchHoldings()}

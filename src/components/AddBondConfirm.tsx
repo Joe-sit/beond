@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { IconChevronLeft, IconChevronDown, IconMinus, IconPlus, IconSearch, IconLoader2, IconSparkles, IconAlertCircle } from "@tabler/icons-react";
+import { IconChevronLeft, IconChevronDown, IconMinus, IconPlus, IconSearch } from "@tabler/icons-react";
 import { ComboBox, ListBox, Input } from "@heroui/react";
 import { animate, motion, AnimatePresence, useMotionValue, useTransform } from "motion/react";
-import { fetchBondDetail, fetchThaibmaFeature, issuerNames, type BondCandidate, type BondDetail } from "../lib/secApi";
+import { fetchBondDetail, issuerNames, type BondCandidate, type BondDetail } from "../lib/secApi";
 import { deriveCouponSchedule, parseFrequency } from "../lib/couponSchedule";
 import { overrideFor } from "../data/couponOverrides";
 import { ratingFor } from "../data/bondRatings";
@@ -23,14 +23,23 @@ function fmtThaiDate(iso: string | null): string {
   return `${d.getDate()} ${THAI_MONTHS_ABBR[d.getMonth()]} ${d.getFullYear() + 543}`;
 }
 function fmtTerm(y: number | null, m: number | null, d: number | null): string {
-  const parts = [y ? `${y} ปี` : "", m ? `${m} เดือน` : "", d ? `${d} วัน` : ""].filter(Boolean);
+  let years = y;
+  let months = m;
+  // ThaiBMA gives the term as a fractional year (e.g. 1.7534) with no separate
+  // month field — split the fraction into whole years + months.
+  if (y != null && m == null && !Number.isInteger(y)) {
+    years = Math.floor(y);
+    months = Math.round((y - years) * 12);
+    if (months === 12) { years += 1; months = 0; }
+  }
+  const parts = [years ? `${years} ปี` : "", months ? `${months} เดือน` : "", d ? `${d} วัน` : ""].filter(Boolean);
   return parts.length ? parts.join(" ") : "—";
 }
 // A manual bond with no company resolved yet — shown as a "?" placeholder.
 const isUnknown = (c: BondCandidate) => c.source === "manual" && !c.issuer.trim();
 
 // Count-up a baht amount so it rolls on +/- instead of snapping.
-function AnimatedBaht({ value }: { value: number }) {
+export function AnimatedBaht({ value }: { value: number }) {
   const safe = Number.isFinite(value) ? value : 0;
   const mv = useMotionValue(safe);
   const text = useTransform(mv, (v) => `฿${Math.round(v).toLocaleString("th-TH")}`);
@@ -189,10 +198,6 @@ export default function AddBondConfirm({
                           {/* Manual (not-in-SEC) bonds: fill in the missing details */}
                           {manual && (
                             <>
-                              <ThaibmaLookup
-                                symbol={it.cand.symbol}
-                                onFill={(patch) => onChangeField(it.cand.symbol, patch)}
-                              />
                               <div className="flex flex-col gap-2 rounded-3xl bg-[rgba(30,125,235,0.05)] p-4">
                                 <label className="text-base text-black/60">{t("company_name")}</label>
                                 <CompanyCombo
@@ -278,7 +283,9 @@ export default function AddBondConfirm({
 }
 
 // Right-tab detail: bond attributes + a coupon-schedule bar chart (per ฿100k).
-function DetailPanel({ cand }: { cand: BondCandidate }) {
+// Exported so the port-side edit view (AddBondModal) can reuse the exact same
+// detail layout as this confirm page.
+export function DetailPanel({ cand }: { cand: BondCandidate }) {
   const t = useT();
   const [detail, setDetail] = useState<BondDetail | null>(null);
 
@@ -406,7 +413,7 @@ function DetailPanel({ cand }: { cand: BondCandidate }) {
 // Company-name combobox backed by the SEC catalog's issuer list — type to
 // filter, pick from the popover, or keep a custom name. Same behaviour as the
 // manual-entry issuer field.
-function CompanyCombo({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+export function CompanyCombo({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const t = useT();
   const [q, setQ] = useState("");
   useEffect(() => {
@@ -442,60 +449,6 @@ function CompanyCombo({ value, onChange }: { value: string; onChange: (v: string
         </ListBox>
       </ComboBox.Popover>
     </ComboBox>
-  );
-}
-
-// Pull a manually-added bond's details from ThaiBMA by its symbol. ThaiBMA
-// covers PP/II issues the SEC feed omits, so this fills issue/maturity dates,
-// company, coupon rate and frequency in one tap. Best-effort — a symbol not
-// registered there just reports "not found" and the user types it in.
-function ThaibmaLookup({ symbol, onFill }: { symbol: string; onFill: (patch: Partial<BondCandidate>) => void }) {
-  const t = useT();
-  const [state, setState] = useState<"idle" | "loading" | "done" | "notfound">("idle");
-
-  async function run() {
-    setState("loading");
-    const f = await fetchThaibmaFeature(symbol);
-    if (!f) {
-      setState("notfound");
-      return;
-    }
-    const patch: Partial<BondCandidate> = {};
-    if (f.issuer) patch.issuer = f.issuer;
-    if (f.issueDate) patch.issueDate = f.issueDate;
-    if (f.maturityDate) patch.maturityDate = f.maturityDate;
-    if (f.termYears != null) patch.termYears = f.termYears;
-    if (f.isin) patch.isin = f.isin;
-    if (f.frequency != null) patch.frequency = f.frequency;
-    if (f.couponRate != null) patch.couponRate = f.couponRate;
-    onFill(patch);
-    setState("done");
-  }
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <button
-        type="button"
-        onClick={run}
-        disabled={state === "loading"}
-        className="flex items-center justify-center gap-2 rounded-full bg-brand-blue px-4 py-3 text-sm font-medium text-white transition hover:bg-[#215688] disabled:opacity-60"
-      >
-        {state === "loading" ? (
-          <IconLoader2 size={18} className="animate-spin" />
-        ) : (
-          <IconSparkles size={18} />
-        )}
-        {state === "loading" ? t("thaibma_fetching") : t("thaibma_lookup")}
-      </button>
-      {state === "notfound" && (
-        <p className="flex items-center gap-1 px-1 text-xs text-black/40">
-          <IconAlertCircle size={14} /> {t("thaibma_not_found")}
-        </p>
-      )}
-      {state === "done" && (
-        <p className="px-1 text-xs text-[#5FA548]">{t("thaibma_filled")}</p>
-      )}
-    </div>
   );
 }
 

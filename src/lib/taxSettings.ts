@@ -92,6 +92,51 @@ export function estimatedRefund(totalWht: number, rate: number): number {
   return Math.max(0, Math.round((totalWht - taxOnInterest) * 100) / 100);
 }
 
+// Which bracket an annual (net taxable) income falls in — its index in
+// TAX_BRACKETS, i.e. the income's marginal bracket.
+export function bracketIndexForIncome(income: number): number {
+  if (income <= 0) return 0;
+  for (let i = 0; i < TAX_BRACKETS.length; i++) {
+    const b = TAX_BRACKETS[i];
+    if (income >= b.min && income <= b.max) return i;
+  }
+  return TAX_BRACKETS.length - 1;
+}
+
+// The marginal rate (%) for an actual annual income.
+export function marginalRateForIncome(income: number): number {
+  return TAX_BRACKETS[bracketIndexForIncome(income)].rate;
+}
+
+// The personal allowance every taxpayer gets (ค่าลดหย่อนผู้มีเงินได้). This
+// example models "no other deductions", so it's the only one applied.
+export const PERSONAL_ALLOWANCE = 60_000;
+
+// Overpaid (refundable) WHT given the caller's ACTUAL annual income. Following
+// the ภ.ง.ด. worksheet: the personal allowance is first subtracted from total
+// income, then the bond coupon (interest, before its flat 15% WHT) is the slice
+// stacked on top of the caller's other income and taxed by the brackets it
+// climbs through. The refund is the WHT already paid minus that incremental tax.
+//   taxableWithout = max(0, income − allowance)
+//   taxableWith    = max(0, income + interest − allowance)
+//   refund = WHT − [ progressiveTax(taxableWith) − progressiveTax(taxableWithout) ]
+// A retiree living purely off coupons (income 0) reclaims the most — the
+// interest gets both the 150k exempt band and the personal allowance — while a
+// high earner has the allowance used up by salary and the interest taxed on top.
+export function refundFromIncome(
+  totalWht: number,
+  annualIncome: number,
+  allowance: number = PERSONAL_ALLOWANCE,
+): number {
+  if (totalWht <= 0) return 0;
+  const interest = totalWht / 0.15; // WHT is a flat 15% of the coupon
+  const base = Math.max(0, annualIncome);
+  const taxableWithout = Math.max(0, base - allowance);
+  const taxableWith = Math.max(0, base + interest - allowance);
+  const interestTax = progressiveTax(taxableWith) - progressiveTax(taxableWithout);
+  return Math.max(0, Math.round((totalWht - interestTax) * 100) / 100);
+}
+
 // The caller's marginal tax rate (%), or null when unset / logged out / mock.
 export async function getMarginalRate(): Promise<number | null> {
   if (!supabaseEnabled || !supabase) return null;

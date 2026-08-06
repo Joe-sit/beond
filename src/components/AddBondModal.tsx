@@ -2,22 +2,22 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Modal, ModalBackdrop, ModalContainer, ModalDialog,
-  Button, SearchField, Label, NumberField, Tabs, ComboBox, ListBox, Input, DatePicker, Calendar, toast,
+  Button, SearchField, Label, NumberField, ComboBox, ListBox, Input, DatePicker, Calendar, toast,
 } from "@heroui/react";
 import { Group, DateInput, DateSegment, Dialog, I18nProvider } from "react-aria-components";
 import { parseDate, toCalendar, GregorianCalendar, type DateValue } from "@internationalized/date";
-import { ensureCatalog, searchLocal, issuerNames, issuerForSymbol, symbolForIssuer, catalogUpdatedAt, type BondCandidate } from "../lib/secApi";
+import { ensureCatalog, searchLocal, issuerNames, issuerForSymbol, symbolForIssuer, catalogUpdatedAt, fetchThaibmaFeature, type BondCandidate } from "../lib/secApi";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
 import { verifyTaxId, lookupTaxIdName, companyNamesMatch } from "../lib/verifyTaxId";
 import { overrideFor } from "../data/couponOverrides";
 import { ratingFor } from "../data/bondRatings";
-import { notifyPortfolioChanged, useHoldings, type HoldingDetail } from "../hooks/usePortfolio";
+import { notifyPortfolioChanged, useHoldings, type HoldingDetail, type TaxDoc } from "../hooks/usePortfolio";
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import IssuerLogo from "./IssuerLogo";
 import BondDetailModal from "./BondDetailModal";
-import AddBondConfirm from "./AddBondConfirm";
+import AddBondConfirm, { DetailPanel, AnimatedBaht } from "./AddBondConfirm";
 import { issuerName } from "../lib/issuerLogo";
-import { IconCheck, IconTrash, IconCalendar, IconAlertTriangle, IconPlus, IconChevronRight, IconChevronLeft } from "@tabler/icons-react";
+import { IconCheck, IconTrash, IconCalendar, IconAlertTriangle, IconPlus, IconMinus, IconChevronRight, IconChevronLeft, IconChevronDown, IconLoader2, IconSparkles } from "@tabler/icons-react";
 import emptyBonds from "../assets/empty-bonds.svg";
 import addBondMain from "../assets/add-bond-main.png";
 import bondDec1 from "../assets/bond-dec-1.png";
@@ -28,6 +28,7 @@ import badgeRating from "../assets/badges/badge-rating.svg";
 import badgeAge from "../assets/badges/badge-age.svg";
 import beondLogo from "../assets/badges/beond-logo.svg";
 import unknownBond from "../assets/badges/unknown-bond.svg";
+import addingBond from "../assets/badges/adding-bond.svg";
 import { useT } from "../lib/i18n";
 
 // A bond queued in the add-cart, with the user's chosen face value + coupon
@@ -47,6 +48,7 @@ interface AddBondModalProps {
   inline?: boolean; // render the body in place (no Modal chrome), filling its parent
   editHolding?: HoldingDetail | null; // edit an existing holding instead of adding
   slipCount?: number; // confirmed slips accumulated for this bond (delete warning)
+  slips?: TaxDoc[]; // confirmed 50-ทวิ slips for this bond — shown as a timeline
   onDelete?: () => void | Promise<void>; // delete the holding being edited
 }
 
@@ -100,6 +102,137 @@ function Badge({
       {icon}
       {children}
     </span>
+  );
+}
+
+// Placeholder shown while a ThaiBMA lookup resolves — mirrors the result card
+// layout (logo + symbol/issuer + badge row) with pulsing grey blocks, plus a
+// caption naming the source so the wait is explained.
+function SkeletonBondCard({ symbol }: { symbol: string }) {
+  const t = useT();
+  return (
+    <div className="flex shrink-0 flex-col gap-4 rounded-3xl bg-white p-6">
+      <div className="flex animate-pulse items-center gap-4">
+        <div className="size-16 shrink-0 rounded-full bg-black/10" />
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="h-4 w-24 rounded bg-black/10" />
+          <div className="h-3 w-40 rounded bg-black/5" />
+        </div>
+      </div>
+      <div className="flex animate-pulse flex-wrap gap-2">
+        <div className="h-9 w-28 rounded-full bg-black/10" />
+        <div className="h-9 w-24 rounded-full bg-black/10" />
+        <div className="h-9 w-24 rounded-full bg-black/10" />
+      </div>
+      <p className="flex items-center gap-2 text-sm text-black/50">
+        <IconLoader2 size={16} className="animate-spin" />
+        {t("thaibma_fetching_from", { symbol })}
+      </p>
+    </div>
+  );
+}
+
+// Collapsible field group for the manual/edit form — a blue block with a
+// header row (title + optional done-check) that expands/collapses its content
+// with the same spring height animation as the confirm page's accordion.
+function FormSection({
+  title,
+  valid,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  valid?: boolean;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="rounded-3xl bg-[rgba(30,125,235,0.05)] p-4">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 text-left"
+      >
+        <span className="flex flex-1 items-center gap-1.5 text-base font-medium text-black">
+          {title}
+          {valid && <IconCheck size={16} className="text-[#3FA35B]" stroke={3} />}
+        </span>
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-black/5 text-black/60">
+          <IconChevronDown size={20} className={`transition ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="c"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{
+              height: { type: "spring", stiffness: 400, damping: 40, mass: 0.8 },
+              opacity: { duration: 0.2, ease: "easeOut" },
+            }}
+            className="overflow-hidden"
+          >
+            <div className="pt-4">{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// Right-tab: 50-ทวิ slip collection for a bond, as a timeline. Slips captured
+// via LINE OCR vs uploaded in-app are labelled by source; ordered newest first.
+function SlipCollectionPanel({ slips }: { slips: TaxDoc[] }) {
+  const t = useT();
+  const ordered = useMemo(
+    () => [...slips].sort((a, b) => (b.payDate ?? "").localeCompare(a.payDate ?? "")),
+    [slips],
+  );
+  const fmtBaht = (n: number | null) => (n == null ? "—" : `฿${n.toLocaleString("th-TH", { maximumFractionDigits: 2 })}`);
+  // Any source other than the in-app web upload is a LINE-channel OCR capture.
+  const viaLine = (s: TaxDoc) => s.source != null && s.source !== "web_upload";
+
+  if (ordered.length === 0) {
+    return (
+      <div className="flex h-full flex-1 flex-col items-center justify-center gap-3 text-center">
+        <img src={emptyBonds} alt="" aria-hidden className="h-24 w-auto opacity-70" />
+        <p className="max-w-xs text-sm text-black/40">{t("slips_none_yet")}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col gap-4">
+      <p className="text-base font-medium text-black">{t("slips_collected_n", { n: String(ordered.length) })}</p>
+      <ol className="relative flex flex-col gap-5 pl-6">
+        {/* vertical rail */}
+        <span className="absolute left-1.75 top-1.5 bottom-1.5 w-px bg-black/10" aria-hidden />
+        {ordered.map((s) => (
+          <li key={s.id} className="relative">
+            {/* dot */}
+            <span
+              className={`absolute -left-6 top-1 flex size-4 items-center justify-center rounded-full ${viaLine(s) ? "bg-[#5FA548]" : "bg-brand-blue"} text-white`}
+              aria-hidden
+            >
+              <IconCheck size={11} stroke={3} />
+            </span>
+            <p className="font-nunito text-sm font-medium text-black">{s.payDate ? fmtThaiDate(s.payDate) : "—"}</p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${viaLine(s) ? "bg-[#E7F5EC] text-[#2E8B57]" : "bg-brand-blue/10 text-brand-blue"}`}
+              >
+                {viaLine(s) ? t("slip_via_line") : t("slip_via_upload")}
+              </span>
+              <span className="text-sm text-black/60">{t("wht")} {fmtBaht(s.whtAmount)}</span>
+            </div>
+          </li>
+        ))}
+      </ol>
+      <p className="mt-auto text-xs text-black/40">{t("slips_collection_hint")}</p>
+    </div>
   );
 }
 
@@ -194,13 +327,17 @@ function IssueDatePicker({ value, onChange }: { value: string; onChange: (iso: s
   );
 }
 
-export default function AddBondModal({ open, onClose, onAdded, initialTerm, inline = false, editHolding = null, slipCount = 0, onDelete }: AddBondModalProps) {
+export default function AddBondModal({ open, onClose, onAdded, initialTerm, inline = false, editHolding = null, slipCount = 0, slips = [], onDelete }: AddBondModalProps) {
   const t = useT();
   const editing = !!editHolding;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [manualReview, setManualReview] = useState(false); // summary step before saving a manual entry
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<BondCandidate[]>([]);
+  // A ThaiBMA-resolved bond for a term the SEC catalog doesn't have — rendered
+  // as a normal result card once found. Reset whenever the term changes.
+  const [manualResult, setManualResult] = useState<BondCandidate | null>(null);
+  const [tbmaState, setTbmaState] = useState<"idle" | "loading" | "notfound">("idle");
   const [sortDir, setSortDir] = useState<"new" | "old">("new"); // issue-date order
   const sortedResults = useMemo(() => {
     const cmp = (a: BondCandidate, b: BondCandidate) =>
@@ -231,6 +368,44 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   const isUnknown = (c: BondCandidate) => c.source === "manual" && !c.issuer.trim();
   const [detailBond, setDetailBond] = useState<BondCandidate | null>(null); // bond-detail modal
   const [cartStep, setCartStep] = useState<"select" | "amount">("select"); // add-flow step
+  const [continuing, setContinuing] = useState(false); // ThaiBMA prefetch while entering amount step
+
+  // Before the amount step, enrich manually-added (not-in-SEC) bonds from
+  // ThaiBMA by their symbol — fills company / issue date / coupon / maturity so
+  // the user usually doesn't have to type anything. Best-effort: symbols not on
+  // ThaiBMA just stay blank for manual entry.
+  async function handleContinue() {
+    const manual = cart.filter((it) => it.cand.source === "manual");
+    if (manual.length === 0) {
+      setCartStep("amount");
+      return;
+    }
+    setContinuing(true);
+    const patches = await Promise.all(
+      manual.map(async (it) => {
+        const f = await fetchThaibmaFeature(it.cand.symbol);
+        if (!f) return null;
+        // Don't fill issuer — the ThaiBMA company name isn't a SEC catalog name
+        // and wouldn't match the confirm-page dropdown; the user picks it there.
+        const patch: Partial<BondCandidate> = {};
+        if (f.issueDate) patch.issueDate = f.issueDate;
+        if (f.maturityDate) patch.maturityDate = f.maturityDate;
+        if (f.termYears != null) patch.termYears = f.termYears;
+        if (f.isin) patch.isin = f.isin;
+        if (f.frequency != null) patch.frequency = f.frequency;
+        if (f.couponRate != null) patch.couponRate = f.couponRate;
+        return { symbol: it.cand.symbol, patch };
+      }),
+    );
+    const bySym = new Map(patches.filter(Boolean).map((p) => [p!.symbol, p!.patch]));
+    if (bySym.size > 0) {
+      setCart((prev) =>
+        prev.map((x) => (bySym.has(x.cand.symbol) ? { ...x, cand: { ...x.cand, ...bySym.get(x.cand.symbol)! } } : x)),
+      );
+    }
+    setContinuing(false);
+    setCartStep("amount");
+  }
   // Thai date the loaded SEC catalog snapshot was taken (for the hero note).
   const catalogDate = (() => {
     const at = catalogUpdatedAt();
@@ -386,7 +561,51 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   useEffect(() => {
     if (!open) return;
     setResults(term.trim().length < 2 ? [] : searchLocal(term));
+    // A new term invalidates any previous ThaiBMA lookup.
+    setManualResult(null);
+    setTbmaState("idle");
   }, [term, open]);
+
+  // Try to resolve the current term via ThaiBMA (for symbols not in the SEC
+  // catalog). On success it becomes a normal, addable result card.
+  async function lookupThaibma() {
+    const sym = term.trim().toUpperCase();
+    if (!sym) return;
+    setTbmaState("loading");
+    const f = await fetchThaibmaFeature(sym);
+    if (!f) {
+      setTbmaState("notfound");
+      return;
+    }
+    setManualResult({
+      symbol: f.symbol || sym,
+      nameTh: f.issuer || sym,
+      nameEn: f.issuer || "",
+      isin: f.isin ?? "",
+      // Leave issuer blank on purpose: the ThaiBMA company string isn't a SEC
+      // catalog name, so it wouldn't match the confirm-page dropdown. The user
+      // picks the canonical company there; nameEn keeps it for card display.
+      issuer: "",
+      couponRate: f.couponRate,
+      maturityDate: f.maturityDate,
+      issueDate: f.issueDate,
+      termYears: f.termYears,
+      frequency: f.frequency,
+      source: "manual",
+    });
+    setTbmaState("idle");
+  }
+
+  // Catalog miss → fall back to ThaiBMA automatically (debounced so we don't
+  // hammer it on every keystroke). The button remains a manual retry.
+  useEffect(() => {
+    if (!open) return;
+    if (term.trim().length < 2 || results.length > 0) return;
+    if (manualResult || tbmaState !== "idle") return;
+    const id = setTimeout(() => { void lookupThaibma(); }, 600);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [term, open, results.length, manualResult, tbmaState]);
 
   const reset = () => {
     setTerm("");
@@ -646,6 +865,12 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
       setError(`จำนวนเงินลงทุนขั้นต่ำ ${MIN_FACE_VALUE.toLocaleString("th-TH")} บาท (${bad.cand.symbol})`);
       return;
     }
+    // Manual bonds must have a company picked before saving (blank issuer = "?").
+    const noCompany = cart.find((it) => it.cand.source === "manual" && !it.cand.issuer.trim());
+    if (noCompany) {
+      setError(t("err_pick_company", { symbol: noCompany.cand.symbol }));
+      return;
+    }
     if (!supabaseEnabled || !supabase) {
       handleClose();
       onAdded();
@@ -669,9 +894,12 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
           console.error("cart add failed:", it.cand.symbol, e);
         }
       }
-      notifyPortfolioChanged();
-      onAdded();
-      if (done.length) toast.success(`เพิ่ม ${done.length} รุ่นเข้าพอร์ตแล้ว`);
+      // Only refresh the portfolio when something actually landed.
+      if (done.length) {
+        notifyPortfolioChanged();
+        onAdded();
+        toast.success(`เพิ่ม ${done.length} รุ่นเข้าพอร์ตแล้ว`);
+      }
       if (failed.length) toast.danger(`เพิ่มไม่สำเร็จ: ${failed.join(", ")}`);
       if (failed.length) {
         // Keep the ones that failed so the user can retry.
@@ -704,60 +932,68 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
       d.setMonth(d.getMonth() + totalM);
       return d.toISOString().slice(0, 10);
     })();
-  const pvAnnualInterest = Number.isFinite(amount) && pvCoupon != null ? amount * (pvCoupon / 100) : null;
-  const pvWht = pvAnnualInterest != null ? pvAnnualInterest * 0.15 : null;
-  const pvFmt = (n: number) => new Intl.NumberFormat("th-TH", { maximumFractionDigits: 2 }).format(n);
+  // Live bond record for the detail panel — mirrors the selected bond or the
+  // manual fields as they're typed, so the panel updates in real time.
+  const [rightTab, setRightTab] = useState<"detail" | "slips">("detail");
+  const previewCand: BondCandidate = useMemo(
+    () => ({
+      symbol: (selected?.symbol || pvSymbol || "").trim().toUpperCase(),
+      nameTh: pvCompany || pvSymbol,
+      nameEn: pvCompany,
+      isin: selected?.isin ?? "",
+      issuer: selected?.issuer ?? mIssuer,
+      couponRate: pvCoupon,
+      maturityDate: pvMaturity,
+      issueDate: selected?.issueDate ?? (mIssue || null),
+      termYears: selected?.termYears ?? (Number.isFinite(mTermY) ? mTermY : null),
+      frequency: freq,
+      source: selected?.source ?? "manual",
+    }),
+    [selected, pvSymbol, pvCompany, pvCoupon, pvMaturity, mIssuer, mIssue, mTermY, freq],
+  );
 
+  // Right column — folder tabs over a card: bond detail (same layout as the
+  // confirm page) + the slip-collection tab for this bond.
   const preview = (
-    <aside className="mt-4 hidden w-80 shrink-0 flex-col gap-4 rounded-3xl border-[0.5px] border-[#d9d9d9] bg-[#F6F4F1] p-5 lg:flex">
-      <div className="flex items-center gap-3">
-        {pvSymbol ? (
-          <IssuerLogo symbol={pvSymbol} name={pvCompany || pvSymbol} size={48} />
-        ) : (
-          <div className="size-12 shrink-0 rounded-full bg-black/5" />
-        )}
-        <div className="min-w-0">
-          <p className="font-nunito text-lg font-bold text-[#181D20]">{pvSymbol || "—"}</p>
-          <p className="truncate text-xs text-black/60">{pvCompany || t("company_name")}</p>
-        </div>
+    <aside className="hidden min-h-0 flex-col lg:flex">
+      <div className="flex shrink-0 gap-1">
+        <button
+          type="button"
+          onClick={() => setRightTab("detail")}
+          className={`rounded-t-2xl border-[0.5px] border-b-0 px-4 py-2.5 text-sm font-medium transition ${
+            rightTab === "detail" ? "border-[#d9d9d9] bg-white text-ink" : "border-transparent bg-black/5 text-ink/50 hover:bg-black/10"
+          }`}
+        >
+          {t("bond_details")}
+        </button>
+        <button
+          type="button"
+          onClick={() => setRightTab("slips")}
+          className={`flex items-center gap-1.5 rounded-t-2xl border-[0.5px] border-b-0 px-4 py-2.5 text-sm font-medium transition ${
+            rightTab === "slips" ? "border-[#d9d9d9] bg-white text-ink" : "border-transparent bg-black/5 text-ink/50 hover:bg-black/10"
+          }`}
+        >
+          {t("slip_collection")}
+          {slipCount > 0 && (
+            <span className="flex min-w-5 items-center justify-center rounded-full bg-[#5FA548] px-1.5 font-nunito text-[11px] font-bold text-white">{slipCount}</span>
+          )}
+        </button>
       </div>
-      <div className="h-px bg-black/10" />
-      <dl className="flex flex-col gap-2.5 text-sm">
-        {[
-          [t("coupon_word"), pvCoupon != null ? `${pvCoupon}% ${t("per_year")}` : "—"],
-          [t("invested_amount"), Number.isFinite(amount) ? `฿${pvFmt(amount)}` : "—"],
-          [t("pays_interest"), t(FREQ_KEY[freq as 1 | 2 | 4 | 12] ?? "freq_semi")],
-          [t("maturity"), pvMaturity ? fmtThaiDate(pvMaturity) : "—"],
-          [t("payer_tax_id_label"), mTaxId ? mTaxId : "—"],
-        ].map(([k, v]) => (
-          <div key={k} className="flex items-start justify-between gap-3">
-            <dt className="shrink-0 text-black/50">{k}</dt>
-            <dd className="text-right font-nunito font-medium text-[#181D20]">{v}</dd>
-          </div>
-        ))}
-      </dl>
-      {pvAnnualInterest != null && (
-        <>
-          <div className="h-px bg-black/10" />
-          <div className="flex flex-col gap-1.5 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-black/50">{t("interest_per_month")}</span>
-              <span className="font-nunito font-medium text-[#181D20]">฿{pvFmt(pvAnnualInterest / 12)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-black/50">{t("wht")} (15%)</span>
-              <span className="font-nunito font-medium text-[#2E8B57]">฿{pvFmt((pvWht ?? 0) / 12)}</span>
-            </div>
-          </div>
-        </>
-      )}
+      <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto rounded-3xl rounded-tl-none border-[0.5px] border-[#d9d9d9] bg-white p-6">
+        {rightTab === "detail" ? (
+          <DetailPanel cand={previewCand} />
+        ) : (
+          <SlipCollectionPanel slips={slips} />
+        )}
+      </div>
     </aside>
   );
 
   const body = (
     <>
-        {/* Header only in manual/edit — search state has its own hero. */}
-        {manual && (
+        {/* Outer header only for the manual review step — the 2-column edit view
+            carries its own header inside the left card. */}
+        {manual && manualReview && (
         <div className="relative flex items-start justify-between">
           <div className="min-w-0">
             {/* Breadcrumb removed for now — kept commented until re-enabled.
@@ -802,7 +1038,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
         </div>
         )}
 
-        <div className="flex min-h-0 flex-1 gap-6">
+        <div className={`min-h-0 flex-1 gap-6 ${manual && !manualReview ? "grid lg:grid-cols-2" : "flex"}`}>
         <div className="flex min-h-0 flex-1 flex-col">
         {!selected && manual && manualReview ? (
           <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-4">
@@ -874,42 +1110,63 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             </div>
           </div>
         ) : !selected && manual ? (
-          <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col gap-3 rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-3">
-            {/* Save = folder-head tab rising from this card, flush like the
-                add-bond tab over the holdings list. */}
-            <button
-              onClick={goManualReview}
-              className="absolute bottom-full right-5 z-10 flex items-center gap-2 rounded-t-2xl border-[0.5px] border-b-0 border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7]"
-            >
-              {t("review")}
-              <span className="flex size-6 items-center justify-center rounded-full border-[1.5px] border-current text-ink">
-                <IconCheck size={14} stroke={2.5} />
-              </span>
-            </button>
-            {/* Fields grouped under collapsible headings. */}
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <Tabs defaultSelectedKey="info" variant="secondary" className="flex flex-col gap-3">
-                <Tabs.ListContainer>
-                  <Tabs.List aria-label={t("bond_info")} className="gap-4">
-                    <Tabs.Tab id="info" className="flex items-center gap-1.5">
-                      {t("bond_info")}
-                      {infoValid && <IconCheck size={16} className="text-[#3FA35B]" stroke={3} />}
-                      <Tabs.Indicator />
-                    </Tabs.Tab>
-                    <Tabs.Tab id="yield" className="flex items-center gap-1.5">
-                      {t("yield_section")}
-                      {yieldValid && <IconCheck size={16} className="text-[#3FA35B]" stroke={3} />}
-                      <Tabs.Indicator />
-                    </Tabs.Tab>
-                    <Tabs.Tab id="term" className="flex items-center gap-1.5">
-                      {t("term")}
-                      {termValid && <IconCheck size={16} className="text-[#3FA35B]" stroke={3} />}
-                      <Tabs.Indicator />
-                    </Tabs.Tab>
-                  </Tabs.List>
-                </Tabs.ListContainer>
-                <Tabs.Panel id="info">
-                    <div className="flex flex-col gap-3 pb-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-4">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border-[0.5px] border-black/10 bg-white">
+              {/* Back — inside the card, matching the confirm page */}
+              <div className="p-6 pb-0">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="flex w-fit items-center gap-1.5 rounded-full border-[0.5px] border-black/10 bg-[#f5f5f5] px-3 py-2 text-sm font-medium text-[#222] transition hover:bg-black/5"
+                >
+                  <IconChevronLeft size={18} /> {t("back")}
+                </button>
+              </div>
+              {/* Header + illustration */}
+              <div className="flex items-start justify-between gap-4 p-6">
+                <div className="min-w-0">
+                  <p className="font-nunito text-xl font-medium text-black">{mSymbol.trim() ? mSymbol.trim().toUpperCase() : (editing ? t("edit") : t("manual_entry"))}</p>
+                  <p className="mt-1 text-sm text-black/60">{editing ? t("edit") : t("manual_hint")}</p>
+                </div>
+                <img src={addingBond} alt="" aria-hidden className="h-16 w-auto shrink-0" />
+              </div>
+              {/* Stacked field blocks — same look as the confirm page */}
+              <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto border-t-[0.5px] border-black/10 p-4">
+                {/* Invested value — stepper pill */}
+                <div className="flex items-center justify-between gap-3 rounded-3xl bg-[rgba(30,125,235,0.05)] p-4">
+                  <div className="min-w-0">
+                    <p className="text-base text-black/60">{t("invested_value")}</p>
+                    <p className="mt-1 font-nunito text-2xl font-medium text-black">
+                      <AnimatedBaht value={Number.isFinite(amount) ? amount : 0} />
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <motion.button
+                      type="button"
+                      aria-label="-"
+                      disabled={!Number.isFinite(amount) || amount <= MIN_FACE_VALUE}
+                      onClick={() => setAmount(Math.max(MIN_FACE_VALUE, (Number.isFinite(amount) ? amount : MIN_FACE_VALUE) - MIN_FACE_VALUE))}
+                      whileTap={{ scale: 0.95 }}
+                      transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                      className="flex size-12 items-center justify-center rounded-full bg-brand-blue text-white hover:bg-[#215688] disabled:opacity-40"
+                    >
+                      <IconMinus size={24} />
+                    </motion.button>
+                    <motion.button
+                      type="button"
+                      aria-label="+"
+                      onClick={() => setAmount((Number.isFinite(amount) ? amount : 0) + MIN_FACE_VALUE)}
+                      whileTap={{ scale: 0.95 }}
+                      transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                      className="flex size-12 items-center justify-center rounded-full bg-brand-blue text-white hover:bg-[#215688]"
+                    >
+                      <IconPlus size={24} />
+                    </motion.button>
+                  </div>
+                </div>
+                {/* Bond info — symbol, company, payer tax id */}
+                <FormSection title={t("bond_info")} valid={infoValid} defaultOpen>
+                  <div className="flex flex-col gap-3">
                       <div className="flex gap-3">
                       <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
                         {t("symbol_field")} *
@@ -967,7 +1224,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           )}
                           {!checkingTax && liveName && liveMatch && (
                             <span className="flex items-center gap-0.5 rounded-full bg-[#E7F5EC] px-1.5 py-0.5 text-[11px] font-medium text-[#2E8B57]" title={liveName}>
-                              <IconCheck size={12} /> ตรงกับ DBD
+                              <IconCheck size={12} /> ตรงกับชื่อใน DBD
                             </span>
                           )}
                           {!checkingTax && liveName && !liveMatch && (
@@ -1013,12 +1270,34 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           placeholder={t("payer_tax_id_ph")}
                           className={`font-nunito text-base font-medium sm:text-base ${editing && editHolding?.payerTaxIdVerified && !taxIdUnlocked ? "opacity-60" : ""}`}
                         />
+                        {/* Plain-language explanation of the DBD check result. DBD =
+                            กรมพัฒนาธุรกิจการค้า, the juristic-person registry. */}
+                        {!checkingTax && liveName && liveMatch && (
+                          <span className="font-normal text-xs text-[#2E8B57]">
+                            เลข 13 หลักนี้ตรงกับชื่อนิติบุคคล “{liveName}” ที่จดทะเบียนกับกรมพัฒนาธุรกิจการค้า (DBD)
+                          </span>
+                        )}
+                        {!checkingTax && liveName && !liveMatch && (
+                          <span className="font-normal text-xs text-[#B7791F]">
+                            เลขนี้จดทะเบียนในชื่อ “{liveName}” ที่กรมพัฒนาธุรกิจการค้า (DBD) ซึ่งไม่ตรงกับบริษัทผู้ออกหุ้นกู้ — ตรวจสอบอีกครั้ง
+                          </span>
+                        )}
+                        {!checkingTax && liveName === null && (
+                          <span className="font-normal text-xs text-[#B7791F]">
+                            ไม่พบเลข 13 หลักนี้ในทะเบียนนิติบุคคลของกรมพัฒนาธุรกิจการค้า (DBD)
+                          </span>
+                        )}
+                        {!checkingTax && liveName === undefined && (
+                          <span className="font-normal text-xs text-black/40">
+                            เลข 13 หลักของผู้จ่ายเงินได้ (จาก 50 ทวิ) — ระบบตรวจสอบชื่อกับทะเบียนกรมพัฒนาธุรกิจการค้า (DBD) ให้อัตโนมัติ
+                          </span>
+                        )}
                       </label>
-                    </div>
-                </Tabs.Panel>
-
-                <Tabs.Panel id="yield">
-                    <div className="flex flex-col gap-3 pb-4">
+                  </div>
+                </FormSection>
+                {/* Yield — coupon rate + payment frequency */}
+                <FormSection title={t("yield_section")} valid={yieldValid}>
+                  <div className="flex flex-col gap-3">
                       <div className="flex gap-3">
                         <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
                           {t("coupon_label")}
@@ -1033,23 +1312,6 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                             <NumberField.Group>
                               <NumberField.DecrementButton />
                               <NumberField.Input placeholder={t("eg_coupon")} className="text-center font-nunito text-base font-medium" />
-                              <NumberField.IncrementButton />
-                            </NumberField.Group>
-                          </NumberField>
-                        </label>
-                        <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
-                          {t("invested_baht")}
-                          <NumberField
-                            value={amount}
-                            onChange={setAmount}
-                            minValue={MIN_FACE_VALUE}
-                            step={MIN_FACE_VALUE}
-                            formatOptions={{ useGrouping: true, maximumFractionDigits: 0 }}
-                            aria-label={t("invested_baht")}
-                          >
-                            <NumberField.Group>
-                              <NumberField.DecrementButton />
-                              <NumberField.Input placeholder={t("eg_amount")} className="text-center font-nunito text-base font-medium" />
                               <NumberField.IncrementButton />
                             </NumberField.Group>
                           </NumberField>
@@ -1077,11 +1339,11 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           })}
                         </div>
                       </div>
-                    </div>
-                </Tabs.Panel>
-
-                <Tabs.Panel id="term">
-                    <div className="flex gap-3 pb-4">
+                  </div>
+                </FormSection>
+                {/* Term — issue date + tenor */}
+                <FormSection title={t("term")} valid={termValid}>
+                  <div className="flex gap-3">
                       <IssueDatePicker value={mIssue} onChange={setMIssue} />
                       <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
                         {t("term")}
@@ -1117,23 +1379,28 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           </NumberField>
                         </div>
                       </label>
-                    </div>
-                </Tabs.Panel>
-              </Tabs>
-              {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
-            </div>
-            {/* Delete lives at the bottom of the details/edit card. */}
-            {editing && onDelete && (
-              <div className="mt-2 shrink-0 border-t border-black/5 px-2 pt-3">
+                  </div>
+                </FormSection>
+                </div>
+              </div>
+            {error && <p className="text-sm text-red-500">{error}</p>}
+            <div className="flex shrink-0 flex-col gap-2">
+              <button
+                onClick={goManualReview}
+                className="flex w-full items-center justify-center rounded-full bg-brand-blue py-4 text-xl font-medium text-white transition hover:bg-[#215688]"
+              >
+                {t("review")}
+              </button>
+              {editing && onDelete && (
                 <button
                   onClick={() => setConfirmDelete(true)}
-                  className="flex w-full items-center justify-center gap-2 rounded-2xl border-[0.5px] border-[#D64545]/40 px-4 py-2.5 text-base font-medium text-[#D64545] transition hover:bg-[#FBEBEB]"
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl border-[0.5px] border-[#D64545]/40 px-4 py-3 text-base font-medium text-[#D64545] transition hover:bg-[#FBEBEB]"
                 >
                   <IconTrash size={18} />
                   ลบหุ้นกู้นี้
                 </button>
-              </div>
-            )}
+              )}
+            </div>
 
           {/* Delete confirmation — heroUI modal. Warns that accumulated slips
               go with the holding. */}
@@ -1262,17 +1529,36 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                       <p className="text-sm font-medium text-black/60">{t("search_to_add_more")}</p>
                     </div>
                   )}
-                  {term.trim().length >= 2 && results.length === 0 && (
-                    <div className="flex flex-col items-center gap-3 rounded-3xl bg-white p-8 text-center">
-                      <img src={emptyBonds} alt="" aria-hidden className="h-28 w-auto opacity-90" />
-                      <p className="text-sm font-medium text-black/60">{t("not_in_sec")}</p>
-                      <p className="-mt-1 max-w-xs text-xs text-black/40">{t("not_in_sec_hint")}</p>
+                  {/* Catalog miss: skeleton while ThaiBMA resolves (idle = pending
+                      auto-fetch, or loading), then a fallback card if not found. */}
+                  {term.trim().length >= 2 && results.length === 0 && !manualResult && tbmaState !== "notfound" && (
+                    <SkeletonBondCard symbol={term.trim().toUpperCase()} />
+                  )}
+                  {term.trim().length >= 2 && results.length === 0 && !manualResult && tbmaState === "notfound" && (
+                    <div className="flex shrink-0 flex-col gap-4 rounded-3xl bg-white p-6">
+                      {/* Not on ThaiBMA either — retry or keep as a placeholder */}
+                      <div className="flex items-center gap-4">
+                        <div className="flex size-16 shrink-0 items-center justify-center rounded-full border border-black/10">
+                          <img src={unknownBond} alt="" className="h-10 w-auto" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-base font-medium text-black">{term.trim().toUpperCase()}</p>
+                          <p className="truncate text-sm text-black/60">{t("thaibma_not_found")}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={lookupThaibma}
+                        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-blue px-3 py-3 text-sm font-medium text-white transition hover:bg-[#215688]"
+                      >
+                        <IconSparkles size={18} />
+                        {t("thaibma_lookup")}
+                      </button>
                       <button
                         onClick={() => {
                           const sym = term.trim().toUpperCase();
                           if (!sym || inCart(sym) || heldSymbols.has(sym)) return;
-                          // Queue an unknown (not-in-SEC) bond as a placeholder —
-                          // company/details filled in later. Shows "?" in the list.
+                          // Fallback: queue an unknown placeholder to fill in later.
                           setCart((prev) => [
                             ...prev,
                             {
@@ -1289,13 +1575,13 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           setTerm("");
                           setError(null);
                         }}
-                        className="mt-1 w-full rounded-2xl border border-dashed border-[#43507F]/40 px-3 py-3 text-sm font-medium text-[#43507F] transition-colors hover:bg-[#43507F]/5"
+                        className="w-full rounded-2xl border border-dashed border-[#43507F]/40 px-3 py-3 text-sm font-medium text-[#43507F] transition-colors hover:bg-[#43507F]/5"
                       >
                         {t("keep_unknown", { term: term.trim() })}
                       </button>
                     </div>
                   )}
-                  {sortedResults.map((b) => {
+                  {(sortedResults.length ? sortedResults : manualResult ? [manualResult] : []).map((b) => {
                     const owned = heldSymbols.has(b.symbol);
                     const termStr = fmtTermThai(b);
                     const rate = ratingFor(b.symbol);
@@ -1308,10 +1594,10 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                         {/* Top row: logo + symbol/issuer, bookmark far right */}
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex min-w-0 items-center gap-4">
-                            <IssuerLogo symbol={b.symbol} name={issuerName(b.symbol, b.issuer)} size={64} className="rounded-full!" />
+                            <IssuerLogo symbol={b.symbol} name={issuerName(b.symbol, b.issuer || b.nameEn)} size={64} className="rounded-full!" />
                             <div className="min-w-0">
                               <p className="text-base font-medium text-black">{b.symbol}</p>
-                              <p className="truncate text-sm text-black/60">{issuerName(b.symbol, b.issuer)}</p>
+                              <p className="truncate text-sm text-black/60">{issuerName(b.symbol, b.issuer || b.nameEn)}</p>
                             </div>
                           </div>
                           {owned ? (
@@ -1386,11 +1672,12 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                       <img src={beondLogo} alt="beond" className="h-16 w-auto" />
                       <button
                         type="button"
-                        onClick={() => setCartStep("amount")}
-                        className="flex items-center gap-1.5 rounded-full bg-brand-blue py-2 pl-4 pr-3 text-sm font-medium text-white transition hover:bg-[#215688]"
+                        onClick={handleContinue}
+                        disabled={continuing}
+                        className="flex items-center gap-1.5 rounded-full bg-brand-blue py-2 pl-4 pr-3 text-sm font-medium text-white transition hover:bg-[#215688] disabled:opacity-60"
                       >
-                        {t("continue")}
-                        <IconChevronRight size={20} />
+                        {continuing ? t("thaibma_fetching") : t("continue")}
+                        {continuing ? <IconLoader2 size={20} className="animate-spin" /> : <IconChevronRight size={20} />}
                       </button>
                     </div>
                     <p className="shrink-0 pb-3 text-base font-medium text-black">{t("bonds_to_add")}</p>
@@ -1453,12 +1740,15 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   // read as separate cards; other states sit on a single white card.
   if (inline) {
     if (!open) return null;
-    const searchState = !manual; // search/results/selected all render as separate cards
+    // Views whose panels are their own cards on a transparent background: the
+    // search/results/cart state, and the manual/edit 2-column view (left form
+    // card + right detail card). Only the manual review step sits on one card.
+    const separateCards = !manual || !manualReview;
     return (
       <div
-        className={`relative flex h-full w-full flex-col ${searchState ? "" : "overflow-hidden rounded-3xl bg-white p-6"}`}
+        className={`relative flex h-full w-full flex-col ${separateCards ? "" : "overflow-hidden rounded-3xl bg-white p-6"}`}
       >
-        {!searchState && (
+        {!separateCards && (
           <img src={bondDec1} alt="" aria-hidden className="pointer-events-none absolute -right-2 -top-1 h-10 w-auto rotate-18" />
         )}
         {body}

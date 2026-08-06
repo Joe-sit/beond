@@ -1,62 +1,63 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "@heroui/react";
-import { TAX_BRACKETS, saveMarginalRate, estimatedRefund } from "../../lib/taxSettings";
+import { TAX_BRACKETS, refundFromIncome, bracketIndexForIncome, marginalRateForIncome, PERSONAL_ALLOWANCE } from "../../lib/taxSettings";
 import { useT } from "../../lib/i18n";
 import CashStairsScene from "./CashStairsScene";
 
 const fmtTHB = (n: number) =>
   new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+const fmtInt = (n: number) => new Intl.NumberFormat("th-TH", { maximumFractionDigits: 0 }).format(n);
 
 // Full bracket rates — the staircase renders one step per bracket (0 … 35%).
 const RATES = TAX_BRACKETS.map((b) => b.rate);
-// The slider only lets you pick up to 10%, and reads high → low (first stop =
-// 10%). Stairs still show every bracket.
-const SLIDER_RATES = RATES.filter((r) => r <= 10).reverse(); // [10, 5, 0]
-const SLIDER_STOPS = SLIDER_RATES.length;
 // Brackets below 15% are the refund ("claim") zone — the steps you climb out of.
 const isRefund = (i: number) => TAX_BRACKETS[i].rate < 15;
+// Actual annual income is kept locally for now (no DB column yet).
+const INCOME_KEY = "beond.annualIncome";
 
-// "ฐานภาษี" page (Figma 1068:3310) — a sky-gradient panel with a slider to pick
-// the caller's marginal tax bracket, saved to their profile. A three.js
-// staircase sits behind it; changing the bracket rains cash that lands on the
-// top step (real rapier physics).
-export default function TaxBaseView({ rate, wht, loading = false, onSaved }: { rate: number; wht: number; loading?: boolean; onSaved: (r: number) => void }) {
+// "ฐานภาษี" page — enter your actual annual (net taxable) income; the bond
+// coupon is stacked on top and taxed up the progressive staircase to reveal how
+// much of the 15% WHT was over-withheld. Income auto-snaps to its bracket.
+export default function TaxBaseView({ wht, loading = false, onSaved }: { rate?: number; wht: number; loading?: boolean; onSaved: (r: number) => void }) {
   const t = useT();
-  const found = SLIDER_RATES.indexOf(rate);
-  const [idx, setIdx] = useState(found >= 0 ? found : 0);
+  const [income, setIncome] = useState<number>(() => {
+    const v = Number(localStorage.getItem(INCOME_KEY));
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  });
+  const [mode, setMode] = useState<"year" | "month">("year"); // how the income is entered
   const [saving, setSaving] = useState(false);
-  const pickedRate = SLIDER_RATES[idx];
-  // Index of the picked rate within the full bracket list — drives which stair
-  // step is highlighted.
-  const stairIndex = RATES.indexOf(pickedRate);
 
-  // Cash = tax withheld that's still reclaimable at the selected bracket. Higher
-  // bracket → less refund → cash vanishes; ฿0 at 15%+ (nothing to claim).
-  const refund = estimatedRefund(wht, pickedRate);
-  // Bundle count tracks the *refund* as a share of the max possible refund (the
-  // full WHT, reclaimed at 0%). Proportional so the pile visibly shrinks as the
-  // bracket rises, instead of always maxing out the physics budget.
+  // The value shown in the field for the current mode (income is stored annual).
+  const shown = mode === "month" ? Math.round(income / 12) : income;
+  const setShown = (v: number) => setIncome(mode === "month" ? v * 12 : v);
+
+  // Coupon interest before its flat 15% WHT, stacked on top of the income.
+  const interest = wht > 0 ? wht / 0.15 : 0;
+  // Taxable income applies the personal allowance first (per the ภ.ง.ด. sheet).
+  const taxableWithout = Math.max(0, income - PERSONAL_ALLOWANCE);
+  const taxableWith = Math.max(0, income + interest - PERSONAL_ALLOWANCE);
+  const baseIdx = bracketIndexForIncome(taxableWithout);
+  const topIdx = bracketIndexForIncome(taxableWith);
+  const pickedRate = marginalRateForIncome(taxableWithout);
+  // Overpaid WHT at this real income — the reclaimable cash pile.
+  const refund = refundFromIncome(wht, income);
   const bundleCount = wht > 0 ? Math.round((refund / wht) * 100) : 0;
 
   const save = async () => {
     setSaving(true);
-    const res = await saveMarginalRate(pickedRate);
+    localStorage.setItem(INCOME_KEY, String(Math.max(0, Math.round(income))));
     setSaving(false);
-    if (res.ok) {
-      toast.success(t("tax_base_saved"));
-      onSaved(pickedRate);
-    } else {
-      toast.danger(res.error ?? "Error");
-    }
+    toast.success(t("tax_base_saved"));
+    onSaved(pickedRate);
   };
 
   return (
     <section className="relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-3xl bg-gradient-to-b from-white from-[28%] to-[#779BC6] p-10">
-      {/* three.js staircase + falling cash (physics) — cash lands on the top
-          step whenever the bracket changes. */}
+      {/* three.js staircase + falling cash — cash lands on the step the interest
+          climbs to (topIdx) whenever the income changes. */}
       {!loading && (
         <div className="pointer-events-none absolute inset-0 select-none">
-          <CashStairsScene steps={RATES.length} activeIndex={stairIndex} bundleCount={bundleCount} refundZone={isRefund} />
+          <CashStairsScene steps={RATES.length} activeIndex={topIdx} bundleCount={bundleCount} refundZone={isRefund} />
         </div>
       )}
 
@@ -67,9 +68,60 @@ export default function TaxBaseView({ rate, wht, loading = false, onSaved }: { r
           <p className="text-base leading-normal text-ink/60">{t("tax_base_desc")}</p>
         </div>
 
+        {/* Income input — the base the coupon interest stacks on top of.
+            Enter it as a whole-year figure or per-month (× 12 internally). */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-sm text-ink/60">{t("income_label")}</label>
+            {/* Year / month segmented toggle */}
+            <div className="flex rounded-full bg-black/5 p-0.5 text-sm">
+              {(["year", "month"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMode(m)}
+                  className={`rounded-full px-3 py-1 font-medium transition ${
+                    mode === m ? "bg-white text-ink shadow-sm" : "text-ink/50 hover:text-ink"
+                  }`}
+                >
+                  {t(m === "year" ? "income_per_year" : "income_per_month")}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 rounded-2xl border-[0.5px] border-black/10 bg-white px-4 py-3">
+            <span className="shrink-0 text-lg text-black/40">฿</span>
+            <input
+              inputMode="numeric"
+              value={shown > 0 ? fmtInt(shown) : ""}
+              onChange={(e) => {
+                const d = e.target.value.replace(/[^\d]/g, "");
+                setShown(d ? Number(d) : 0);
+              }}
+              placeholder="0"
+              className="min-w-0 flex-1 bg-transparent font-nunito text-2xl font-medium text-ink outline-none"
+            />
+            <span className="shrink-0 text-sm text-black/40">/{t(mode === "year" ? "year_unit" : "month_unit")}</span>
+            <span className="shrink-0 whitespace-nowrap rounded-full bg-brand-blue/10 px-2.5 py-1 text-sm font-medium text-brand-blue">
+              {t("bracket_rate", { rate: String(pickedRate) })}
+            </span>
+          </div>
+          {/* Echo the annual figure when entering per-month, so it's unambiguous. */}
+          {mode === "month" && income > 0 && (
+            <p className="text-xs text-ink/50">{t("income_year_equiv", { amount: fmtInt(income) })}</p>
+          )}
+          {/* Show the interest that's being stacked so the math is legible. */}
+          {interest > 0 && (
+            <p className="text-xs text-ink/50">
+              {t("interest_stacked", { amount: fmtInt(Math.round(interest)) })}
+              {topIdx > baseIdx && <> · {t("interest_climbs", { rate: String(RATES[topIdx]) })}</>}
+            </p>
+          )}
+          <p className="text-xs text-ink/40">{t("allowance_note", { amount: fmtInt(PERSONAL_ALLOWANCE) })}</p>
+        </div>
+
         {/* Two figures: LEFT = all tax withheld at source this year (static);
-            RIGHT = how much of it is reclaimable at the selected bracket (the
-            cash pile). */}
+            RIGHT = how much of it is over-withheld at this real income. */}
         <div className="flex items-end gap-8">
           <div className="flex flex-col">
             <p className="text-sm leading-snug text-ink/60">{t("tax_wht_total")}</p>
@@ -81,23 +133,13 @@ export default function TaxBaseView({ rate, wht, loading = false, onSaved }: { r
           </div>
           <span className="mb-2 h-10 w-px bg-black/10" />
           <div className="flex flex-col">
-            <p className="text-sm leading-snug text-ink/60">{t("tax_claimable")}</p>
+            <p className="text-sm leading-snug text-ink/60">{t("tax_overpaid")}</p>
             {loading ? (
               <span className="mt-2 h-8 w-28 animate-pulse rounded-lg bg-black/10" />
             ) : (
               <p className="mt-1 font-nunito text-3xl font-extrabold text-[#2E8B57]">฿{fmtTHB(refund)}</p>
             )}
           </div>
-        </div>
-
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-ink/60">{t("nav_tax_base")}</span>
-            <span className="text-2xl font-medium text-brand-blue">{pickedRate}%</span>
-          </div>
-
-          {/* Custom step slider — snaps to the bracket stops. */}
-          <StepSlider count={SLIDER_STOPS} idx={idx} onChange={setIdx} label={t("nav_tax_base")} valueText={`${pickedRate}%`} />
         </div>
 
         <button
@@ -109,80 +151,5 @@ export default function TaxBaseView({ rate, wht, loading = false, onSaved }: { r
         </button>
       </div>
     </section>
-  );
-}
-
-// A ground-up step slider: a tall pill track with a tick per stop, a blue fill,
-// and a white knob that snaps to the nearest stop (smoothly, via a CSS
-// transition). Drag / click the track, or arrow-key it.
-function StepSlider({
-  count,
-  idx,
-  onChange,
-  label,
-  valueText,
-}: {
-  count: number;
-  idx: number;
-  onChange: (i: number) => void;
-  label: string;
-  valueText: string;
-}) {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const frac = idx / (count - 1);
-
-  const setFromClientX = (clientX: number) => {
-    const el = trackRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
-    const next = Math.round(f * (count - 1));
-    if (next !== idx) onChange(next);
-  };
-
-  return (
-    <div
-      ref={trackRef}
-      role="slider"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={count - 1}
-      aria-valuenow={idx}
-      aria-valuetext={valueText}
-      tabIndex={0}
-      onPointerDown={(e) => {
-        (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-        setFromClientX(e.clientX);
-      }}
-      onPointerMove={(e) => {
-        if (e.buttons === 1) setFromClientX(e.clientX);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "ArrowLeft" || e.key === "ArrowDown") { e.preventDefault(); onChange(Math.max(0, idx - 1)); }
-        if (e.key === "ArrowRight" || e.key === "ArrowUp") { e.preventDefault(); onChange(Math.min(count - 1, idx + 1)); }
-        if (e.key === "Home") onChange(0);
-        if (e.key === "End") onChange(count - 1);
-      }}
-      className="relative h-[31px] w-full cursor-pointer touch-none select-none rounded-full bg-black/10 outline-none ring-offset-2 focus-visible:ring-2 focus-visible:ring-brand-blue/50"
-    >
-      {/* fill */}
-      <div
-        className="absolute inset-y-0 left-0 rounded-full bg-brand-blue transition-[width] duration-150 ease-out"
-        style={{ width: `calc(${frac} * (100% - 27px) + 27px)` }}
-      />
-      {/* tick per stop */}
-      {Array.from({ length: count }, (_, i) => (
-        <span
-          key={i}
-          className={`absolute top-1/2 size-1.5 -translate-y-1/2 rounded-full ${i <= idx ? "bg-white/70" : "bg-black/20"}`}
-          style={{ left: `calc(${i / (count - 1)} * (100% - 27px) + 13.5px)`, transform: "translate(-50%, -50%)" }}
-        />
-      ))}
-      {/* knob */}
-      <div
-        className="absolute top-1/2 size-[27px] -translate-y-1/2 rounded-full bg-white shadow-[0_2px_6px_rgba(0,0,0,0.25)] transition-[left] duration-150 ease-out"
-        style={{ left: `calc(${frac} * (100% - 27px))` }}
-      />
-    </div>
   );
 }

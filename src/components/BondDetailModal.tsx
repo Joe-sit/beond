@@ -36,9 +36,18 @@ const FREQ_LABEL: Record<number, string> = {
 
 // A term expressed as year / month / day → Thai text.
 function fmtTerm(y: number | null, m: number | null, d: number | null): string {
+  let years = y;
+  let months = m;
+  // ThaiBMA gives the term as a fractional year (e.g. 1.7534) with no separate
+  // month field — split the fraction into whole years + months.
+  if (y != null && m == null && !Number.isInteger(y)) {
+    years = Math.floor(y);
+    months = Math.round((y - years) * 12);
+    if (months === 12) { years += 1; months = 0; }
+  }
   const parts = [
-    y ? `${y} ปี` : "",
-    m ? `${m} เดือน` : "",
+    years ? `${years} ปี` : "",
+    months ? `${months} เดือน` : "",
     d ? `${d} วัน` : "",
   ].filter(Boolean);
   return parts.length ? parts.join(" ") : "—";
