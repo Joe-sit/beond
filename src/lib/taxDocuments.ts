@@ -198,15 +198,22 @@ export async function createTaxDocument(patch: TaxDocPatch): Promise<SaveResult>
   return { ok: true };
 }
 
+// A saved slip loaded for the OCR-review screen, plus its current status so the
+// review screen can block a slip that's already been confirmed (see below).
+export interface ReviewSlip {
+  fields: SlipFields;
+  status: string; // "pending" | "confirmed" | "rejected"
+}
+
 // Load a saved tax document as SlipFields for the OCR-review screen — used by the
 // LINE "แก้ไข" deep link (?review=<id>) so a pending slip can be reviewed/edited
 // in the web app before confirming. RLS scopes it to the caller's own rows.
-export async function getReviewSlip(id: string): Promise<SlipFields | null> {
+export async function getReviewSlip(id: string): Promise<ReviewSlip | null> {
   if (!supabaseEnabled || !supabase) return null;
   const { data, error } = await supabase
     .from("tax_documents")
     .select(
-      "payer_name, payer_tax_id, income_subtype, gross_amount, wht_amount, wht_rate, pay_date, doc_ref, tax_year, bond_id",
+      "status, payer_name, payer_tax_id, income_subtype, gross_amount, wht_amount, wht_rate, pay_date, doc_ref, tax_year, bond_id",
     )
     .eq("id", id)
     .maybeSingle();
@@ -226,17 +233,20 @@ export async function getReviewSlip(id: string): Promise<SlipFields | null> {
       ? Math.round((data.gross_amount - data.wht_amount) * 100) / 100
       : null;
   return {
-    payer_name: data.payer_name,
-    payer_tax_id: data.payer_tax_id,
-    income_subtype: data.income_subtype,
-    gross_amount: data.gross_amount,
-    net_amount: net,
-    wht_amount: data.wht_amount,
-    wht_rate: data.wht_rate,
-    pay_date: data.pay_date,
-    doc_ref: data.doc_ref,
-    tax_year: data.tax_year,
-    bond_symbol: bondSymbol,
+    status: (data.status as string) ?? "pending",
+    fields: {
+      payer_name: data.payer_name,
+      payer_tax_id: data.payer_tax_id,
+      income_subtype: data.income_subtype,
+      gross_amount: data.gross_amount,
+      net_amount: net,
+      wht_amount: data.wht_amount,
+      wht_rate: data.wht_rate,
+      pay_date: data.pay_date,
+      doc_ref: data.doc_ref,
+      tax_year: data.tax_year,
+      bond_symbol: bondSymbol,
+    },
   };
 }
 
@@ -263,8 +273,30 @@ export async function confirmReviewedSlip(id: string, fields: SlipFields): Promi
     .eq("id", id);
   if (error) return { ok: false, error: error.message };
   await bindBondPayerTaxId(fields.bond_symbol, fields.payer_tax_id);
+  // Tell the user in LINE that the slip was collected (they confirmed on the web,
+  // so the chat has no reply otherwise). Server-side push — fire-and-forget.
+  void notifySlipConfirmed(id);
   notifyPortfolioChanged();
   return { ok: true };
+}
+
+// Push a "slip collected" confirmation to the user's LINE chat after a web
+// confirm. Needs the LINE token, so it runs in the slip-confirmed edge function;
+// best-effort — a push failure never blocks the save.
+async function notifySlipConfirmed(id: string): Promise<void> {
+  if (!supabase || !SUPABASE_URL) return;
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return;
+    await fetch(`${SUPABASE_URL}/functions/v1/slip-confirmed`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId: id }),
+    });
+  } catch (e) {
+    console.error("notifySlipConfirmed (skip):", (e as Error).message);
+  }
 }
 
 // Delete a user's own tax document. RLS scopes the delete to rows the caller owns.

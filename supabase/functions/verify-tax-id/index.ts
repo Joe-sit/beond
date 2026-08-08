@@ -47,9 +47,20 @@ function namesMatch(a: string, b: string): boolean {
 }
 
 // Ask DBD for the official name behind a juristic id. null = not found / error.
+// DBD sits behind an Imperva WAF that silently drops requests without a
+// browser-like User-Agent (a bare Deno UA just hangs until the timeout), so send
+// browser headers.
 async function dbdName(id: string): Promise<string | null> {
   try {
-    const res = await fetch(`${DBD_URL}/${id}`, { signal: AbortSignal.timeout(8000) });
+    const res = await fetch(`${DBD_URL}/${id}`, {
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        Accept: "application/json",
+        Referer: "https://openapi.dbd.go.th/",
+      },
+    });
     if (!res.ok) return null;
     const body = await res.json();
     if (body?.status?.code !== "1000") return null;

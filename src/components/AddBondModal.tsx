@@ -2,11 +2,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Modal, ModalBackdrop, ModalContainer, ModalDialog,
-  Button, SearchField, Label, NumberField, ComboBox, ListBox, Input, DatePicker, Calendar, toast,
+  Button, SearchField, NumberField, Input, toast,
 } from "@heroui/react";
-import { Group, DateInput, DateSegment, Dialog, I18nProvider } from "react-aria-components";
-import { parseDate, toCalendar, GregorianCalendar, type DateValue } from "@internationalized/date";
-import { ensureCatalog, searchLocal, issuerNames, issuerForSymbol, symbolForIssuer, catalogUpdatedAt, fetchThaibmaFeature, type BondCandidate } from "../lib/secApi";
+import { ensureCatalog, searchLocal, issuerForSymbol, symbolForIssuer, catalogUpdatedAt, fetchThaibmaFeature, type BondCandidate } from "../lib/secApi";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
 import { verifyTaxId, lookupTaxIdName, companyNamesMatch } from "../lib/verifyTaxId";
 import { overrideFor } from "../data/couponOverrides";
@@ -15,9 +13,9 @@ import { notifyPortfolioChanged, useHoldings, type HoldingDetail, type TaxDoc } 
 import { supabase, supabaseEnabled } from "../lib/supabase";
 import IssuerLogo from "./IssuerLogo";
 import BondDetailModal from "./BondDetailModal";
-import AddBondConfirm, { DetailPanel, AnimatedBaht } from "./AddBondConfirm";
+import AddBondConfirm, { DetailPanel, AnimatedBaht, CompanyCombo, IssueDatePicker as ConfirmDatePicker } from "./AddBondConfirm";
 import { issuerName } from "../lib/issuerLogo";
-import { IconCheck, IconTrash, IconCalendar, IconAlertTriangle, IconPlus, IconMinus, IconChevronRight, IconChevronLeft, IconChevronDown, IconLoader2, IconSparkles } from "@tabler/icons-react";
+import { IconCheck, IconTrash, IconAlertTriangle, IconPlus, IconMinus, IconChevronRight, IconChevronLeft, IconChevronDown, IconLoader2, IconSparkles, IconInfoCircle } from "@tabler/icons-react";
 import emptyBonds from "../assets/empty-bonds.svg";
 import addBondMain from "../assets/add-bond-main.png";
 import bondDec1 from "../assets/bond-dec-1.png";
@@ -29,6 +27,8 @@ import badgeAge from "../assets/badges/badge-age.svg";
 import beondLogo from "../assets/badges/beond-logo.svg";
 import unknownBond from "../assets/badges/unknown-bond.svg";
 import addingBond from "../assets/badges/adding-bond.svg";
+import dbdLogo from "../assets/badges/dbd-logo.svg";
+import dbdVerified from "../assets/badges/dbd-verified.svg";
 import { useT } from "../lib/i18n";
 
 // A bond queued in the add-cart, with the user's chosen face value + coupon
@@ -265,67 +265,6 @@ function useScrollFade<T extends HTMLElement>(dep: unknown) {
   return { ref, mask, onScroll };
 }
 
-// heroUI date picker for the issue date. Bridges the ISO string state
-// (mIssue) to react-aria's DateValue.
-function IssueDatePicker({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
-  const t = useT();
-  let dv: DateValue | null = null;
-  try { dv = value ? parseDate(value) : null; } catch { dv = null; }
-  return (
-    // Thai locale + Buddhist era so the field/calendar read in พ.ศ. like the
-    // rest of the app's dates; onChange converts back to a Gregorian ISO string.
-    <I18nProvider locale="th-TH-u-ca-buddhist">
-    <DatePicker
-      aria-label={t("issue_date")}
-      value={dv}
-      onChange={(v) => onChange(v ? toCalendar(v, new GregorianCalendar()).toString() : "")}
-      className="flex flex-1 flex-col gap-1"
-    >
-      <Label className="text-sm font-medium text-black/60">{t("issue_date")}</Label>
-      {/* Whole field opens the calendar: the trigger covers the group and the
-          segments are click-through (display only). */}
-      <Group className="input relative flex cursor-pointer items-center gap-2">
-        <DatePicker.Trigger className="absolute inset-0 z-0" aria-label={t("open_calendar")}>
-          <span className="sr-only">{t("open_calendar")}</span>
-        </DatePicker.Trigger>
-        <DateInput className="pointer-events-none flex flex-1 font-normal">
-          {(segment) => (
-            <DateSegment
-              segment={segment}
-              className="rounded px-0.5 tabular-nums outline-none data-[placeholder]:text-black/30"
-            />
-          )}
-        </DateInput>
-        <IconCalendar size={18} className="pointer-events-none relative z-10 shrink-0 text-black/50" />
-      </Group>
-      <DatePicker.Popover>
-        <Dialog className="p-3 outline-none">
-          <Calendar>
-            <header className="flex items-center justify-between px-1 pb-2">
-              <Calendar.NavButton slot="previous" />
-              <Calendar.Heading className="text-sm font-medium text-[#181D20]" />
-              <Calendar.NavButton slot="next" />
-            </header>
-            <Calendar.Grid className="border-separate border-spacing-1">
-              <Calendar.GridHeader>
-                {(day) => <Calendar.HeaderCell className="text-xs font-normal text-black/40">{day}</Calendar.HeaderCell>}
-              </Calendar.GridHeader>
-              <Calendar.GridBody>
-                {(date) => (
-                  <Calendar.Cell
-                    date={date}
-                    className="flex size-8 cursor-pointer items-center justify-center rounded-full text-sm outline-none data-[hovered]:bg-black/5 data-[selected]:bg-[#43507F] data-[selected]:text-white data-[disabled]:opacity-30"
-                  />
-                )}
-              </Calendar.GridBody>
-            </Calendar.Grid>
-          </Calendar>
-        </Dialog>
-      </DatePicker.Popover>
-    </DatePicker>
-    </I18nProvider>
-  );
-}
 
 export default function AddBondModal({ open, onClose, onAdded, initialTerm, inline = false, editHolding = null, slipCount = 0, slips = [], onDelete }: AddBondModalProps) {
   const t = useT();
@@ -473,27 +412,41 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   }, [mTaxId]);
   const liveMatch = liveName ? companyNamesMatch(liveName, mIssuer) : false;
 
-  // Prefill the payer tax id from a sibling bond of the same issuer that already
-  // has one (self-populated from earlier slips). Only fills a blank field, never
-  // overrides what the user typed. Reacts to the debounced issuer query.
+  // The payer tax id belongs to the ISSUER, not the individual series — every
+  // bond from the same company shares one 13-digit id. So when this bond's own
+  // field is blank (a series that never collected a slip, or one added after a
+  // sibling was verified), fill it from a sibling series of the same company.
+  //
+  // The `issuer` column is unreliable for grouping — the same company appears
+  // under different strings across series (e.g. "Origin Property" vs "บริษัท
+  // ออริจิ้น พร็อพเพอร์ตี้ จำกัด (มหาชน)") depending on whether the row came from
+  // SEC, ThaiBMA or an OCR'd slip. The stable company key is the symbol's ticker
+  // prefix (the leading letters, e.g. ORI284B → ORI), so match siblings on that
+  // and prefer a DBD-verified id. Runs when adding AND when editing/viewing a
+  // holding; only ever fills a blank field, never overrides a typed value.
+  const tickerOf = (sym: string) => (sym.trim().toUpperCase().match(/^[A-Z]+/)?.[0] ?? "");
   useEffect(() => {
-    if (!supabase || editing || mTaxId.trim() !== "") return;
-    const issuer = mIssuer.trim();
-    if (issuer.length < 2) return;
+    if (!supabase || mTaxId.trim() !== "") return;
+    const ticker = tickerOf(mSymbol);
+    if (ticker.length < 2) return;
     let alive = true;
     supabase
       .from("bonds")
-      .select("payer_tax_id")
-      .eq("issuer", issuer)
+      .select("symbol, payer_tax_id, payer_tax_id_verified")
+      .ilike("symbol", `${ticker}%`)
       .not("payer_tax_id", "is", null)
-      .limit(1)
-      .maybeSingle()
       .then(({ data }) => {
-        if (alive && data?.payer_tax_id && mTaxId.trim() === "") setMTaxId(data.payer_tax_id as string);
+        if (!alive || !data || mTaxId.trim() !== "") return;
+        // Keep only rows whose ticker is EXACTLY this one (ilike "TU%" would also
+        // catch "TUC…", a different company), verified first.
+        const sib = (data as { symbol: string; payer_tax_id: string; payer_tax_id_verified: boolean }[])
+          .filter((r) => tickerOf(r.symbol) === ticker && r.payer_tax_id)
+          .sort((a, b) => Number(b.payer_tax_id_verified) - Number(a.payer_tax_id_verified))[0];
+        if (sib?.payer_tax_id) setMTaxId(sib.payer_tax_id);
       });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [issuerQuery, editing]);
+  }, [mSymbol, issuerQuery, editing]);
 
   // Credit rating for the manual entry — from the symbol prefix, or, when the
   // symbol doesn't resolve, from the chosen company's other bonds. Reactive so
@@ -514,14 +467,6 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     d.setMonth(d.getMonth() + months);
     return d.toISOString().slice(0, 10);
   }, [mIssue, mTermY, mTermM]);
-
-  // Company-name suggestions for the manual issuer combobox — filtered by the
-  // debounced text, capped so the popover stays light.
-  const issuerMatches = useMemo(() => {
-    const all = issuerNames();
-    const list = issuerQuery ? all.filter((n) => n.toLowerCase().includes(issuerQuery)) : all;
-    return list.slice(0, 50).map((n) => ({ id: n, name: n }));
-  }, [issuerQuery]);
 
   // Warm the full bond catalog as soon as the modal opens, so free-text
   // searches (company names) answer locally and instantly.
@@ -952,6 +897,86 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     [selected, pvSymbol, pvCompany, pvCoupon, pvMaturity, mIssuer, mIssue, mTermY, freq],
   );
 
+  // Payer 13-digit tax id — white card + DBD verification badge (Figma
+  // 1281:4303). Value comes from the 50-ทวิ OCR and is checked against the
+  // government business registry. Rendered inside the bond-info accordion when
+  // adding, but standalone (no accordion) in edit mode.
+  const taxIdCard = (() => {
+    const verified =
+      (!checkingTax && !!liveName && liveMatch) ||
+      (liveName === undefined && editing && !!editHolding?.payerTaxIdVerified);
+    const warn =
+      !checkingTax &&
+      ((!!liveName && !liveMatch) ||
+        liveName === null ||
+        (liveName === undefined && editing && !!editHolding?.payerTaxId && !editHolding?.payerTaxIdVerified));
+    return (
+      <div className="flex flex-col items-center gap-2 rounded-3xl bg-[rgba(30,125,235,0.05)] p-2">
+        <div className="flex w-full items-center justify-between gap-3 rounded-3xl bg-white p-4">
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="text-base text-black/60">{t("payer_tax_id_label")}</span>
+            <input
+              value={mTaxId}
+              onChange={(e) => setMTaxId(e.target.value.replace(/\D/g, "").slice(0, 13))}
+              inputMode="numeric"
+              readOnly={editing && !!editHolding?.payerTaxIdVerified && !taxIdUnlocked}
+              placeholder={t("payer_tax_id_ph")}
+              className="min-w-0 bg-transparent font-nunito text-base font-medium text-black outline-none"
+            />
+          </div>
+          {checkingTax ? (
+            <div className="relative shrink-0">
+              {/* Greyed DBD logo (no check) with a shimmer while the check runs */}
+              <img src={dbdLogo} alt="" className="h-7 w-auto animate-pulse grayscale" />
+              <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full border-2 border-white bg-black/40 text-white">
+                <IconLoader2 size={11} className="animate-spin" />
+              </span>
+            </div>
+          ) : verified ? (
+            <img src={dbdVerified} alt="ยืนยันโดยกรมพัฒนาธุรกิจการค้า" className="h-8 w-auto shrink-0" />
+          ) : warn ? (
+            <IconAlertTriangle size={22} className="shrink-0 text-[#B7791F]" />
+          ) : mTaxId.trim() === "" ? (
+            // Not entered yet — a learn-more hint about where the number comes from.
+            <div className="group relative shrink-0">
+              <IconInfoCircle size={22} className="text-black/40 transition hover:text-black/70" />
+              <div className="pointer-events-none absolute right-0 top-full z-30 mt-2 w-64 rounded-xl bg-[#222] p-3 text-left text-xs leading-relaxed text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+                เลข 13 หลักของผู้จ่ายเงินได้อยู่บนสลิป 50 ทวิ ที่ได้รับพร้อมดอกเบี้ย — ระบบจะตรวจสอบชื่อกับกรมพัฒนาธุรกิจการค้าให้อัตโนมัติ
+              </div>
+            </div>
+          ) : null}
+        </div>
+        {/* Plain-language status — conveys OCR source + registry check */}
+        <div className="flex w-full flex-col items-center gap-1 px-1 text-center">
+          {checkingTax ? (
+            <p className="text-xs text-black/40">กำลังตรวจสอบกับกรมพัฒนาธุรกิจการค้า…</p>
+          ) : verified ? (
+            <p className="text-xs text-[#222]">เลขนี้ยืนยันจากสลิป 50 ทวิ และตรวจสอบกับกรมพัฒนาธุรกิจการค้าแล้ว</p>
+          ) : !!liveName && !liveMatch ? (
+            <p className="text-xs text-[#B7791F]">เลขนี้จดทะเบียนในชื่อ “{liveName}” ไม่ตรงกับบริษัทผู้ออก — ตรวจสอบอีกครั้ง</p>
+          ) : liveName === null ? (
+            <p className="text-xs text-[#B7791F]">ไม่พบเลขนี้ในทะเบียนกรมพัฒนาธุรกิจการค้า</p>
+          ) : warn ? (
+            <p className="text-xs text-[#B7791F]">ยังไม่ได้ยืนยันเลขนี้กับกรมพัฒนาธุรกิจการค้า</p>
+          ) : (
+            <p className="text-xs text-black/40">เลข 13 หลักจากสลิป 50 ทวิ — ระบบตรวจสอบชื่อกับกรมพัฒนาธุรกิจการค้าให้อัตโนมัติ</p>
+          )}
+          {editing && editHolding?.payerTaxIdVerified && !taxIdUnlocked && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm("เลขนี้ยืนยันแล้วจากสลิป 50 ทวิ และกรมพัฒนาธุรกิจการค้า — การแก้ไขอาจทำให้ข้อมูลผิด ยืนยันที่จะแก้ไข?")) setTaxIdUnlocked(true);
+              }}
+              className="shrink-0 text-xs font-medium text-brand-blue underline"
+            >
+              แก้ไข
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  })();
+
   // Right column — folder tabs over a card: bond detail (same layout as the
   // confirm page) + the slip-collection tab for this bond.
   const preview = (
@@ -1164,11 +1189,15 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                     </motion.button>
                   </div>
                 </div>
-                {/* Bond info — symbol, company, payer tax id */}
+                {/* Bond info — symbol + company (add only). In edit mode the bond
+                    is fixed, so the whole accordion is skipped and only the payer
+                    tax-id card shows, standalone (rendered below). */}
+                {editing ? (
+                  taxIdCard
+                ) : (
                 <FormSection title={t("bond_info")} valid={infoValid} defaultOpen>
                   <div className="flex flex-col gap-3">
-                      <div className="flex gap-3">
-                      <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
+                      <label className="flex flex-col gap-1 text-sm font-medium text-black/60">
                         {t("symbol_field")} *
                         <Input
                           autoFocus
@@ -1188,134 +1217,32 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                           className="font-nunito text-base font-medium uppercase sm:text-base"
                         />
                       </label>
-                      <ComboBox
-                        aria-label={t("company_name")}
-                        allowsCustomValue
-                        menuTrigger="input"
-                        inputValue={mIssuer}
-                        onInputChange={setMIssuer}
-                        // Controlled inputValue → react-aria won't auto-set the
-                        // field on pick, so sync it here (id === company name).
-                        onSelectionChange={(key) => { if (key != null) setMIssuer(String(key)); }}
-                        items={issuerMatches}
-                        className="flex flex-1 flex-col gap-1"
-                      >
-                        <Label className="text-sm font-medium text-black/60">{t("company_name")}</Label>
-                        <ComboBox.InputGroup className="[&_input]:!font-normal">
-                          <Input placeholder={t("eg_company")} className="py-2 text-base !font-normal sm:text-base" />
-                          <ComboBox.Trigger />
-                        </ComboBox.InputGroup>
-                        <ComboBox.Popover>
-                          <ListBox items={issuerMatches}>
-                            {(it: { id: string; name: string }) => (
-                              <ListBox.Item id={it.id} textValue={it.name}>{it.name}</ListBox.Item>
-                            )}
-                          </ListBox>
-                        </ComboBox.Popover>
-                      </ComboBox>
-                      </div>
-                      {/* Payer 13-digit tax id — own row; also auto-filled from the
-                          50-ทวิ OCR, editable here. */}
-                      <label className="flex flex-col gap-1 text-sm font-medium text-black/60">
-                        <span className="flex items-center gap-1.5">
-                          {t("payer_tax_id_label")}
-                          {checkingTax && (
-                            <span className="text-[11px] font-medium text-black/40">กำลังตรวจสอบ…</span>
-                          )}
-                          {!checkingTax && liveName && liveMatch && (
-                            <span className="flex items-center gap-0.5 rounded-full bg-[#E7F5EC] px-1.5 py-0.5 text-[11px] font-medium text-[#2E8B57]" title={liveName}>
-                              <IconCheck size={12} /> ตรงกับชื่อใน DBD
-                            </span>
-                          )}
-                          {!checkingTax && liveName && !liveMatch && (
-                            <span className="flex items-center gap-0.5 rounded-full bg-[#FBEEDC] px-1.5 py-0.5 text-[11px] font-medium text-[#B7791F]" title={`DBD: ${liveName}`}>
-                              <IconAlertTriangle size={12} /> เป็นของ "{liveName}"
-                            </span>
-                          )}
-                          {!checkingTax && liveName === null && (
-                            <span className="flex items-center gap-0.5 rounded-full bg-[#FBEEDC] px-1.5 py-0.5 text-[11px] font-medium text-[#B7791F]">
-                              <IconAlertTriangle size={12} /> ไม่พบใน DBD
-                            </span>
-                          )}
-                          {/* Stored state when the field isn't being actively checked. */}
-                          {liveName === undefined && editing && editHolding?.payerTaxId && (
-                            editHolding.payerTaxIdVerified ? (
-                              <span className="flex items-center gap-0.5 rounded-full bg-[#E7F5EC] px-1.5 py-0.5 text-[11px] font-medium text-[#2E8B57]" title={editHolding.payerVerifiedName ?? "ยืนยันกับ DBD แล้ว"}>
-                                <IconCheck size={12} /> ยืนยันแล้ว
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-0.5 rounded-full bg-[#FBEEDC] px-1.5 py-0.5 text-[11px] font-medium text-[#B7791F]" title="ยังไม่ยืนยันกับ DBD">
-                                <IconAlertTriangle size={12} /> ยังไม่ยืนยัน
-                              </span>
-                            )
-                          )}
-                          {/* Unlock a verified value only after an explicit warning. */}
-                          {editing && editHolding?.payerTaxIdVerified && !taxIdUnlocked && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (window.confirm("เลขนี้ยืนยันแล้วจาก DBD และสลิป 50-ทวิ (OCR) — การแก้ไขอาจทำให้ข้อมูลผิด ยืนยันที่จะแก้ไข?")) setTaxIdUnlocked(true);
-                              }}
-                              className="text-[11px] font-medium text-brand-blue underline"
-                            >
-                              แก้ไข
-                            </button>
-                          )}
-                        </span>
-                        <Input
-                          value={mTaxId}
-                          onChange={(e) => setMTaxId(e.target.value.replace(/\D/g, "").slice(0, 13))}
-                          inputMode="numeric"
-                          readOnly={editing && !!editHolding?.payerTaxIdVerified && !taxIdUnlocked}
-                          placeholder={t("payer_tax_id_ph")}
-                          className={`font-nunito text-base font-medium sm:text-base ${editing && editHolding?.payerTaxIdVerified && !taxIdUnlocked ? "opacity-60" : ""}`}
-                        />
-                        {/* Plain-language explanation of the DBD check result. DBD =
-                            กรมพัฒนาธุรกิจการค้า, the juristic-person registry. */}
-                        {!checkingTax && liveName && liveMatch && (
-                          <span className="font-normal text-xs text-[#2E8B57]">
-                            เลข 13 หลักนี้ตรงกับชื่อนิติบุคคล “{liveName}” ที่จดทะเบียนกับกรมพัฒนาธุรกิจการค้า (DBD)
-                          </span>
-                        )}
-                        {!checkingTax && liveName && !liveMatch && (
-                          <span className="font-normal text-xs text-[#B7791F]">
-                            เลขนี้จดทะเบียนในชื่อ “{liveName}” ที่กรมพัฒนาธุรกิจการค้า (DBD) ซึ่งไม่ตรงกับบริษัทผู้ออกหุ้นกู้ — ตรวจสอบอีกครั้ง
-                          </span>
-                        )}
-                        {!checkingTax && liveName === null && (
-                          <span className="font-normal text-xs text-[#B7791F]">
-                            ไม่พบเลข 13 หลักนี้ในทะเบียนนิติบุคคลของกรมพัฒนาธุรกิจการค้า (DBD)
-                          </span>
-                        )}
-                        {!checkingTax && liveName === undefined && (
-                          <span className="font-normal text-xs text-black/40">
-                            เลข 13 หลักของผู้จ่ายเงินได้ (จาก 50 ทวิ) — ระบบตรวจสอบชื่อกับทะเบียนกรมพัฒนาธุรกิจการค้า (DBD) ให้อัตโนมัติ
-                          </span>
-                        )}
-                      </label>
+                      {/* Company — same white-card combobox as the confirm page */}
+                      <CompanyCombo value={mIssuer} onChange={setMIssuer} />
+                      {taxIdCard}
                   </div>
                 </FormSection>
-                {/* Yield — coupon rate + payment frequency */}
+                )}
+                {/* Yield + term are fixed once the bond is in the portfolio —
+                    shown only when adding, hidden in edit mode. */}
+                {!editing && (<>
                 <FormSection title={t("yield_section")} valid={yieldValid}>
                   <div className="flex flex-col gap-3">
-                      <div className="flex gap-3">
-                        <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
-                          {t("coupon_label")}
-                          <NumberField
-                            value={mCoupon}
-                            onChange={setMCoupon}
-                            minValue={0}
-                            step={0.1}
-                            formatOptions={{ maximumFractionDigits: 2 }}
-                            aria-label={t("coupon_label")}
-                          >
-                            <NumberField.Group>
-                              <NumberField.DecrementButton />
-                              <NumberField.Input placeholder={t("eg_coupon")} className="text-center font-nunito text-base font-medium" />
-                              <NumberField.IncrementButton />
-                            </NumberField.Group>
-                          </NumberField>
-                        </label>
+                      {/* Coupon rate — white card + % suffix (matches confirm) */}
+                      <div className="flex w-full items-center justify-between gap-2 rounded-3xl bg-white p-4">
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="text-xs text-[#222]">{t("coupon_rate")}</span>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            step="0.1"
+                            value={Number.isFinite(mCoupon) ? mCoupon : ""}
+                            onChange={(e) => setMCoupon(e.target.value === "" ? NaN : Number(e.target.value))}
+                            placeholder="0.00"
+                            className="min-w-0 bg-transparent font-nunito text-base font-medium text-[#222] outline-none"
+                          />
+                        </div>
+                        <span className="shrink-0 text-xs font-medium text-[#222]/60">%</span>
                       </div>
                       <div className="flex flex-col gap-1.5">
                         <span className="text-sm font-medium text-black/60">{t("pays_interest")}</span>
@@ -1343,8 +1270,9 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                 </FormSection>
                 {/* Term — issue date + tenor */}
                 <FormSection title={t("term")} valid={termValid}>
-                  <div className="flex gap-3">
-                      <IssueDatePicker value={mIssue} onChange={setMIssue} />
+                  <div className="flex flex-col gap-3">
+                      {/* Issue date — white-card picker (matches confirm) */}
+                      <ConfirmDatePicker value={mIssue} onChange={setMIssue} />
                       <label className="flex flex-1 flex-col gap-1 text-sm font-medium text-black/60">
                         {t("term")}
                         <div className="flex gap-2">
@@ -1381,25 +1309,28 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                       </label>
                   </div>
                 </FormSection>
+                </>)}
                 </div>
               </div>
             {error && <p className="text-sm text-red-500">{error}</p>}
-            <div className="flex shrink-0 flex-col gap-2">
-              <button
-                onClick={goManualReview}
-                className="flex w-full items-center justify-center rounded-full bg-brand-blue py-4 text-xl font-medium text-white transition hover:bg-[#215688]"
-              >
-                {t("review")}
-              </button>
+            <div className="flex shrink-0 items-center gap-2">
               {editing && onDelete && (
                 <button
                   onClick={() => setConfirmDelete(true)}
-                  className="flex w-full items-center justify-center gap-2 rounded-2xl border-[0.5px] border-[#D64545]/40 px-4 py-3 text-base font-medium text-[#D64545] transition hover:bg-[#FBEBEB]"
+                  aria-label="ลบหุ้นกู้นี้"
+                  title="ลบหุ้นกู้นี้"
+                  className="flex size-14 shrink-0 items-center justify-center rounded-full border-[0.5px] border-[#D64545]/40 text-[#D64545] transition hover:bg-[#FBEBEB]"
                 >
-                  <IconTrash size={18} />
-                  ลบหุ้นกู้นี้
+                  <IconTrash size={22} />
                 </button>
               )}
+              <button
+                onClick={editing ? saveManual : goManualReview}
+                disabled={saving}
+                className="flex flex-1 items-center justify-center rounded-full bg-brand-blue py-4 text-xl font-medium text-white transition hover:bg-[#215688] disabled:opacity-60"
+              >
+                {editing ? (saving ? t("saving") : t("save")) : t("review")}
+              </button>
             </div>
 
           {/* Delete confirmation — heroUI modal. Warns that accumulated slips
@@ -1413,12 +1344,18 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                       <IconTrash size={22} />
                     </div>
                     <h3 className="text-lg font-medium text-ink">ลบ {mSymbol} ออกจากพอร์ต?</h3>
-                    <p className="text-sm text-black/60">
-                      {slipCount > 0
-                        ? `คุณสะสมสลิปจากหุ้นกู้นี้ไว้ ${slipCount} ใบ — ลบแล้วสลิปจะถูกลบไปด้วย`
-                        : "การลบนี้ไม่สามารถกู้คืนได้"}
-                    </p>
+                    <p className="text-sm text-black/60">การลบนี้ไม่สามารถกู้คืนได้</p>
                   </div>
+                  {/* Slip warning — prominent amber callout when the bond has
+                      collected 50-ทวิ slips, since they're deleted along with it. */}
+                  {slipCount > 0 && (
+                    <div className="flex items-start gap-2.5 rounded-2xl bg-[#FDF3E7] p-3 text-[#B7791F]">
+                      <IconAlertTriangle size={20} className="mt-0.5 shrink-0" />
+                      <p className="text-sm leading-normal">
+                        หุ้นกู้นี้มีสลิป 50 ทวิ ที่สะสมไว้ <span className="font-nunito font-semibold">{slipCount}</span> ใบ — ลบแล้ว<span className="font-semibold">สลิปและเครดิตภาษีจะถูกลบไปด้วย</span> และกู้คืนไม่ได้
+                      </p>
+                    </div>
+                  )}
                   <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={() => setConfirmDelete(false)}

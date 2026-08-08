@@ -196,10 +196,29 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
 
   const delHolding = async (h: HoldingDetail) => {
     if (!supabase) { setEditHolding(null); return; }
-    // Remove the accumulated slips for this bond first. holding_id now cascades,
-    // but slips linked only by bond_id (holding_id null) won't — delete those
-    // explicitly. RLS scopes the delete to the caller's own rows.
-    await supabase.from("tax_documents").delete().eq("bond_id", h.bondId);
+    // Remove the accumulated slips for this bond first. They're linked by bond_id
+    // only (holding_id is null), so the holdings FK cascade never removes them —
+    // and a client-side delete on tax_documents is blocked by RLS (silently
+    // removes 0 rows), which is why deleted-then-re-added bonds showed old slips.
+    // Delete them via the service-role edge fn (bypasses RLS), scoped to this
+    // user + bond. Abort the whole removal if the slips can't be cleared, so we
+    // never orphan them behind a deleted holding.
+    const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    if (SUPABASE_URL) {
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess.session?.access_token;
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/delete-bond-slips`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ bondId: h.bondId }),
+        });
+        if (!res.ok) throw new Error(`delete-bond-slips ${res.status}`);
+      } catch (e) {
+        toast.danger(`${t("toast_remove_failed")}: ${(e as Error).message}`);
+        return;
+      }
+    }
     const { error: delErr } = await supabase.from("holdings").delete().eq("id", h.id);
     if (delErr) { toast.danger(`${t("toast_remove_failed")}: ${delErr.message}`); return; }
     notifyPortfolioChanged();

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { IconChevronLeft, IconChevronDown, IconMinus, IconPlus, IconSearch } from "@tabler/icons-react";
-import { ComboBox, ListBox, Input } from "@heroui/react";
+import { IconChevronLeft, IconChevronDown, IconMinus, IconPlus, IconSearch, IconCalendar } from "@tabler/icons-react";
+import { ComboBox, ListBox, Input, Label, DatePicker, Calendar } from "@heroui/react";
+import { Group, DateInput, DateSegment, Dialog, I18nProvider } from "react-aria-components";
+import { parseDate, toCalendar, GregorianCalendar, type DateValue } from "@internationalized/date";
 import { animate, motion, AnimatePresence, useMotionValue, useTransform } from "motion/react";
 import { fetchBondDetail, issuerNames, type BondCandidate, type BondDetail } from "../lib/secApi";
 import { deriveCouponSchedule, parseFrequency } from "../lib/couponSchedule";
@@ -35,6 +37,14 @@ function fmtTerm(y: number | null, m: number | null, d: number | null): string {
   const parts = [years ? `${years} ปี` : "", months ? `${months} เดือน` : "", d ? `${d} วัน` : ""].filter(Boolean);
   return parts.length ? parts.join(" ") : "—";
 }
+// Coupon-frequency (payments/year) → Thai label.
+const FREQ_LABEL: Record<number, string> = {
+  1: "ปีละครั้ง",
+  2: "ทุก 6 เดือน",
+  4: "ทุก 3 เดือน",
+  12: "ทุกเดือน",
+};
+
 // A manual bond with no company resolved yet — shown as a "?" placeholder.
 const isUnknown = (c: BondCandidate) => c.source === "manual" && !c.issuer.trim();
 
@@ -83,7 +93,6 @@ export default function AddBondConfirm({
 }: Props) {
   const t = useT();
   const [openSym, setOpenSym] = useState<string | null>(items[0]?.cand.symbol ?? null);
-  const [tab, setTab] = useState<"detail" | "slips">("detail");
 
   // Keep an open row valid as the cart changes.
   useEffect(() => {
@@ -198,8 +207,7 @@ export default function AddBondConfirm({
                           {/* Manual (not-in-SEC) bonds: fill in the missing details */}
                           {manual && (
                             <>
-                              <div className="flex flex-col gap-2 rounded-3xl bg-[rgba(30,125,235,0.05)] p-4">
-                                <label className="text-base text-black/60">{t("company_name")}</label>
+                              <div className="flex flex-col gap-2 rounded-3xl bg-[rgba(30,125,235,0.05)] p-2">
                                 <CompanyCombo
                                   value={it.cand.issuer}
                                   onChange={(v) => onChangeField(it.cand.symbol, { issuer: v })}
@@ -207,29 +215,36 @@ export default function AddBondConfirm({
                               </div>
 
                               <div className="flex gap-4">
-                                <div className="flex flex-1 flex-col gap-2 rounded-3xl bg-[rgba(30,125,235,0.05)] p-4">
-                                  <label className="text-base text-black/60">{t("issue_date")}</label>
-                                  <input
-                                    type="date"
+                                {/* Issue date — white card + ThaiBMA auto-fill note (Figma 1274:3608) */}
+                                <div className="flex flex-1 flex-col items-center gap-2 rounded-3xl bg-[rgba(30,125,235,0.05)] p-2">
+                                  <IssueDatePicker
                                     value={it.cand.issueDate ?? ""}
-                                    onChange={(e) => onChangeField(it.cand.symbol, { issueDate: e.target.value || null })}
-                                    className="rounded-full border border-black/10 bg-white px-4 py-2 font-nunito text-sm text-black outline-none"
+                                    onChange={(iso) => onChangeField(it.cand.symbol, { issueDate: iso || null })}
                                   />
+                                  {it.cand.issueDate && (
+                                    <p className="text-xs text-[#222]">{t("thaibma_autofilled")}</p>
+                                  )}
                                 </div>
-                                <div className="flex flex-1 flex-col gap-2 rounded-3xl bg-[rgba(30,125,235,0.05)] p-4">
-                                  <label className="text-base text-black/60">{t("coupon_rate")}</label>
-                                  <div className="flex items-center gap-1 rounded-full border border-black/10 bg-white px-4 py-2">
-                                    <input
-                                      type="number"
-                                      inputMode="decimal"
-                                      step="0.01"
-                                      value={it.cand.couponRate ?? ""}
-                                      onChange={(e) => onChangeField(it.cand.symbol, { couponRate: e.target.value === "" ? null : Number(e.target.value) })}
-                                      placeholder="0.00"
-                                      className="min-w-0 flex-1 bg-transparent font-nunito text-sm text-black outline-none"
-                                    />
-                                    <span className="shrink-0 text-sm text-black/40">%</span>
+                                {/* Coupon rate — white card + % suffix */}
+                                <div className="flex flex-1 flex-col items-center gap-2 rounded-3xl bg-[rgba(30,125,235,0.05)] p-2">
+                                  <div className="flex w-full items-center justify-between gap-2 rounded-3xl bg-white p-4">
+                                    <div className="flex min-w-0 flex-1 flex-col">
+                                      <span className="text-xs text-[#222]">{t("coupon_rate")}</span>
+                                      <input
+                                        type="number"
+                                        inputMode="decimal"
+                                        step="0.1"
+                                        value={it.cand.couponRate ?? ""}
+                                        onChange={(e) => onChangeField(it.cand.symbol, { couponRate: e.target.value === "" ? null : Number(e.target.value) })}
+                                        placeholder="0.00"
+                                        className="min-w-0 bg-transparent font-nunito text-base font-medium text-[#222] outline-none"
+                                      />
+                                    </div>
+                                    <span className="shrink-0 text-xs font-medium text-[#222]/60">%</span>
                                   </div>
+                                  {it.cand.couponRate != null && (
+                                    <p className="text-xs text-[#222]">{t("thaibma_autofilled")}</p>
+                                  )}
                                 </div>
                               </div>
                             </>
@@ -256,26 +271,10 @@ export default function AddBondConfirm({
         </div>
       </div>
 
-      {/* RIGHT — detail tabs */}
+      {/* RIGHT — bond detail */}
       <div className="flex min-h-0 flex-col">
-        <div className="flex shrink-0 gap-1">
-          <button
-            type="button"
-            onClick={() => setTab("detail")}
-            className={`rounded-t-xl px-3 py-2 text-sm transition ${tab === "detail" ? "bg-white text-[#222]" : "bg-white/50 text-[#222]/60 hover:bg-white/80"}`}
-          >
-            {t("tab_details")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab("slips")}
-            className={`rounded-t-xl px-3 py-2 text-sm transition ${tab === "slips" ? "bg-white text-[#222]" : "bg-white/50 text-[#222]/60 hover:bg-white/80"}`}
-          >
-            {t("tab_slips")}
-          </button>
-        </div>
-        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto rounded-3xl rounded-tl-none bg-white p-6">
-          {active && (tab === "detail" ? <DetailPanel cand={active.cand} /> : <SlipsPanel />)}
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto rounded-3xl bg-white p-6">
+          {active && <DetailPanel cand={active.cand} />}
         </div>
       </div>
     </div>
@@ -322,6 +321,7 @@ export function DetailPanel({ cand }: { cand: BondCandidate }) {
   const rows: [string, React.ReactNode][] = [
     [t("company_name"), name],
     [t("coupon_rate"), couponRate != null ? `${couponRate}%` : detail?.couponRateText ?? "—"],
+    [t("pays_interest"), FREQ_LABEL[freq] ?? "—"],
     [t("rating"), rating || "—"],
     [t("redeem_term"), fmtTerm(detail?.termYears ?? cand.termYears ?? null, detail?.termMonth ?? null, detail?.termDay ?? null)],
     [t("issue_date"), fmtThaiDate(detail?.issueDate ?? cand.issueDate)],
@@ -429,16 +429,31 @@ export function CompanyCombo({ value, onChange }: { value: string; onChange: (v:
     <ComboBox
       aria-label={t("company_name")}
       allowsCustomValue
-      menuTrigger="input"
+      menuTrigger="focus"
       inputValue={value}
       onInputChange={onChange}
       onSelectionChange={(key) => { if (key != null) onChange(String(key)); }}
       items={matches}
     >
-      <ComboBox.InputGroup className="h-12 rounded-full [&_input]:font-normal! [&_input]:text-brand-blue [&_input]:placeholder:text-brand-blue/80">
-        <Input placeholder={t("company_placeholder")} className="text-sm font-normal!" />
-        <ComboBox.Trigger className="text-brand-blue">
-          <IconSearch size={20} />
+      {/* White card: stacked label + value, search icon right (Figma 1279:3801).
+          Whole card is the click target (focuses the input) and heroUI's focus
+          ring is suppressed. */}
+      <ComboBox.InputGroup
+        onPointerDown={(e) => {
+          const input = (e.currentTarget as HTMLElement).querySelector("input");
+          if (input && e.target !== input) { e.preventDefault(); input.focus(); }
+        }}
+        className="h-auto w-full cursor-pointer items-center gap-2 rounded-3xl border-0 bg-white p-4 shadow-none outline-none ring-0 focus-within:ring-0 data-[focused]:ring-0 data-[focus-visible]:ring-0"
+      >
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Label className="cursor-pointer text-xs text-[#222]">{t("company_name")}</Label>
+          <Input
+            placeholder={t("company_placeholder")}
+            className="cursor-pointer border-0 bg-transparent p-0 font-normal! text-base text-[#222] shadow-none outline-none ring-0 placeholder:text-[#222]/30 focus:ring-0"
+          />
+        </div>
+        <ComboBox.Trigger className="mr-2 shrink-0 text-[#222] outline-none ring-0">
+          <IconSearch size={24} />
         </ComboBox.Trigger>
       </ComboBox.InputGroup>
       <ComboBox.Popover>
@@ -452,11 +467,66 @@ export function CompanyCombo({ value, onChange }: { value: string; onChange: (v:
   );
 }
 
-function SlipsPanel() {
+// heroUI DatePicker for the manual issue-date field — Thai/Buddhist-era locale,
+// converting back to a Gregorian ISO string. Exported so the port edit view can
+// reuse the exact same white-card field.
+export function IssueDatePicker({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
   const t = useT();
+  let dv: DateValue | null = null;
+  try { dv = value ? parseDate(value) : null; } catch { dv = null; }
   return (
-    <div className="flex h-full min-h-60 items-center justify-center text-center text-sm text-black/40">
-      {t("slips_after_save")}
-    </div>
+    <I18nProvider locale="th-TH-u-ca-buddhist">
+      <DatePicker
+        aria-label={t("issue_date_bond")}
+        value={dv}
+        onChange={(v) => onChange(v ? toCalendar(v, new GregorianCalendar()).toString() : "")}
+        className="w-full"
+      >
+        {/* White card: stacked label + value on the left, calendar icon right;
+            the whole card opens the calendar (Figma 1274:3608). */}
+        <Group className="relative flex w-full cursor-pointer items-center justify-between gap-2 rounded-3xl bg-white p-4">
+          <DatePicker.Trigger className="absolute inset-0 z-0" aria-label={t("open_calendar")}>
+            <span className="sr-only">{t("open_calendar")}</span>
+          </DatePicker.Trigger>
+          <div className="pointer-events-none flex min-w-0 flex-1 flex-col">
+            <Label className="text-xs text-[#222]">{t("issue_date_bond")}</Label>
+            <DateInput className="flex font-nunito text-base font-medium text-[#222]">
+              {(segment) => (
+                <DateSegment
+                  segment={segment}
+                  className="rounded px-0.5 tabular-nums outline-none data-[placeholder]:text-[#222]/30"
+                />
+              )}
+            </DateInput>
+          </div>
+          <IconCalendar size={24} className="pointer-events-none relative z-10 shrink-0 text-[#222]" />
+        </Group>
+        <DatePicker.Popover>
+          <Dialog className="p-3 outline-none">
+            <Calendar>
+              <header className="flex items-center justify-between px-1 pb-2">
+                <Calendar.NavButton slot="previous" />
+                <Calendar.Heading className="text-sm font-medium text-[#181D20]" />
+                <Calendar.NavButton slot="next" />
+              </header>
+              <Calendar.Grid className="border-separate border-spacing-1">
+                <Calendar.GridHeader>
+                  {(day) => <Calendar.HeaderCell className="text-xs font-normal text-black/40">{day}</Calendar.HeaderCell>}
+                </Calendar.GridHeader>
+                <Calendar.GridBody>
+                  {(date) => (
+                    <Calendar.Cell
+                      date={date}
+                      className="flex size-8 cursor-pointer items-center justify-center rounded-full text-sm outline-none data-[hovered]:bg-black/5 data-[selected]:bg-[#43507F] data-[selected]:text-white data-[disabled]:opacity-30"
+                    />
+                  )}
+                </Calendar.GridBody>
+              </Calendar.Grid>
+            </Calendar>
+          </Dialog>
+        </DatePicker.Popover>
+      </DatePicker>
+    </I18nProvider>
   );
 }
+
