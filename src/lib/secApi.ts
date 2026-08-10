@@ -1,6 +1,17 @@
 import { supabase, supabaseEnabled } from "./supabase";
 import { parseFrequency } from "./couponSchedule";
 
+// SEC + ThaiBMA lookups run server-side (subscription key / CORS / ThaiBMA
+// handshake). In production they're Supabase edge functions; in dev the vite
+// middleware serves the same relative paths. Prefer the edge fn when a Supabase
+// URL is configured so both dev and prod hit a real backend.
+const FN_BASE = (import.meta.env.VITE_SUPABASE_URL as string | undefined)
+  ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`
+  : "";
+const secApiUrl = (path: string) => (FN_BASE ? `${FN_BASE}/sec-api${path}` : `/sec-api${path}`);
+const thaibmaUrl = (sym: string) =>
+  `${FN_BASE ? `${FN_BASE}/thaibma-feature` : "/thaibma-feature"}?symbol=${encodeURIComponent(sym)}`;
+
 // A bond candidate shown in the add-bond search results, normalized from
 // either the SEC Open Data API or the local bonds table (fallback).
 export interface BondCandidate {
@@ -135,7 +146,7 @@ export async function fetchBondDetail(
   if (detailCache.has(sym)) return detailCache.get(sym)!;
   try {
     const res = await fetch(
-      `/sec-api/v2/bond/features?search_term=${encodeURIComponent(sym)}&page_size=20`,
+      secApiUrl(`/v2/bond/features?search_term=${encodeURIComponent(sym)}&page_size=20`),
       { signal },
     );
     if (!res.ok) return null;
@@ -181,7 +192,7 @@ export async function fetchThaibmaFeature(
   if (!sym) return null;
   if (thaibmaCache.has(sym)) return thaibmaCache.get(sym)!;
   try {
-    const res = await fetch(`/thaibma-feature?symbol=${encodeURIComponent(sym)}`, { signal });
+    const res = await fetch(thaibmaUrl(sym), { signal });
     if (!res.ok) {
       thaibmaCache.set(sym, null);
       return null;
@@ -382,7 +393,7 @@ async function searchRemote(
   if (cached) return cached;
   try {
     const res = await fetch(
-      `/sec-api/v2/bond/features?search_term=${encodeURIComponent(term)}&page_size=20`,
+      secApiUrl(`/v2/bond/features?search_term=${encodeURIComponent(term)}&page_size=20`),
       { signal },
     );
     if (!res.ok) return [];
