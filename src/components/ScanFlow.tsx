@@ -20,7 +20,9 @@ import dbdVerified from "../assets/badges/dbd-verified.svg";
 import taxidError from "../assets/badges/taxid-error.svg";
 import dbdLogo from "../assets/badges/dbd-logo.svg";
 import { EMPTY_SLIP, type SlipFields } from "../lib/scanTypes";
-import { ensureCatalog, searchBonds, type BondCandidate } from "../lib/secApi";
+import { ensureCatalog, searchBonds, fetchThaibmaFeature, type BondCandidate } from "../lib/secApi";
+import { createBondHolding } from "../lib/holdings";
+import { supabase } from "../lib/supabase";
 import { extractSlip, saveTaxDocument, getReviewSlip, confirmReviewedSlip } from "../lib/taxDocuments";
 import { lookupTaxIdName, companyNamesMatch, verifyTaxId } from "../lib/verifyTaxId";
 import { useHoldings, notifyPortfolioChanged } from "../hooks/usePortfolio";
@@ -593,8 +595,13 @@ function ReviewStep({
   const [taxIdError, setTaxIdError] = useState(false);
   const taxDigits = (fields.payer_tax_id ?? "").replace(/\D/g, "");
   const guardedSubmit = () => {
-    // A 13-digit id that isn't DBD-verified against the company → block + sheet.
-    if (taxDigits.length === 13 && !taxVerified) { setTaxIdError(true); return; }
+    // Any entered payer id that isn't DBD-verified against the company blocks the
+    // save — includes an incomplete id (deleted a digit → not 13) and a complete
+    // one that doesn't match / isn't found. Empty is allowed (slip saved without
+    // a filable id, surfaced later as unfilable).
+    if (taxDigits.length > 0 && !taxVerified) { setTaxIdError(true); return; }
+    // Bond not in the portfolio yet → collect the invested amount, then auto-add.
+    if (bondUnheld) { setAddError(null); setAskFace(true); return; }
     onSubmit();
   };
 
@@ -618,6 +625,58 @@ function ReviewStep({
   const bondUnheld = !!fields.bond_symbol && !bondOptions.some((b) => b.symbol === fields.bond_symbol);
   const [addOpen, setAddOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+
+  // Auto-add-to-portfolio: when the slip's bond isn't held yet, the only piece
+  // add-bond needs that the slip can't supply is the invested amount — so ask
+  // just that, then create the holding (enriching coupon/dates from ThaiBMA) and
+  // save the slip in one go.
+  const MIN_FACE = 100_000;
+  const [askFace, setAskFace] = useState(false);
+  const [faceInput, setFaceInput] = useState<number>(MIN_FACE);
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const autoAddAndSave = async () => {
+    if (adding) return;
+    if (!supabase) { setAskFace(false); onSubmit(); return; }
+    if (!Number.isFinite(faceInput) || faceInput < MIN_FACE) {
+      setAddError(`จำนวนเงินลงทุนขั้นต่ำ ${MIN_FACE.toLocaleString("th-TH")} บาท`);
+      return;
+    }
+    setAdding(true);
+    setAddError(null);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const userId = sess.session?.user.app_metadata?.public_user_id as string | undefined;
+      if (!userId) throw new Error("ยังไม่ได้เข้าสู่ระบบ");
+      const sym = (fields.bond_symbol ?? "").toUpperCase();
+      // Enrich coupon / dates / frequency from ThaiBMA (best-effort). Issuer stays
+      // the OCR'd Thai payer name (matches the catalog naming convention).
+      const tbma = await fetchThaibmaFeature(sym);
+      const cand: BondCandidate = {
+        symbol: sym,
+        nameTh: fields.payer_name ?? sym,
+        nameEn: "",
+        isin: tbma?.isin ?? "",
+        issuer: fields.payer_name ?? sym,
+        couponRate: tbma?.couponRate ?? null,
+        maturityDate: tbma?.maturityDate ?? null,
+        issueDate: tbma?.issueDate ?? null,
+        termYears: tbma?.termYears ?? null,
+        frequency: tbma?.frequency ?? 2,
+        source: "manual",
+      };
+      const taxId = taxDigits.length === 13 ? taxDigits : null;
+      await createBondHolding(cand, faceInput, cand.frequency ?? 2, "", taxId, userId);
+      if (taxId) void verifyTaxId(taxId, cand.issuer, sym);
+      notifyPortfolioChanged();
+      setAskFace(false);
+      onSubmit(); // save the slip — bond_id now resolves to the new bonds row
+    } catch (e) {
+      setAddError((e as Error).message);
+    } finally {
+      setAdding(false);
+    }
+  };
 
   // First-visit walkthrough: spotlight each field in business-flow order so the
   // user knows what to review before saving. Replayable via the header "?" button.
@@ -857,7 +916,11 @@ function ReviewStep({
             </p>
             {/* Reason + the value that was read */}
             <p className="mt-5 w-full text-right text-sm text-black/60">
-              {liveName === null ? "ไม่พบหมายเลขประจำตัวนี้" : `จดทะเบียนในชื่อ “${liveName}”`}
+              {taxDigits.length !== 13
+                ? "เลขไม่ครบ 13 หลัก"
+                : liveName === null
+                  ? "ไม่พบหมายเลขประจำตัวนี้"
+                  : `จดทะเบียนในชื่อ “${liveName}”`}
             </p>
             <div className="mt-1 flex w-full items-center justify-between rounded-2xl bg-black/5 px-4 py-2">
               <span className="text-base font-medium text-[#1B1C1D]">ค่าที่อ่านได้</span>
@@ -868,6 +931,46 @@ function ReviewStep({
               className="mt-6 h-14 w-full rounded-2xl bg-[#E0E6E9] text-base font-bold text-[#006AAA]"
             >
               รับทราบ
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-add invested-amount sheet — the one field the slip can't supply. */}
+      {askFace && (
+        <div className="fixed inset-0 z-[130] flex flex-col justify-end" onClick={() => !adding && setAskFace(false)}>
+          <div className="absolute inset-0 bg-black/50" />
+          <div className="relative flex flex-col rounded-t-3xl bg-white px-6 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]" onClick={(e) => e.stopPropagation()}>
+            <p className="text-lg font-bold text-[#1B1C1D]">เพิ่ม {fields.bond_symbol} เข้าพอร์ต</p>
+            <p className="mt-1 text-sm text-black/60">หุ้นกู้นี้ยังไม่มีในพอร์ต — กรอกมูลค่าที่ลงทุนเพื่อบันทึกสลิปนี้</p>
+            <label className="mt-4 block text-sm font-medium text-black/60">มูลค่าที่ลงทุน (บาท)</label>
+            <div className="mt-1.5 flex items-center gap-2 rounded-2xl border border-black/10 bg-white px-4 py-3">
+              <span className="shrink-0 text-lg text-black/40">฿</span>
+              <input
+                autoFocus
+                inputMode="numeric"
+                value={Number.isFinite(faceInput) && faceInput > 0 ? faceInput.toLocaleString("th-TH") : ""}
+                onChange={(e) => {
+                  const d = e.target.value.replace(/[^\d]/g, "");
+                  setFaceInput(d ? Number(d) : NaN);
+                }}
+                placeholder="0"
+                className="min-w-0 flex-1 bg-transparent font-nunito text-2xl font-medium text-[#1B1C1D] outline-none"
+              />
+            </div>
+            {addError && <p className="mt-2 text-sm text-red-600">{addError}</p>}
+            <button
+              onClick={autoAddAndSave}
+              disabled={adding}
+              className="mt-5 flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-[#2968A5] text-base font-bold text-white disabled:opacity-60"
+            >
+              {adding ? (
+                <>
+                  <IconLoader2 size={18} className="animate-spin" /> กำลังเพิ่ม…
+                </>
+              ) : (
+                "เพิ่มเข้าพอร์ต & บันทึกสลิป"
+              )}
             </button>
           </div>
         </div>

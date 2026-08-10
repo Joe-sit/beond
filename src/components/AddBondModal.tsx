@@ -6,6 +6,7 @@ import {
 } from "@heroui/react";
 import { ensureCatalog, searchLocal, issuerForSymbol, symbolForIssuer, catalogUpdatedAt, fetchThaibmaFeature, type BondCandidate } from "../lib/secApi";
 import { deriveCouponSchedule } from "../lib/couponSchedule";
+import { createBondHolding } from "../lib/holdings";
 import { verifyTaxId, lookupTaxIdName, companyNamesMatch } from "../lib/verifyTaxId";
 import { overrideFor } from "../data/couponOverrides";
 import { ratingFor } from "../data/bondRatings";
@@ -51,10 +52,6 @@ interface AddBondModalProps {
   slips?: TaxDoc[]; // confirmed 50-ทวิ slips for this bond — shown as a timeline
   onDelete?: () => void | Promise<void>; // delete the holding being edited
 }
-
-// SEC doesn't classify bonds by industry, and the form no longer asks — new
-// bonds land in the "unclassified" sector (migration 0015).
-const FALLBACK_SECTOR_ID = "other";
 
 // Minimum face value a holding can be added with, and the counter's step.
 const MIN_FACE_VALUE = 100_000;
@@ -633,9 +630,8 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     else toast.danger("ยืนยันกับ DBD ไม่ได้ — บันทึกแบบยังไม่ยืนยัน");
   };
 
-  // Core: insert one bond holding (+ its payout schedule) for the given user.
-  // Throws on any failure; shared by the manual/edit single-save flow and the
-  // cart (multi-add) flow so DB logic lives in one place.
+  // Insert one bond holding for the given user (shared DB helper), then verify
+  // its payer tax id. Used by the manual/edit single-save + cart multi-add flows.
   const insertHolding = async (
     cand: BondCandidate,
     faceValue: number,
@@ -644,75 +640,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     payerTaxId: string | null,
     publicUserId: string,
   ) => {
-    if (!supabase) return;
-    const schedule = deriveCouponSchedule({
-      issueDate: cand.issueDate,
-      maturityDate: cand.maturityDate,
-      termYears: cand.termYears,
-      frequency: freqV, // user-picked; SEC omits payment frequency
-      couponRate: cand.couponRate,
-      faceValue,
-    });
-
-    let { data: bond } = await supabase
-      .from("bonds")
-      .select("id")
-      .eq("symbol", cand.symbol)
-      .maybeSingle();
-
-    if (!bond) {
-      const { data: inserted, error: bondErr } = await supabase
-        .from("bonds")
-        .insert({
-          symbol: cand.symbol,
-          issuer: cand.issuer,
-          sector_id: FALLBACK_SECTOR_ID,
-          coupon_rate: cand.couponRate ?? 0,
-          total_installments:
-            schedule.length ||
-            (cand.termYears ? Math.max(1, Math.round(cand.termYears * 2)) : 4),
-          maturity_date: cand.maturityDate,
-          issue_date: cand.issueDate,
-          coupon_freq: freqV,
-          rating: ratingV || null,
-          payer_tax_id: payerTaxId,
-        })
-        .select("id")
-        .single();
-      if (bondErr) throw bondErr;
-      bond = inserted;
-    }
-
-    // Block adding a bond that's already in this user's portfolio (same
-    // symbol → same shared bond row → dup holding).
-    const { data: existing } = await supabase
-      .from("holdings")
-      .select("id")
-      .eq("user_id", publicUserId)
-      .eq("bond_id", bond!.id)
-      .limit(1);
-    if (existing && existing.length) throw new Error(t("err_duplicate_bond", { symbol: cand.symbol }));
-
-    const { data: holding, error: holdErr } = await supabase
-      .from("holdings")
-      .insert({ user_id: publicUserId, bond_id: bond!.id, face_value: faceValue })
-      .select("id")
-      .single();
-    if (holdErr) throw holdErr;
-
-    // Seed this holding's payout timeline from the derived schedule.
-    if (holding && schedule.length) {
-      const { error: payErr } = await supabase.from("payouts").insert(
-        schedule.map((p) => ({
-          holding_id: holding.id,
-          installment: p.installment,
-          amount: p.amount,
-          payout_date: p.date,
-        })),
-      );
-      if (payErr) throw payErr;
-    }
-
+    await createBondHolding(cand, faceValue, freqV, ratingV, payerTaxId, publicUserId);
     await verifyAndToast(payerTaxId, cand.issuer, cand.symbol);
   };
 
