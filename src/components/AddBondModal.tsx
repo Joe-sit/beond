@@ -270,6 +270,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   const t = useT();
   const editing = !!editHolding;
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false); // delete in flight (edge fn can be slow)
   const [manualReview, setManualReview] = useState(false); // summary step before saving a manual entry
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<BondCandidate[]>([]);
@@ -1359,16 +1360,32 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={() => setConfirmDelete(false)}
-                      className="rounded-2xl border-[0.5px] border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7]"
+                      disabled={deleting}
+                      className="rounded-2xl border-[0.5px] border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7] disabled:opacity-50"
                     >
                       ยกเลิก
                     </button>
                     <button
-                      onClick={() => onDelete?.()}
-                      className="flex items-center gap-2 rounded-2xl bg-[#D64545] px-4 py-2.5 text-base font-medium text-white transition hover:bg-[#c23c3c]"
+                      onClick={async () => {
+                        if (deleting) return;
+                        setDeleting(true);
+                        // onDelete (delHolding) clears slips server-side then the
+                        // holding — can take a moment; keep the spinner until done.
+                        try { await onDelete?.(); } finally { setDeleting(false); }
+                      }}
+                      disabled={deleting}
+                      className="flex items-center gap-2 rounded-2xl bg-[#D64545] px-4 py-2.5 text-base font-medium text-white transition hover:bg-[#c23c3c] disabled:opacity-70"
                     >
-                      ยืนยันลบ
-                      <IconTrash size={18} />
+                      {deleting ? (
+                        <>
+                          <IconLoader2 size={18} className="animate-spin" /> กำลังลบ…
+                        </>
+                      ) : (
+                        <>
+                          ยืนยันลบ
+                          <IconTrash size={18} />
+                        </>
+                      )}
                     </button>
                   </div>
                 </ModalDialog>
