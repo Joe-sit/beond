@@ -17,6 +17,11 @@ import { getIssuerLogoUrl, issuerName } from "../../lib/issuerLogo";
 const fmtTHB = (n: number) =>
   new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 
+// The RD e-Filing site the extension autofills, and the beond extension's
+// Chrome Web Store listing (TODO: real id once published — see backlog item 3).
+const EFILING_URL = "https://efiling.rd.go.th/rd-cms/";
+const CHROME_STORE_URL = "https://chromewebstore.google.com/"; // TODO: /detail/<beond-ext-id>
+
 // 13-digit tax id → 0-0000-00000-00-0 for display.
 const fmtTaxId = (id: string) => {
   const d = id.replace(/\D/g, "");
@@ -189,19 +194,24 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
   const [grossMode, setGrossMode] = useState<"collected" | "all">("collected");
   const grossTotal = grossMode === "collected" ? grossCollected : grossAll;
 
-  // Extension presence — gates the sync button.
+  // Extension presence — gates the sync button. `synced` unlocks the "open
+  // e-Filing" step once rows are pushed.
   const [hasExt, setHasExt] = useState<boolean | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [synced, setSynced] = useState(false);
+  const recheckExt = () => { setHasExt(null); detectExtension().then(setHasExt); };
   useEffect(() => {
     detectExtension().then(setHasExt);
   }, []);
+  // A fresh set of rows (year change / edits) invalidates a previous sync.
+  useEffect(() => { setSynced(false); }, [rows]);
 
   const onSync = async () => {
     if (!rows.length) return;
     setSyncing(true);
     const ok = await syncToExtension(rows);
     setSyncing(false);
-    if (ok) toast.success(`ส่ง ${rows.length} รายการเข้า e-Filing แล้ว`);
+    if (ok) { setSynced(true); toast.success(`ส่ง ${rows.length} รายการเข้า e-Filing แล้ว`); }
     else toast.danger("ส่งไม่สำเร็จ — ตรวจสอบ extension");
   };
 
@@ -234,6 +244,42 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
         <div className="flex shrink-0 flex-col gap-1 rounded-2xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
           {pendingCount > 0 && <span>• {pendingCount} สลิปยังไม่ยืนยัน — จะไม่ถูกยื่น</span>}
           {unfilable > 0 && <span>• {unfilable} สลิปไม่มีเลขผู้เสียภาษี 13 หลัก — ยื่นไม่ได้ ต้องแก้ก่อน</span>}
+        </div>
+      )}
+
+      {/* สรุปรายการที่จะกรอก e-Filing — the EXACT 40(4) rows the extension pushes
+          into efiling.rd.go.th, one per payer (coupons from a payer summed). This
+          is the "what will be filled" preview the user reviews before sending. */}
+      {rows.length > 0 && (
+        <div className="shrink-0 overflow-hidden rounded-2xl border border-line">
+          <div className="flex items-center justify-between gap-2 bg-[#f5f5f5] px-5 py-3">
+            <p className="text-base font-medium text-ink">รายการที่จะกรอก e-Filing</p>
+            <span className="rounded-full bg-brand-blue/10 px-2.5 py-1 text-xs font-medium text-brand-blue">
+              40(4) · {rows.length} ผู้จ่าย
+            </span>
+          </div>
+          {/* Column headers */}
+          <div className="flex items-center gap-3 border-b border-black/5 px-5 py-2 text-xs text-ink/50">
+            <span className="min-w-0 flex-1">ผู้จ่ายเงินได้ / เลข 13 หลัก</span>
+            <span className="w-28 shrink-0 text-right">เงินได้</span>
+            <span className="w-28 shrink-0 text-right">ภาษีหัก ณ ที่จ่าย</span>
+          </div>
+          {rows.map((r) => (
+            <div key={r.issuer_tax_id} className="flex items-center gap-3 border-b border-black/5 px-5 py-3 last:border-0">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-ink">{r.issuer_name}</p>
+                <p className="font-nunito text-xs text-ink/50">{fmtTaxId(r.issuer_tax_id)}</p>
+              </div>
+              <span className="w-28 shrink-0 text-right font-nunito text-sm text-ink">฿{fmtTHB(r.gross_interest)}</span>
+              <span className="w-28 shrink-0 text-right font-nunito text-sm text-ink">฿{fmtTHB(r.wht_amount)}</span>
+            </div>
+          ))}
+          {/* Totals row */}
+          <div className="flex items-center gap-3 bg-[#f5f5f5] px-5 py-3 text-sm font-medium text-ink">
+            <span className="min-w-0 flex-1">รวม</span>
+            <span className="w-28 shrink-0 text-right font-nunito">฿{fmtTHB(rows.reduce((s, r) => s + r.gross_interest, 0))}</span>
+            <span className="w-28 shrink-0 text-right font-nunito text-[#2E8B57]">฿{fmtTHB(rows.reduce((s, r) => s + r.wht_amount, 0))}</span>
+          </div>
         </div>
       )}
 
@@ -326,21 +372,62 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
           <span className="font-nunito text-2xl font-medium text-[#2E8B57]">฿{fmtTHB(claimableTotal)}</span>
         </div>
         <div className="h-px bg-black/10" />
-        {/* Sync to extension */}
-        <p className="text-xs text-ink/50">
-          {hasExt == null
-            ? "กำลังตรวจสอบ extension…"
-            : hasExt
-              ? "พบ beond extension"
-              : "ไม่พบ extension — ติดตั้งก่อนยื่น"}
-        </p>
+
+        {/* Fill flow: (1) install extension → (2) send rows → (3) open e-Filing */}
+        {hasExt === false ? (
+          // Not installed — Chrome Web Store install card + re-check.
+          <div className="flex flex-col gap-2 rounded-2xl border border-amber-300 bg-amber-50 p-3">
+            <p className="flex items-center gap-1.5 text-sm font-medium text-amber-800">
+              <IconAlertTriangle size={16} className="shrink-0" /> ต้องติดตั้ง beond extension ก่อน
+            </p>
+            <p className="text-xs leading-relaxed text-amber-800/80">
+              ส่วนเสริม Chrome ที่กรอกข้อมูลลง e-Filing ให้อัตโนมัติ
+            </p>
+            <a
+              href={CHROME_STORE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex h-11 items-center justify-center rounded-xl bg-brand-blue px-4 text-sm font-medium text-white transition hover:bg-[#215688]"
+            >
+              ติดตั้งจาก Chrome Web Store
+            </a>
+            <button onClick={recheckExt} className="text-xs font-medium text-brand-blue underline">
+              ติดตั้งแล้ว — ตรวจสอบอีกครั้ง
+            </button>
+          </div>
+        ) : (
+          <p className="flex items-center gap-1.5 text-xs text-ink/50">
+            {hasExt == null ? (
+              "กำลังตรวจสอบ extension…"
+            ) : (
+              <>
+                <IconCheck size={14} className="text-[#3FA35B]" stroke={3} /> พบ beond extension แล้ว
+              </>
+            )}
+          </p>
+        )}
+
+        {/* Step 2 — push the fileable rows into the extension's storage. */}
         <button
           onClick={onSync}
           disabled={!hasExt || !rows.length || syncing}
           className="flex h-[54px] w-full items-center justify-center rounded-2xl bg-brand-blue px-4 text-base font-medium text-white transition hover:bg-[#215688] disabled:opacity-40"
         >
-          {syncing ? "กำลังส่ง…" : `ส่งเข้า e-Filing (${rows.length})`}
+          {syncing ? "กำลังส่ง…" : synced ? `ส่งอีกครั้ง (${rows.length})` : `ส่งเข้า e-Filing (${rows.length})`}
         </button>
+
+        {/* Step 3 — open the RD site; the extension autofills the pushed rows.
+            Shown only after a successful sync (manual, per user's choice). */}
+        {synced && (
+          <a
+            href={EFILING_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex h-[54px] w-full items-center justify-center gap-2 rounded-2xl border border-[#2E8B57] px-4 text-base font-medium text-[#2E8B57] transition hover:bg-[#2E8B57]/5"
+          >
+            เปิด e-Filing เพื่อกรอก
+          </a>
+        )}
       </div>
     </aside>
     </div>
