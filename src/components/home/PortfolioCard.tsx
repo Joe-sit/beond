@@ -58,7 +58,7 @@ export default function PortfolioCard() {
         </button>
       </div>
 
-      <ProfileLevelModal open={levelOpen} onClose={() => setLevelOpen(false)} currentIndex={lvlIdx} />
+      <ProfileLevelModal open={levelOpen} onClose={() => setLevelOpen(false)} />
     </div>
   );
 }

@@ -23,22 +23,175 @@ interface SecFeatureRow {
   bond_name_th: string | null;
   bond_name_en: string | null;
   company_id: string | null;
+  bond_type?: string | null;
+  esg_bond_type?: string | null;
+  subordinated_type?: string | null;
   coupon?: {
-    rate?: number | null;
+    rate?: number | string | null;
     type?: string | null;
     name_th?: string | null;
+    name_en?: string | null;
     desc_th?: string | null;
   } | null;
   maturity?: {
     issue_date?: string | null;
     maturity_date?: string | null;
     term_year?: number | null;
+    term_month?: number | null;
+    term_day?: number | null;
   } | null;
+  offering?: {
+    target?: string | null;
+    currency?: string | null;
+    unit?: number | null;
+    value?: number | null;
+    face_value?: number | null;
+  } | null;
+  selling?: { begin_date?: string | null; close_date?: string | null } | null;
+  redemption?: { name_th?: string | null; name_en?: string | null } | null;
+  embedded_option_info?: { name_th?: string | null; name_en?: string | null } | null;
+  secured_info?: { name_th?: string | null; name_en?: string | null; desc_th?: string | null } | null;
+  security_type?: { name_th?: string | null; name_en?: string | null } | null;
+  offer_type?: { name_th?: string | null; abbr_th?: string | null; abbr_en?: string | null } | null;
+  currency_info?: { name_th?: string | null } | null;
+}
+
+// Full, human-readable detail for one bond — normalized from a raw SEC feature
+// row. Strings are passed through from the API's own name_th labels; numeric
+// coupon rate is parsed leniently (the API sometimes returns descriptive text).
+export interface BondDetail extends BondCandidate {
+  bondType: string | null;
+  esgType: string | null;
+  subordinated: string | null;
+  secured: string | null;
+  securedDesc: string | null;
+  securityType: string | null;
+  offerType: string | null; // e.g. "เสนอขายต่อประชาชนทั่วไป (PO)"
+  offerAbbr: string | null; // PO / PP / II / II/HNW / IH
+  redemption: string | null;
+  embeddedOption: string | null;
+  currency: string | null;
+  unit: number | null; // minimum trading unit (baht)
+  offerValue: number | null; // total issue size
+  faceValue: number | null;
+  sellingBegin: string | null;
+  sellingClose: string | null;
+  termMonth: number | null;
+  termDay: number | null;
+  couponName: string | null; // "อัตราดอกเบี้ยคงที่"
+  couponDesc: string | null;
+  couponRateText: string | null; // raw rate text when not a clean number
+}
+
+// Parse the leading numeric percentage out of the coupon.rate field, which can
+// be a number, "5.8", or descriptive Thai text ("ร้อยละ 4.875 ต่อปี …").
+function parseCouponRate(rate: number | string | null | undefined): number | null {
+  if (rate == null) return null;
+  if (typeof rate === "number") return Number.isFinite(rate) ? rate : null;
+  const m = rate.replace(/,/g, "").match(/\d+(\.\d+)?/);
+  return m ? Number(m[0]) : null;
+}
+
+function toDetail(r: SecFeatureRow): BondDetail {
+  const base = toCandidate(r);
+  return {
+    ...base,
+    couponRate: parseCouponRate(r.coupon?.rate),
+    bondType: r.bond_type ?? null,
+    esgType: r.esg_bond_type ?? null,
+    subordinated: r.subordinated_type ?? null,
+    secured: r.secured_info?.name_th ?? null,
+    securedDesc: r.secured_info?.desc_th ?? null,
+    securityType: r.security_type?.name_th ?? null,
+    offerType: r.offer_type?.name_th ?? null,
+    offerAbbr: r.offer_type?.abbr_en ?? r.offer_type?.abbr_th ?? null,
+    redemption: r.redemption?.name_th ?? null,
+    embeddedOption: r.embedded_option_info?.name_th ?? null,
+    currency: r.currency_info?.name_th ?? r.offering?.currency ?? null,
+    unit: r.offering?.unit ?? null,
+    offerValue: r.offering?.value ?? null,
+    faceValue: r.offering?.face_value ?? null,
+    sellingBegin: r.selling?.begin_date?.slice(0, 10) ?? null,
+    sellingClose: r.selling?.close_date?.slice(0, 10) ?? null,
+    termMonth: r.maturity?.term_month ?? null,
+    termDay: r.maturity?.term_day ?? null,
+    couponName: r.coupon?.name_th ?? null,
+    couponDesc: r.coupon?.desc_th ?? null,
+    couponRateText: typeof r.coupon?.rate === "string" ? r.coupon.rate : null,
+  };
+}
+
+// Fetch the full detail for one bond by symbol, on demand (bond-detail view).
+// Uses the SEC proxy; returns null if the row can't be found or the network
+// fails (caller falls back to the slim catalog candidate). Dev-only until a
+// production edge proxy exists.
+const detailCache = new Map<string, BondDetail | null>();
+export async function fetchBondDetail(
+  symbol: string,
+  signal?: AbortSignal,
+): Promise<BondDetail | null> {
+  const sym = symbol.trim().toUpperCase();
+  if (!sym) return null;
+  if (detailCache.has(sym)) return detailCache.get(sym)!;
+  try {
+    const res = await fetch(
+      `/sec-api/v2/bond/features?search_term=${encodeURIComponent(sym)}&page_size=20`,
+      { signal },
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as SecFeatureResponse;
+    const row = (body.items ?? []).find((r) => r.thaibma_symbol?.toUpperCase() === sym);
+    const detail = row ? toDetail(row) : null;
+    detailCache.set(sym, detail);
+    return detail;
+  } catch {
+    return null;
+  }
 }
 
 interface SecFeatureResponse {
   items?: SecFeatureRow[];
   next_cursor?: string | null;
+}
+
+// Slim record returned by the ThaiBMA dev proxy (see vite.config.ts). Used to
+// enrich manually-added bonds that aren't in the SEC catalog — ThaiBMA covers
+// PP/II issues the SEC Open Data feed omits.
+export interface ThaibmaFeature {
+  symbol: string;
+  issuer: string;
+  issueDate: string | null;
+  maturityDate: string | null;
+  termYears: number | null;
+  isin: string | null;
+  frequency: number | null;
+  couponRate: number | null;
+  couponText: string | null;
+}
+
+const thaibmaCache = new Map<string, ThaibmaFeature | null>();
+
+// Look a symbol up on ThaiBMA via the dev proxy. Returns null when the symbol
+// isn't registered there or the lookup fails. Dev only — prod uses the edge fn.
+export async function fetchThaibmaFeature(
+  symbol: string,
+  signal?: AbortSignal,
+): Promise<ThaibmaFeature | null> {
+  const sym = symbol.trim().toUpperCase();
+  if (!sym) return null;
+  if (thaibmaCache.has(sym)) return thaibmaCache.get(sym)!;
+  try {
+    const res = await fetch(`/thaibma-feature?symbol=${encodeURIComponent(sym)}`, { signal });
+    if (!res.ok) {
+      thaibmaCache.set(sym, null);
+      return null;
+    }
+    const data = (await res.json()) as ThaibmaFeature;
+    thaibmaCache.set(sym, data);
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 function toCandidate(r: SecFeatureRow): BondCandidate {
@@ -49,7 +202,7 @@ function toCandidate(r: SecFeatureRow): BondCandidate {
     nameEn: r.bond_name_en ?? "",
     isin: r.isin_code ?? "",
     issuer: r.company_id ?? "-",
-    couponRate: r.coupon?.rate ?? null,
+    couponRate: parseCouponRate(r.coupon?.rate),
     maturityDate: r.maturity?.maturity_date?.slice(0, 10) ?? null,
     issueDate: r.maturity?.issue_date?.slice(0, 10) ?? null,
     termYears: r.maturity?.term_year ?? null,
@@ -71,20 +224,48 @@ function isActive(c: BondCandidate): boolean {
 
 let catalog: BondCandidate[] | null = null;
 let catalogPromise: Promise<void> | null = null;
+let catalogAt: number | null = null; // snapshot timestamp (from the JSON `at` field)
+
+// Epoch ms of the loaded catalog snapshot, or null before it loads.
+export function catalogUpdatedAt(): number | null {
+  return catalogAt;
+}
+
+// Admin-uploaded snapshot in Supabase Storage (refreshed from the dashboard);
+// falls back to the build-time bundle. Loading the Storage copy first means an
+// admin import goes live without a redeploy.
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const CATALOG_SOURCES = [
+  SUPABASE_URL ? `${SUPABASE_URL}/storage/v1/object/public/catalog/bond-catalog.json` : null,
+  "/bond-catalog.json",
+].filter((u): u is string => !!u);
 
 export function ensureCatalog(): void {
   if (catalog || catalogPromise) return;
-  catalogPromise = fetch("/bond-catalog.json")
-    .then((res) => (res.ok ? res.json() : null))
-    .then((body: { items?: BondCandidate[] } | null) => {
-      if (body?.items?.length) catalog = body.items.filter(isActive);
-    })
-    .catch(() => {
-      /* no snapshot — remote search still works */
-    })
-    .finally(() => {
-      catalogPromise = null;
-    });
+  catalogPromise = (async () => {
+    for (const src of CATALOG_SOURCES) {
+      try {
+        const res = await fetch(src, { cache: "no-cache" });
+        if (!res.ok) continue;
+        const body = (await res.json()) as { items?: BondCandidate[]; at?: number } | null;
+        if (body?.items?.length) {
+          // Older snapshots stored coupon.rate verbatim, which for floating-rate
+          // bonds is a long descriptive string. Coerce to a clean number (or
+          // null) so the UI never renders a paragraph in a "5.8%" slot.
+          catalog = body.items.filter(isActive).map((c) => ({
+            ...c,
+            couponRate: parseCouponRate(c.couponRate as number | string | null),
+          }));
+          catalogAt = body.at ?? null;
+          return;
+        }
+      } catch {
+        /* try the next source */
+      }
+    }
+  })().finally(() => {
+    catalogPromise = null;
+  });
 }
 
 // ── Issuer suggestions (for manual entry) ──────────────────────────────────
@@ -93,8 +274,18 @@ export function ensureCatalog(): void {
 const symbolPrefix = (s: string) => (s.match(/^[A-Za-z]+/)?.[0] ?? "").toUpperCase();
 
 // Unique issuer names from the loaded catalog, for an autocomplete datalist.
+// The authoritative full issuer name for a symbol, from the SEC catalog. Lets
+// display self-heal stale/short issuer strings saved on older bond rows.
+export function catalogIssuer(symbol: string): string | null {
+  if (!catalog || !symbol) return null;
+  const s = symbol.toUpperCase();
+  return catalog.find((c) => c.symbol.toUpperCase() === s)?.issuer ?? null;
+}
+
 export function issuerNames(): string[] {
   if (!catalog) return [];
+  // Full registered names verbatim — same string issuerName() shows elsewhere,
+  // so the dropdown options match search / list / summary exactly.
   return [...new Set(catalog.map((c) => c.issuer).filter((x) => x && x !== "-"))].sort();
 }
 
@@ -151,7 +342,8 @@ function searchCatalog(term: string): BondCandidate[] {
     .sort(
       (a, b) =>
         a.score - b.score ||
-        (a.c.maturityDate ?? "9999").localeCompare(b.c.maturityDate ?? "9999"),
+        // Newest issued first (issueDate desc) within the same relevance tier.
+        (b.c.issueDate ?? "").localeCompare(a.c.issueDate ?? ""),
     )
     .map((s) => s.c);
 }

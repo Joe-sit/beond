@@ -99,8 +99,45 @@ export function login(): void {
   localStorage.setItem(AUTH_KEY, "1");
 }
 
+// Watch for the Supabase session dying (JWT + refresh token both expired →
+// supabase-js can't silently refresh and emits SIGNED_OUT). When that happens we
+// first try a *silent* re-auth: the LINE LIFF session usually outlives the
+// Supabase one, so we can mint a fresh session with no user interaction. Only if
+// that fails do we surface it via `onLost` (the app then prompts a re-login).
+// Returns an unsubscribe fn. No-op without Supabase.
+export function watchSession(onLost: () => void): () => void {
+  if (!supabaseEnabled || !supabase) return () => {};
+  const { data } = supabase.auth.onAuthStateChange(async (event) => {
+    // Only a real sign-out (incl. a failed token refresh) counts. INITIAL_SESSION
+    // with no session = a plain unauthenticated visit, not an expiry.
+    if (event !== "SIGNED_OUT") return;
+    // Explicit logout — let it through, don't re-auth back in.
+    if (signingOut) return;
+    // Try to recover without bouncing the user to the login page.
+    if (liffEnabled && liff.isLoggedIn()) {
+      try {
+        const p = await exchangeSupabaseSession();
+        if (p) return; // recovered — new session minted
+      } catch (err) {
+        console.warn("[beond-auth] silent re-auth failed:", err);
+      }
+    }
+    onLost();
+  });
+  return () => data.subscription.unsubscribe();
+}
+
+// Set while an explicit logout is in flight, so watchSession doesn't try to
+// silently re-authenticate the user right back in.
+let signingOut = false;
+
 export async function logout(): Promise<void> {
-  if (supabaseEnabled && supabase) await supabase.auth.signOut();
-  if (liffEnabled && liff.isLoggedIn()) liff.logout();
-  localStorage.removeItem(AUTH_KEY);
+  signingOut = true;
+  try {
+    if (supabaseEnabled && supabase) await supabase.auth.signOut();
+    if (liffEnabled && liff.isLoggedIn()) liff.logout();
+    localStorage.removeItem(AUTH_KEY);
+  } finally {
+    signingOut = false;
+  }
 }

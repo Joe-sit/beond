@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useAnimationControls } from "motion/react";
-import { IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconInfoCircle, IconCheck, IconCircleDotted, IconRestore, IconLogout, IconSettings, IconPlus, IconHome, IconReportAnalytics, IconPuzzle, IconReceiptTax } from "@tabler/icons-react";
+import { IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconInfoCircle, IconCheck, IconCircleDotted, IconRestore, IconLogout, IconSettings, IconPlus, IconHome, IconReportAnalytics, IconPuzzle, IconReceiptTax, IconShieldLock } from "@tabler/icons-react";
 import { toast, Toast } from "@heroui/react";
 import type { AuthProfile } from "../../lib/auth";
+import { useIsAdmin } from "../../lib/adminAccess";
+import { ensureCatalog } from "../../lib/secApi";
 import {
   usePortfolioStats,
   useHoldings,
@@ -13,7 +15,7 @@ import {
   type HoldingDetail,
 } from "../../hooks/usePortfolio";
 import { supabase } from "../../lib/supabase";
-import { LEVELS, levelIndex } from "../home/ProfileLevelModal";
+import ProfileLevelModal, { LEVELS, levelIndex } from "../home/ProfileLevelModal";
 import { issuerName } from "../../lib/issuerLogo";
 import { ratingFor } from "../../data/bondRatings";
 import IssuerLogo from "../IssuerLogo";
@@ -32,6 +34,7 @@ import JarWidget from "./JarWidget";
 import Token3D from "./Token3D";
 import InterestBarChart from "../InterestBarChart";
 import TaxBaseView from "./TaxBaseView";
+import YearlySummaryView from "./YearlySummaryView";
 import lineIcon from "../../assets/line-logo.webp";
 import { useT, useLang, setLang } from "../../lib/i18n";
 import AddBondModal from "../AddBondModal";
@@ -81,6 +84,16 @@ function locYear(beYear: string, lang: Lang): string {
 // Persist which LINE-confirmed slips the user has acknowledged (dismissed the
 // collect celebration for), so a reload never replays them.
 const COLLECT_ACK_KEY = "beond:collectAck:v2"; // v2 drops the old seed-everything data
+// Once the user skips the cinematic intro, remember it so it never replays until
+// this cache is cleared.
+const INTRO_SKIP_KEY = "beond:introSkipped:v1";
+const introAlreadySkipped = () => {
+  try {
+    return localStorage.getItem(INTRO_SKIP_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
 function loadCollectAck(): Set<string> | null {
   try {
     const raw = localStorage.getItem(COLLECT_ACK_KEY);
@@ -116,13 +129,19 @@ function popStyle(on: boolean, delay: number): React.CSSProperties {
 export default function HomeDashboard({ profile, onLogout }: { profile: AuthProfile; onLogout?: () => void }) {
   const t = useT();
   const lang = useLang();
+  const isAdmin = useIsAdmin();
+  // Load the SEC catalog so issuer names resolve to their full registered form
+  // (self-heals stale issuer strings on older bond rows).
+  useEffect(() => { ensureCatalog(); }, []);
   const { totalValue, avgCoupon, avgRemainingYears, loading } = usePortfolioStats();
-  const { holdings, refetch: refetchHoldings } = useHoldings();
+  const { holdings, error: holdingsError, refetch: refetchHoldings } = useHoldings();
   const { months } = useTimeline();
   const { docs } = useTaxCredits();
   const matched = useMemo(() => matchConfirmedPayouts(months, docs), [months, docs]);
 
-  const level = LEVELS[levelIndex(totalValue)];
+  const levelIdx = levelIndex(totalValue);
+  const level = LEVELS[levelIdx];
+  const [levelModalOpen, setLevelModalOpen] = useState(false);
   // couponRate is stored as a percent (e.g. 5.5), so income needs ÷100.
   const annualCoupon = useMemo(() => holdings.reduce((s, h) => s + (h.faceValue * h.couponRate) / 100, 0), [holdings]);
   const monthly = annualCoupon / 12;
@@ -160,7 +179,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   }, [payoutMonths]);
 
   const [monthIdx, setMonthIdx] = useState<number | null>(null);
-  const [view, setView] = useState<"home" | "tax_base">("home"); // sidebar page
+  const [view, setView] = useState<"home" | "annual" | "tax_base">("home"); // sidebar page
   const [addHover, setAddHover] = useState(false); // show add-bond art on button hover
   const [holdingHover, setHoldingHover] = useState<string | null>(null); // list row → show invested value
   const [hideValue, setHideValue] = useState(false); // mask the portfolio total
@@ -168,8 +187,38 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   // Click a holding row → open its details/edit page. Delete lives inside that page.
   const [editHolding, setEditHolding] = useState<HoldingDetail | null>(null);
 
+  // Sidebar nav: leave any nested add/edit page before switching the view.
+  const navTo = (v: "home" | "annual" | "tax_base") => {
+    setAddBondOpen(false);
+    setEditHolding(null);
+    setView(v);
+  };
+
   const delHolding = async (h: HoldingDetail) => {
     if (!supabase) { setEditHolding(null); return; }
+    // Remove the accumulated slips for this bond first. They're linked by bond_id
+    // only (holding_id is null), so the holdings FK cascade never removes them —
+    // and a client-side delete on tax_documents is blocked by RLS (silently
+    // removes 0 rows), which is why deleted-then-re-added bonds showed old slips.
+    // Delete them via the service-role edge fn (bypasses RLS), scoped to this
+    // user + bond. Abort the whole removal if the slips can't be cleared, so we
+    // never orphan them behind a deleted holding.
+    const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    if (SUPABASE_URL) {
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess.session?.access_token;
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/delete-bond-slips`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ bondId: h.bondId }),
+        });
+        if (!res.ok) throw new Error(`delete-bond-slips ${res.status}`);
+      } catch (e) {
+        toast.danger(`${t("toast_remove_failed")}: ${(e as Error).message}`);
+        return;
+      }
+    }
     const { error: delErr } = await supabase.from("holdings").delete().eq("id", h.id);
     if (delErr) { toast.danger(`${t("toast_remove_failed")}: ${delErr.message}`); return; }
     notifyPortfolioChanged();
@@ -179,7 +228,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   };
 
   // The folder card is hidden during the chart's intro, shown once it settles.
-  const [chartSettled, setChartSettled] = useState(false);
+  // Seed from the skip cache: if the user skipped before, boot straight into the
+  // settled slip view (no intro replay).
+  const skippedBefore = useRef(introAlreadySkipped());
+  const [chartSettled, setChartSettled] = useState(skippedBefore.current);
   // A cube is opened in the chart → hide the top folder/slip card behind the
   // month-detail view.
   const [cubeFocused, setCubeFocused] = useState(false);
@@ -291,7 +343,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
     if (flyInSlip) return; // one at a time
     // Celebrate the next LINE-confirmed slip not yet acknowledged (persisted).
     const next = confirmedIds.find((x) => !ackRef.current!.has(x.id));
-    if (new URLSearchParams(window.location.search).has("collectlog")) {
+    if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("collectlog")) {
       // eslint-disable-next-line no-console
       console.log("[collect] confirmed:", confirmedIds.length, "acked:", ackRef.current!.size, "next:", next?.id ?? null);
     }
@@ -311,7 +363,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   // `?collectreset` — wipe the persisted acknowledge set once on load so EVERY
   // confirmed slip celebrates again from scratch. One-click replay, no console.
   const didReset = useRef(false);
-  if (!didReset.current && typeof window !== "undefined" && new URLSearchParams(window.location.search).has("collectreset")) {
+  if (import.meta.env.DEV && !didReset.current && typeof window !== "undefined" && new URLSearchParams(window.location.search).has("collectreset")) {
     didReset.current = true;
     localStorage.removeItem(COLLECT_ACK_KEY);
     ackRef.current = new Set();
@@ -321,7 +373,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   // full animation (folder → button → particles → progress bar) can be previewed
   // without waiting for a real LINE confirmation.
   useEffect(() => {
-    if (!new URLSearchParams(window.location.search).has("debugcollect")) return;
+    if (!import.meta.env.DEV || !new URLSearchParams(window.location.search).has("debugcollect")) return;
     const t = setTimeout(() => {
       setFlyInSlip({ id: "__debug__", symbol: "BAM284A", issuer: "บริหารสินทรัพย์", installment: "1/2", wht: 2640, net: 14960 });
     }, 1500);
@@ -398,13 +450,13 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   //   goal  — this year's tax-saving goal (staircase + gauge + text), plays first
   //   income — the coupon cubes rise/tour/settle (only starts after the goal)
   //   slip  — the slip-collection panel slides up once the cubes settle
-  const [chapter, setChapter] = useState<"goal" | "income" | "slip">("goal");
+  const [chapter, setChapter] = useState<"goal" | "income" | "slip">(skippedBefore.current ? "slip" : "goal");
   // True while the two-column layout is opening — the cube chart then tracks the
   // panel width instantly (no transform transition) so the resize stays in sync
   // with the grid animation instead of rubber-banding behind it.
   const [layoutOpening, setLayoutOpening] = useState(false);
-  const [introSkip, setIntroSkip] = useState(false); // skip button → jump to slip
-  const slipQueued = useRef(false);
+  const [introSkip, setIntroSkip] = useState(skippedBefore.current); // skip button → jump to slip
+  const slipQueued = useRef(skippedBefore.current);
   useEffect(() => {
     if (!chartSettled || slipQueued.current) return;
     slipQueued.current = true;
@@ -420,6 +472,11 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   // slip view. Forces the chart to its settled state via `introSkip`.
   const skipIntro = () => {
     if (chapter === "slip") return;
+    try {
+      localStorage.setItem(INTRO_SKIP_KEY, "1");
+    } catch {
+      /* ignore */
+    }
     slipQueued.current = true;
     setIntroSkip(true);
     setChartSettled(true);
@@ -445,8 +502,8 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
         {/* Nav */}
         <nav className="mt-8 flex flex-col gap-1">
           <button
-            onClick={() => setView("home")}
-            aria-current={view === "home" ? "page" : undefined}
+            onClick={() => navTo("home")}
+            aria-current={view === "home" && !addBondOpen && !editHolding ? "page" : undefined}
             className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium transition ${
               view === "home" ? "bg-[#43507F]/10 text-[#43507F]" : "text-ink/60 hover:bg-black/5 hover:text-ink"
             }`}
@@ -454,18 +511,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             <IconHome size={20} stroke={1.75} />
             {t("nav_home")}
           </button>
-          {/* Annual summary — review + export for the beond extension (page TBD). */}
-          <a
-            href="#"
-            className="flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium text-ink/60 transition hover:bg-black/5 hover:text-ink"
-          >
-            <IconReportAnalytics size={20} stroke={1.75} />
-            {t("nav_annual")}
-          </a>
           {/* Tax bracket — the marginal rate used for refund estimates. */}
           <button
-            onClick={() => setView("tax_base")}
-            aria-current={view === "tax_base" ? "page" : undefined}
+            onClick={() => navTo("tax_base")}
+            aria-current={view === "tax_base" && !addBondOpen && !editHolding ? "page" : undefined}
             className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium transition ${
               view === "tax_base" ? "bg-[#43507F]/10 text-[#43507F]" : "text-ink/60 hover:bg-black/5 hover:text-ink"
             }`}
@@ -473,6 +522,28 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             <IconReceiptTax size={20} stroke={1.75} />
             {t("nav_tax_base")}
           </button>
+          {/* Annual summary — review + export for the beond extension. */}
+          <button
+            onClick={() => navTo("annual")}
+            aria-current={view === "annual" && !addBondOpen && !editHolding ? "page" : undefined}
+            className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium transition ${
+              view === "annual" ? "bg-[#43507F]/10 text-[#43507F]" : "text-ink/60 hover:bg-black/5 hover:text-ink"
+            }`}
+          >
+            <IconReportAnalytics size={20} stroke={1.75} />
+            {t("nav_annual")}
+          </button>
+          {/* Admin — only shown to allow-listed admins; the /admin page + its
+              endpoints re-check server-side. */}
+          {isAdmin && (
+            <a
+              href="/admin"
+              className="flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium text-ink/60 transition hover:bg-black/5 hover:text-ink"
+            >
+              <IconShieldLock size={20} stroke={1.75} />
+              Admin
+            </a>
+          )}
         </nav>
 
         {/* Bottom group — language switch + download extension + settings. */}
@@ -489,20 +560,24 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
               </button>
             ))}
           </div>
-          <a
-            href="#"
-            className="flex items-center gap-3 rounded-2xl border border-[#43507F]/20 bg-[#43507F]/5 px-3 py-2.5 text-sm font-medium text-[#43507F] transition hover:bg-[#43507F]/10"
+          {/* Both disabled until they ship (extension not yet published; settings
+              page TBD) — kept visible so the layout matches the design. */}
+          <button
+            disabled
+            title={t("coming_soon")}
+            className="flex items-center gap-3 rounded-2xl border border-[#43507F]/15 bg-[#43507F]/5 px-3 py-2.5 text-sm font-medium text-[#43507F]/50 disabled:cursor-not-allowed"
           >
             <IconPuzzle size={20} stroke={1.75} />
             {t("nav_download_ext")}
-          </a>
-          <a
-            href="#"
-            className="flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium text-ink/60 transition hover:bg-black/5 hover:text-ink"
+          </button>
+          <button
+            disabled
+            title={t("coming_soon")}
+            className="flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium text-ink/40 disabled:cursor-not-allowed"
           >
             <IconSettings size={20} stroke={1.75} />
             {t("nav_settings")}
-          </a>
+          </button>
         </div>
 
         <div className="mt-3">
@@ -513,7 +588,31 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
       {/* Main content column */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 
-      {view === "tax_base" ? (
+      {(addBondOpen || editHolding) ? (
+        <main className="min-h-0 w-full flex-1 overflow-hidden p-6">
+          <motion.section
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            className="relative flex h-full w-full flex-col"
+          >
+            <AddBondModal
+              inline
+              open
+              editHolding={editHolding}
+              slipCount={editHolding ? docs.filter((d) => d.symbol === editHolding.symbol && d.status === "confirmed").length : 0}
+              slips={editHolding ? docs.filter((d) => d.symbol === editHolding.symbol && d.status === "confirmed") : []}
+              onDelete={editHolding ? () => delHolding(editHolding) : undefined}
+              onClose={() => { setAddBondOpen(false); setEditHolding(null); }}
+              onAdded={() => refetchHoldings()}
+            />
+          </motion.section>
+        </main>
+      ) : view === "annual" ? (
+        <main className="min-h-0 w-full flex-1 overflow-hidden p-6">
+          <YearlySummaryView docs={docs} />
+        </main>
+      ) : view === "tax_base" ? (
         <main className="min-h-0 w-full flex-1 overflow-hidden p-6">
           <TaxBaseView rate={taxRate} wht={yearProgress.potentialWht} loading={loading} onSaved={(r) => setTaxRate(r)} />
         </main>
@@ -534,9 +633,13 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                   {hideValue ? <IconEyeOff size={18} /> : <IconEye size={18} />}
                 </button>
               </p>
-              <span className="flex items-center gap-1 rounded-full bg-[#F0F2F7] px-3 py-1 text-sm text-ink/80">
+              <button
+                onClick={() => setLevelModalOpen(true)}
+                aria-label={t("level_learn_more")}
+                className="flex items-center gap-1 rounded-full bg-[#F0F2F7] px-3 py-1 text-sm text-ink/80 transition hover:bg-[#E4E8EF]"
+              >
                 {level.label} <IconInfoCircle size={16} className="text-ink/40" />
-              </span>
+              </button>
             </div>
             {loading ? (
               <div className="mt-3 h-9 w-52 animate-pulse rounded-lg bg-black/10" />
@@ -564,6 +667,8 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             </div>
             <img src={level.mascot} alt="" aria-hidden className="pointer-events-none absolute right-4 bottom-2 h-28 w-auto" />
           </section>
+
+          <ProfileLevelModal open={levelModalOpen} onClose={() => setLevelModalOpen(false)} />
 
           {/* Holdings card — header (count + monthly) then a bordered list card.
               Figma node 962:2937. */}
@@ -676,7 +781,18 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                   </li>
                   );
                 })}
-                {!loading && holdings.length === 0 && (
+                {!loading && holdingsError && (
+                  <li className="flex flex-1 flex-col items-center justify-center gap-3 py-8 text-center">
+                    <p className="text-sm text-ink/50">{t("load_error")}</p>
+                    <button
+                      onClick={() => refetchHoldings()}
+                      className="rounded-full border border-black/10 px-4 py-1.5 text-sm font-medium text-ink transition hover:bg-black/5"
+                    >
+                      {t("retry")}
+                    </button>
+                  </li>
+                )}
+                {!loading && !holdingsError && holdings.length === 0 && (
                   <li className="flex flex-1 flex-col items-center justify-center gap-3 py-8 text-center">
                     <img src={emptyBonds} alt="" aria-hidden className="h-32 w-auto opacity-90" />
                     <p className="text-sm text-ink/40">{t("no_holdings")}</p>
@@ -686,22 +802,6 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             </div>
             </div>
 
-            {/* Add-bond / edit flow shown inline as a single panel over this section. */}
-            {(addBondOpen || editHolding) && (
-              <div className="absolute inset-0 z-30 flex flex-col bg-white p-6">
-                {/* Rolled paper at the card corner — same placement as the
-                    holdings card, so the art matches exactly. */}
-                <img src={bondDec1} alt="" aria-hidden className="pointer-events-none absolute -right-2 -top-1 h-10 w-auto rotate-[18deg]" />
-                <AddBondModal
-                  inline
-                  open
-                  editHolding={editHolding}
-                  onDelete={editHolding ? () => delHolding(editHolding) : undefined}
-                  onClose={() => { setAddBondOpen(false); setEditHolding(null); }}
-                  onAdded={() => refetchHoldings()}
-                />
-              </div>
-            )}
           </section>
 
         </div>

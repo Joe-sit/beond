@@ -13,11 +13,15 @@ import {
   IconSearch,
   IconHelpCircle,
   IconArrowRight,
+  IconInfoCircle,
 } from "@tabler/icons-react";
 import slipArt from "../assets/review-slip.png";
+import dbdVerified from "../assets/badges/dbd-verified.svg";
+import dbdLogo from "../assets/badges/dbd-logo.svg";
 import { EMPTY_SLIP, type SlipFields } from "../lib/scanTypes";
 import { ensureCatalog, searchBonds, type BondCandidate } from "../lib/secApi";
 import { extractSlip, saveTaxDocument, getReviewSlip, confirmReviewedSlip } from "../lib/taxDocuments";
+import { lookupTaxIdName, companyNamesMatch, verifyTaxId } from "../lib/verifyTaxId";
 import { useHoldings, notifyPortfolioChanged } from "../hooks/usePortfolio";
 import { issuerName, issuerTickerFromTaxId } from "../lib/issuerLogo";
 import AddBondModal from "./AddBondModal";
@@ -34,7 +38,7 @@ export interface BondOption {
   issuer: string;
 }
 
-type Step = "camera" | "detecting" | "review" | "done";
+type Step = "camera" | "detecting" | "review" | "done" | "blocked";
 
 interface ScanFlowProps {
   open: boolean;
@@ -78,12 +82,15 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
       let alive = true;
       getReviewSlip(reviewDocId).then((slip) => {
         if (!alive) return;
-        if (slip) {
-          setFields(slip);
-        } else {
+        if (!slip) {
           setCamError("โหลดข้อมูลสลิปไม่สำเร็จ");
+          setStep("review");
+          return;
         }
-        setStep("review");
+        setFields(slip.fields);
+        // Already collected — the deep-link card stays in the chat forever and
+        // can be tapped again, so block a second review/confirm of the same slip.
+        setStep(slip.status === "confirmed" ? "blocked" : "review");
       });
       return () => {
         alive = false;
@@ -217,6 +224,13 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
       : await saveTaxDocument(fields);
     setSaving(false);
     if (res.ok) {
+      // Verify the payer tax id against DBD now (right after OCR review) so the
+      // shared catalog is upgraded to verified issuer-wide — the web bond-detail
+      // then shows the number as DBD-verified without re-checking. Fire-and-forget.
+      const digits = (fields.payer_tax_id ?? "").replace(/\D/g, "");
+      if (digits.length === 13 && fields.payer_name && fields.bond_symbol) {
+        void verifyTaxId(digits, fields.payer_name, fields.bond_symbol);
+      }
       onSubmit?.(fields);
       setStep("done");
     } else {
@@ -263,6 +277,8 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
         )}
 
         {step === "done" && <DoneStep fields={fields} onClose={onClose} />}
+
+        {step === "blocked" && <BlockedStep onClose={onClose} />}
 
         <input
           ref={fileRef}
@@ -501,6 +517,32 @@ function DetectingStep({ shot, fields }: { shot: string | null; fields: SlipFiel
   );
 }
 
+// ── Step: already collected ─────────────────────────────────────────────────
+// Shown when a deep-link (?review=<id>) points at a slip that's already been
+// confirmed — the LINE card can't be recalled, so a repeat tap lands here
+// instead of re-opening an editable (and re-savable) review.
+function BlockedStep({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="relative flex flex-1 flex-col items-center justify-center px-8 text-center">
+      <div className="grid h-20 w-20 place-items-center rounded-full bg-[#12BC59]">
+        <IconCircleCheck size={44} className="text-white" />
+      </div>
+      <div className="mt-5">
+        <p className="text-lg font-bold">เก็บสลิปนี้แล้ว</p>
+        <p className="mt-1 text-sm text-white/70">
+          รายการนี้ถูกบันทึกเป็นเครดิตภาษีเรียบร้อยแล้ว<br />ดูสรุปทั้งหมดได้ในแอป beond
+        </p>
+      </div>
+      <button
+        onClick={onClose}
+        className="mt-6 rounded-2xl bg-white px-8 py-3 text-sm font-bold text-[#0B1220]"
+      >
+        เสร็จสิ้น
+      </button>
+    </div>
+  );
+}
+
 // ── Step: transcript + edit ─────────────────────────────────────────────────
 function ReviewStep({
   fields,
@@ -523,6 +565,26 @@ function ReviewStep({
 }) {
   const set = <K extends keyof SlipFields>(k: K, v: SlipFields[K]) =>
     onChange({ ...fields, [k]: v });
+
+  // Live DBD check on the payer 13-digit id — runs right here on the OCR review
+  // screen so a mismatch is caught before saving. `liveName` = official DBD name
+  // (null = not found), undefined until the field is a full 13 digits.
+  const [liveName, setLiveName] = useState<string | null | undefined>(undefined);
+  const [checkingTax, setCheckingTax] = useState(false);
+  useEffect(() => {
+    const digits = (fields.payer_tax_id ?? "").replace(/\D/g, "");
+    if (digits.length !== 13) { setLiveName(undefined); setCheckingTax(false); return; }
+    let alive = true;
+    setCheckingTax(true);
+    const timer = setTimeout(async () => {
+      const name = await lookupTaxIdName(digits);
+      if (alive) { setLiveName(name); setCheckingTax(false); }
+    }, 400);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [fields.payer_tax_id]);
+  const taxMatch = liveName ? companyNamesMatch(liveName, fields.payer_name ?? "") : false;
+  const taxVerified = !checkingTax && !!liveName && taxMatch;
+  const taxWarn = !checkingTax && ((!!liveName && !taxMatch) || liveName === null);
 
   // The user only enters the actual amount received (net). WHT is a flat 15%, so
   // gross = net / 0.85 and wht = gross − net — both derived, never edited.
@@ -661,11 +723,49 @@ function ReviewStep({
             <SlipField
               label="เลขประจำตัวผู้เสียภาษีของผู้จ่าย"
               value={fields.payer_tax_id ?? ""}
-              onChange={(v) => set("payer_tax_id", v.replace(/[^\d]/g, "") || null)}
+              onChange={(v) => set("payer_tax_id", v.replace(/[^\d]/g, "").slice(0, 13) || null)}
               onFocus={scrollIntoFocus}
               inputMode="numeric"
               placeholder="เลข 13 หลัก"
+              right={
+                checkingTax ? (
+                  <div className="relative ml-2 shrink-0">
+                    <img src={dbdLogo} alt="" className="h-6 w-auto animate-pulse grayscale" />
+                    <span className="absolute -bottom-1 -right-1 flex size-4 items-center justify-center rounded-full border-2 border-[#F6F4F1] bg-black/40 text-white">
+                      <IconLoader2 size={9} className="animate-spin" />
+                    </span>
+                  </div>
+                ) : taxVerified ? (
+                  <img src={dbdVerified} alt="ยืนยันโดยกรมพัฒนาธุรกิจการค้า" className="ml-2 h-7 w-auto shrink-0" />
+                ) : taxWarn ? (
+                  <IconAlertTriangle size={20} className="ml-2 shrink-0 text-[#B7791F]" />
+                ) : (
+                  <IconInfoCircle size={20} className="ml-2 shrink-0 text-black/30" />
+                )
+              }
             />
+            {/* Match feedback — surfaces the DBD result at OCR time */}
+            {checkingTax ? (
+              <p className="mt-1.5 text-[11px] text-black/45">กำลังตรวจสอบกับกรมพัฒนาธุรกิจการค้า…</p>
+            ) : taxVerified ? (
+              <p className="mt-1.5 text-[11px] text-[#3F7D2E]">ตรงกับชื่อผู้จ่ายในทะเบียนกรมพัฒนาธุรกิจการค้า</p>
+            ) : !!liveName && !taxMatch ? (
+              <div className="mt-1.5 flex flex-col gap-1.5">
+                <p className="text-[11px] text-[#B7791F]">
+                  เลขนี้จดทะเบียนในชื่อ “{liveName}” ไม่ตรงกับผู้จ่าย “{fields.payer_name || "—"}”
+                </p>
+                {/* Offer the official DBD name — applying it makes the check pass */}
+                <button
+                  type="button"
+                  onClick={() => set("payer_name", liveName)}
+                  className="flex w-fit items-center gap-1.5 rounded-lg bg-[#2968A5]/10 px-2.5 py-1.5 text-[11px] font-bold text-[#2968A5] active:scale-95"
+                >
+                  <IconCheck size={13} /> ใช้ชื่อ “{liveName}”
+                </button>
+              </div>
+            ) : liveName === null ? (
+              <p className="mt-1.5 text-[11px] text-[#B7791F]">ไม่พบเลขนี้ในทะเบียนกรมพัฒนาธุรกิจการค้า</p>
+            ) : null}
           </div>
         </div>
 

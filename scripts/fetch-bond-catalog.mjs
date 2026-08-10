@@ -33,6 +33,15 @@ function parseFrequency(text) {
   return null;
 }
 
+// coupon.rate may be a number, "5.8", or descriptive Thai/English text for
+// floating-rate notes — keep only the leading numeric percentage.
+function parseCouponRate(rate) {
+  if (rate == null) return null;
+  if (typeof rate === "number") return Number.isFinite(rate) ? rate : null;
+  const m = String(rate).replace(/,/g, "").match(/\d+(\.\d+)?/);
+  return m ? Number(m[0]) : null;
+}
+
 // company_id -> issuer name. SEC bond/features only carries the company_id
 // code, so we resolve real names from bond/issuers first.
 const issuerMap = new Map();
@@ -86,7 +95,7 @@ for (;;) {
       nameEn: r.bond_name_en ?? "",
       isin: r.isin_code ?? "",
       issuer: issuerMap.get(r.company_id) ?? r.company_id ?? "-",
-      couponRate: r.coupon?.rate ?? null,
+      couponRate: parseCouponRate(r.coupon?.rate),
       maturityDate: maturity,
       issueDate: r.maturity?.issue_date?.slice(0, 10) ?? null,
       termYears: r.maturity?.term_year ?? null,

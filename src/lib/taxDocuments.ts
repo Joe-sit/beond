@@ -1,6 +1,7 @@
 import { supabase, supabaseEnabled } from "./supabase";
 import { notifyPortfolioChanged } from "../hooks/usePortfolio";
-import { mockExtract, type SlipFields } from "./scanTypes";
+import { type SlipFields } from "./scanTypes";
+import { verifyTaxId } from "./verifyTaxId";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 
@@ -14,11 +15,12 @@ function toBase64(blob: Blob): Promise<string> {
   });
 }
 
-// OCR a slip image → structured fields. Real path calls the ocr-extract edge fn
-// with the user's session token; mock mode returns sample fields so the flow is
-// testable without a backend.
+// OCR a slip image → structured fields via the ocr-extract edge fn (real data
+// only). No backend configured → fail loudly; never fabricate slip fields.
 export async function extractSlip(image: Blob): Promise<SlipFields> {
-  if (!supabaseEnabled || !supabase || !SUPABASE_URL) return mockExtract(image);
+  if (!supabaseEnabled || !supabase || !SUPABASE_URL) {
+    throw new Error("ระบบ OCR ยังไม่พร้อมใช้งาน (ไม่ได้ตั้งค่า backend)");
+  }
 
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -45,9 +47,7 @@ export interface SaveResult {
 // equal the caller's public_user_id (from the session JWT app_metadata).
 export async function saveTaxDocument(fields: SlipFields): Promise<SaveResult> {
   if (!supabaseEnabled || !supabase) {
-    // Mock mode: pretend success so the UI flow completes in local dev.
-    notifyPortfolioChanged();
-    return { ok: true };
+    return { ok: false, error: "ระบบยังไม่พร้อมใช้งาน (ไม่ได้ตั้งค่า backend)" };
   }
 
   const { data: sess } = await supabase.auth.getSession();
@@ -97,10 +97,20 @@ async function resolveBondId(symbol: string | null): Promise<string | null> {
 // the bond code and a tax id are present.
 async function bindBondPayerTaxId(symbol: string | null, taxId: string | null): Promise<void> {
   if (!supabase || !symbol || !taxId) return;
-  await supabase
+  const sym = symbol.toUpperCase();
+  // Store the raw OCR value on this bond as UNVERIFIED — it's what the slip said,
+  // but not yet trusted. Only overwrite if the bond has no verified id (a verified
+  // id outranks a fresh scan). Then try a DBD verification, which — on a match —
+  // upgrades it to verified and propagates issuer-wide. A wrong number never
+  // spreads, because only DBD-verified ids propagate.
+  const { data: bond } = await supabase
     .from("bonds")
-    .update({ payer_tax_id: taxId })
-    .eq("symbol", symbol.toUpperCase());
+    .update({ payer_tax_id: taxId, payer_tax_id_verified: false })
+    .eq("symbol", sym)
+    .eq("payer_tax_id_verified", false)
+    .select("issuer")
+    .maybeSingle();
+  if (bond?.issuer) await verifyTaxId(taxId, bond.issuer as string, sym);
 }
 
 // The editable columns of a tax document. `bond_symbol` is resolved to a
@@ -188,15 +198,22 @@ export async function createTaxDocument(patch: TaxDocPatch): Promise<SaveResult>
   return { ok: true };
 }
 
+// A saved slip loaded for the OCR-review screen, plus its current status so the
+// review screen can block a slip that's already been confirmed (see below).
+export interface ReviewSlip {
+  fields: SlipFields;
+  status: string; // "pending" | "confirmed" | "rejected"
+}
+
 // Load a saved tax document as SlipFields for the OCR-review screen — used by the
 // LINE "แก้ไข" deep link (?review=<id>) so a pending slip can be reviewed/edited
 // in the web app before confirming. RLS scopes it to the caller's own rows.
-export async function getReviewSlip(id: string): Promise<SlipFields | null> {
+export async function getReviewSlip(id: string): Promise<ReviewSlip | null> {
   if (!supabaseEnabled || !supabase) return null;
   const { data, error } = await supabase
     .from("tax_documents")
     .select(
-      "payer_name, payer_tax_id, income_subtype, gross_amount, wht_amount, wht_rate, pay_date, doc_ref, tax_year, bond_id",
+      "status, payer_name, payer_tax_id, income_subtype, gross_amount, wht_amount, wht_rate, pay_date, doc_ref, tax_year, bond_id",
     )
     .eq("id", id)
     .maybeSingle();
@@ -216,17 +233,20 @@ export async function getReviewSlip(id: string): Promise<SlipFields | null> {
       ? Math.round((data.gross_amount - data.wht_amount) * 100) / 100
       : null;
   return {
-    payer_name: data.payer_name,
-    payer_tax_id: data.payer_tax_id,
-    income_subtype: data.income_subtype,
-    gross_amount: data.gross_amount,
-    net_amount: net,
-    wht_amount: data.wht_amount,
-    wht_rate: data.wht_rate,
-    pay_date: data.pay_date,
-    doc_ref: data.doc_ref,
-    tax_year: data.tax_year,
-    bond_symbol: bondSymbol,
+    status: (data.status as string) ?? "pending",
+    fields: {
+      payer_name: data.payer_name,
+      payer_tax_id: data.payer_tax_id,
+      income_subtype: data.income_subtype,
+      gross_amount: data.gross_amount,
+      net_amount: net,
+      wht_amount: data.wht_amount,
+      wht_rate: data.wht_rate,
+      pay_date: data.pay_date,
+      doc_ref: data.doc_ref,
+      tax_year: data.tax_year,
+      bond_symbol: bondSymbol,
+    },
   };
 }
 
@@ -253,8 +273,30 @@ export async function confirmReviewedSlip(id: string, fields: SlipFields): Promi
     .eq("id", id);
   if (error) return { ok: false, error: error.message };
   await bindBondPayerTaxId(fields.bond_symbol, fields.payer_tax_id);
+  // Tell the user in LINE that the slip was collected (they confirmed on the web,
+  // so the chat has no reply otherwise). Server-side push — fire-and-forget.
+  void notifySlipConfirmed(id);
   notifyPortfolioChanged();
   return { ok: true };
+}
+
+// Push a "slip collected" confirmation to the user's LINE chat after a web
+// confirm. Needs the LINE token, so it runs in the slip-confirmed edge function;
+// best-effort — a push failure never blocks the save.
+async function notifySlipConfirmed(id: string): Promise<void> {
+  if (!supabase || !SUPABASE_URL) return;
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return;
+    await fetch(`${SUPABASE_URL}/functions/v1/slip-confirmed`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId: id }),
+    });
+  } catch (e) {
+    console.error("notifySlipConfirmed (skip):", (e as Error).message);
+  }
 }
 
 // Delete a user's own tax document. RLS scopes the delete to rows the caller owns.

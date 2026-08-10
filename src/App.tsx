@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { toast } from "@heroui/react";
 import LoginPage from "./components/LoginPage";
 import AdminDashboard from "./components/AdminDashboard";
 import DashboardSkeleton from "./components/DashboardSkeleton";
@@ -14,7 +15,7 @@ import SlipCollectPOC from "./components/home2/SlipCollectPOC";
 import JarPOC from "./components/home2/JarPOC";
 import ScanFlow from "./components/ScanFlow";
 import { notifyPortfolioChanged } from "./hooks/usePortfolio";
-import { initAuth, login, logout, liffEnabled, type AuthProfile } from "./lib/auth";
+import { initAuth, login, logout, liffEnabled, watchSession, type AuthProfile } from "./lib/auth";
 
 // Resolve the LINE "แก้ไข" deep link (?review=<taxDocId>). In the LINE in-app
 // browser LIFF forwards the original query bundled into `liff.state`, which the
@@ -35,6 +36,9 @@ function readReviewId(): string | null {
 function App() {
   const [profile, setProfile] = useState<AuthProfile | null>(null);
   const [ready, setReady] = useState(false);
+  // Set when a live session expires mid-use (silent re-auth failed) → we drop to
+  // the login page and show a banner instead of silently going stale.
+  const [sessionExpired, setSessionExpired] = useState(false);
   // Deep link → open the OCR review screen for that saved slip. Cleared when the
   // sheet closes.
   const [reviewId, setReviewId] = useState<string | null>(() => readReviewId());
@@ -83,6 +87,20 @@ function App() {
     };
   }, [returningFromLine]);
 
+  // Live session watchdog: if the session dies while the app is open (and can't
+  // be silently refreshed), drop the profile so the UI reacts immediately
+  // instead of waiting for the next reload.
+  useEffect(() => {
+    const stop = watchSession(() => {
+      // Toast first (dashboard still mounted → its Toast.Provider is alive), then
+      // drop to the login page a beat later so the message is actually seen.
+      toast.danger("เซสชันหมดอายุ กำลังพากลับไปเข้าสู่ระบบ…");
+      setSessionExpired(true);
+      setTimeout(() => setProfile(null), 2500);
+    });
+    return stop;
+  }, []);
+
   const handleLogout = () => {
     logout();
     setProfile(null);
@@ -96,66 +114,48 @@ function App() {
     }
   };
 
-  // `?anim` — motion prototype playground (flying-paper mailbox).
-  if (new URLSearchParams(window.location.search).has("anim")) {
-    return <MailboxFly />;
-  }
+  // Prototype / tuner routes — DEV builds only, so production can't reach the
+  // POC screens or the ack-reset debug tools by guessing a query string.
+  if (import.meta.env.DEV) {
+    const q = new URLSearchParams(window.location.search);
 
-  // `?cube` — interactive 3D-cuboid tuner (orbit + dimension sliders).
-  if (new URLSearchParams(window.location.search).has("cube")) {
-    return <CubePOC />;
-  }
+    // `?anim` — motion prototype playground (flying-paper mailbox).
+    if (q.has("anim")) return <MailboxFly />;
+    // `?cube` — interactive 3D-cuboid tuner (orbit + dimension sliders).
+    if (q.has("cube")) return <CubePOC />;
+    // `?stairs` — 3D staircase/podium tuner (rebuild of the flat hero-stairs SVG).
+    if (q.has("stairs")) return <HeroStairs3D />;
+    // `?tax` — preview the tax story chapter (3D bracket staircase + refund gauge).
+    if (q.has("tax")) return <TaxStoryPOC />;
+    // `?intro` — debug the goal-chapter opener in a panel mirroring the real column.
+    if (q.has("intro")) return <IntroPOC />;
+    // `?collect` — debug the LINE-confirm "slip collected into folder" notification.
+    if (q.has("collect")) return <SlipCollectPOC />;
+    // `?jar` — tune the 3D glass money jar.
+    if (q.has("jar")) return <JarPOC />;
 
-  // `?stairs` — 3D staircase/podium tuner (rebuild of the flat hero-stairs SVG).
-  if (new URLSearchParams(window.location.search).has("stairs")) {
-    return <HeroStairs3D />;
-  }
-
-  // `?tax` — preview the tax story chapter (3D bracket staircase + refund gauge).
-  if (new URLSearchParams(window.location.search).has("tax")) {
-    return <TaxStoryPOC />;
-  }
-
-  // `?intro` — debug the goal-chapter opener (staircase + slip + text) in a
-  // panel that mirrors the real right column.
-  if (new URLSearchParams(window.location.search).has("intro")) {
-    return <IntroPOC />;
-  }
-
-  // `?collect` — debug the LINE-confirm "slip collected into folder" notification.
-  if (new URLSearchParams(window.location.search).has("collect")) {
-    return <SlipCollectPOC />;
-  }
-
-  // `?jar` — tune the 3D glass money jar.
-  if (new URLSearchParams(window.location.search).has("jar")) {
-    return <JarPOC />;
-  }
-
-  // `?v2` — preview the reworked full-viewport home (works pre-auth with a
-  // placeholder profile). It owns its own loading skeleton, so this must come
-  // before the shared skeleton gate below.
-  if (new URLSearchParams(window.location.search).has("v2")) {
-    // v2 renders regardless of profile, so setProfile(null) alone wouldn't leave
-    // the page — clear the session then hard-navigate to the landing/login route.
-    const v2Logout = async () => {
-      await logout();
-      window.location.assign("/");
-    };
-    if (new URLSearchParams(window.location.search).has("old")) {
-      return <HomeRework profile={profile ?? { displayName: "beond" }} onLogout={v2Logout} />;
+    // `?v2` — preview the reworked full-viewport home (works pre-auth with a
+    // placeholder profile).
+    if (q.has("v2")) {
+      const v2Logout = async () => {
+        await logout();
+        window.location.assign("/");
+      };
+      if (q.has("old")) {
+        return <HomeRework profile={profile ?? { displayName: "beond" }} onLogout={v2Logout} />;
+      }
+      return <HomeDashboard profile={profile ?? { displayName: "beond" }} onLogout={v2Logout} />;
     }
-    return <HomeDashboard profile={profile ?? { displayName: "beond" }} onLogout={v2Logout} />;
-  }
 
-  // `?skeleton` — preview the old dashboard loading skeleton without auth.
-  if (new URLSearchParams(window.location.search).has("skeleton")) {
-    return (
-      <>
-        <SidebarRail view="home" onSelect={() => {}} />
-        <DashboardSkeleton railSpace />
-      </>
-    );
+    // `?skeleton` — preview the old dashboard loading skeleton without auth.
+    if (q.has("skeleton")) {
+      return (
+        <>
+          <SidebarRail view="home" onSelect={() => {}} />
+          <DashboardSkeleton railSpace />
+        </>
+      );
+    }
   }
 
   // Auth still resolving — show the real home dashboard with a placeholder
@@ -165,7 +165,12 @@ function App() {
   }
 
   if (!profile) {
-    return <LoginPage onLogin={handleLogin} />;
+    return (
+      <LoginPage
+        onLogin={handleLogin}
+        notice={sessionExpired ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง" : undefined}
+      />
+    );
   }
 
   // Internal ops route — same login gate (needs a session token for the health

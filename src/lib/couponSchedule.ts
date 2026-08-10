@@ -6,7 +6,7 @@
 export interface CouponPayout {
   installment: number;
   totalInstallments: number;
-  amount: number; // THB per coupon, rounded
+  amount: number; // gross THB per coupon, to 2 decimals (satang preserved)
   date: string; // YYYY-MM-DD
 }
 
@@ -60,7 +60,6 @@ export function deriveCouponSchedule(input: ScheduleInput): CouponPayout[] {
 
   const freq = input.frequency && input.frequency > 0 ? input.frequency : 2;
   const stepMonths = Math.max(1, Math.round(12 / freq));
-  const perCoupon = (faceValue * (couponRate / 100)) / freq;
 
   // With an issue date we walk the real span; otherwise fall back to term.
   const maxCount = issue ? 800 : Math.max(1, Math.round((termYears ?? 1) * freq));
@@ -88,10 +87,27 @@ export function deriveCouponSchedule(input: ScheduleInput): CouponPayout[] {
   dates.reverse();
 
   const total = dates.length;
-  return dates.map((date, i) => ({
-    installment: i + 1,
-    totalInstallments: total,
-    amount: Math.round(perCoupon),
-    date: iso(date),
-  }));
+  // Interest accrues on an actual/365 basis (matches the issuer's 50-ทวิ): each
+  // coupon = face × rate × (days in the period / 365), where the period runs
+  // from the previous coupon date (or the issue date for the first) to this one.
+  // Regular ~6-month periods sum to the flat annual rate; stub first/last
+  // periods come out proportionally shorter/longer, as on the real slip.
+  const dayMs = 86_400_000;
+  const monthShift = (d: Date, months: number): Date => {
+    const tm = d.getMonth() + months;
+    const y = d.getFullYear() + Math.floor(tm / 12);
+    const m = ((tm % 12) + 12) % 12;
+    return new Date(y, m, Math.min(d.getDate(), new Date(y, m + 1, 0).getDate()));
+  };
+  const firstPrev = issue ?? monthShift(dates[0], -stepMonths);
+  return dates.map((date, i) => {
+    const prev = i === 0 ? firstPrev : dates[i - 1];
+    const days = Math.round((date.getTime() - prev.getTime()) / dayMs);
+    return {
+      installment: i + 1,
+      totalInstallments: total,
+      amount: Math.round(faceValue * (couponRate / 100) * (days / 365) * 100) / 100,
+      date: iso(date),
+    };
+  });
 }

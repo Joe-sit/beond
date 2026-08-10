@@ -26,6 +26,7 @@ import {
   type ServiceStatus,
 } from "../lib/health";
 import { fetchUncataloguedBonds, type CatalogAuditResult } from "../lib/catalogAudit";
+import { parseCatalogFile, diffCatalog, importCatalog, type CatalogItem, type CatalogDiff } from "../lib/catalogImport";
 
 const REFRESH_MS = 20_000;
 
@@ -163,6 +164,113 @@ function CatalogGapReport({ audit }: { audit: CatalogAuditResult | null }) {
               ))}
             </ul>
           </>
+        )}
+      </div>
+    </>
+  );
+}
+
+// Upload a refreshed bond-catalog.json (output of `npm run fetch:bonds`) and
+// push it live via the admin-gated edge function. Shows an add/remove diff
+// before committing so the admin sees the impact.
+function CatalogImport() {
+  const [file, setFile] = useState<{ name: string; items: CatalogItem[] } | null>(null);
+  const [diff, setDiff] = useState<CatalogDiff | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+
+  const onPick = async (f: File | null) => {
+    setError(null);
+    setDone(null);
+    setDiff(null);
+    setFile(null);
+    if (!f) return;
+    try {
+      const parsed = parseCatalogFile(await f.text());
+      setFile({ name: f.name, items: parsed.items });
+      setDiff(await diffCatalog(parsed.items));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const submit = async () => {
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    const res = await importCatalog(file.items);
+    setBusy(false);
+    if (res.kind === "ok") {
+      setDone(`นำเข้าแล้ว ${fmt(res.count)} ตัว — เผยแพร่ทันที`);
+      setFile(null);
+      setDiff(null);
+    } else if (res.kind === "forbidden") {
+      setError("ไม่มีสิทธิ์ (ต้องเป็น admin)");
+    } else {
+      setError(res.message);
+    }
+  };
+
+  return (
+    <>
+      <h2 className="mt-6 mb-2 flex items-center gap-1.5 text-sm font-bold text-[#43507F]">
+        <IconLibrary size={16} />
+        นำเข้า catalog
+      </h2>
+      <div className="rounded-2xl border border-[#E7E7E7] bg-white p-4">
+        <p className="text-xs text-black/50">
+          รัน <code>npm run fetch:bonds</code> เพื่อดึง snapshot ล่าสุดจาก SEC แล้วอัปโหลดไฟล์{" "}
+          <code>public/bond-catalog.json</code> ที่นี่ — จะเผยแพร่ทันทีโดยไม่ต้อง redeploy
+        </p>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-[#E7E7E7] bg-white px-3 py-1.5 text-xs font-medium text-black/60 hover:bg-black/5">
+            <IconDatabasePlus size={14} />
+            เลือกไฟล์ JSON
+            <input
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+            />
+          </label>
+          {file && <span className="text-xs text-black/50">{file.name}</span>}
+        </div>
+
+        {error && (
+          <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-red-600">
+            <IconAlertTriangle size={14} /> {error}
+          </p>
+        )}
+        {done && (
+          <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-emerald-600">
+            <IconUserCheck size={14} /> {done}
+          </p>
+        )}
+
+        {diff && (
+          <div className="mt-3 rounded-xl border border-[#E7E7E7] bg-[#F9FAFB] p-3">
+            <div className="flex flex-wrap gap-4 text-xs">
+              <span className="text-black/60">ทั้งหมด <b className="font-nunito text-[#181D20]">{fmt(diff.total)}</b> ตัว</span>
+              <span className="text-emerald-600">ใหม่ <b className="font-nunito">{fmt(diff.added.length)}</b></span>
+              <span className="text-red-500">หลุด <b className="font-nunito">{fmt(diff.removed.length)}</b></span>
+            </div>
+            {diff.added.length > 0 && (
+              <p className="mt-2 text-xs text-black/45">
+                <span className="font-medium text-emerald-600">+ </span>
+                {diff.added.slice(0, 40).join(", ")}{diff.added.length > 40 ? " …" : ""}
+              </p>
+            )}
+            <button
+              onClick={submit}
+              disabled={busy}
+              className="mt-3 flex items-center gap-1.5 rounded-xl bg-[#43507F] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#374169] disabled:opacity-60"
+            >
+              <IconRefresh size={14} className={busy ? "animate-spin" : ""} />
+              {busy ? "กำลังนำเข้า…" : "ยืนยันนำเข้า"}
+            </button>
+          </div>
         )}
       </div>
     </>
@@ -326,6 +434,9 @@ export default function AdminDashboard() {
                 </>
               );
             })()}
+
+            {/* Admin catalog import — upload a refreshed SEC snapshot. */}
+            <CatalogImport />
 
             {/* Bonds held/added but missing from the catalog snapshot. */}
             <CatalogGapReport audit={audit} />
