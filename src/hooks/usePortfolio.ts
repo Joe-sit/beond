@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { supabase, supabaseEnabled } from "../lib/supabase";
+import { getAnnualIncome } from "../lib/taxSettings";
 import {
   type AllocationHolding,
   type TimelineMonth,
@@ -576,6 +577,26 @@ export function useAnnualIncome(yearCE?: number): { total: number } {
   useRealtimeRefetch("payouts", load);
 
   return { total };
+}
+
+// The user's OWN entered annual (net taxable) income, persisted per user. Distinct
+// from useAnnualIncome above (that's coupon income earned in a year). Re-reads on
+// notifyPortfolioChanged() — the tax-base page fires it after saving — so every
+// tax card stays in sync. `income` is null until loaded / when unset.
+export function useUserIncome(): { income: number | null; loading: boolean; refetch: () => void } {
+  const [income, setIncome] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    const v = await getAnnualIncome();
+    setIncome(v);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => subscribePortfolio(load), [load]);
+
+  return { income, loading, refetch: load };
 }
 
 // Portfolio-level summary stats derived from the signed-in user's holdings:

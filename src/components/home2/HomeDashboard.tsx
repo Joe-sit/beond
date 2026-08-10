@@ -10,6 +10,7 @@ import {
   useHoldings,
   useTimeline,
   useTaxCredits,
+  useUserIncome,
   matchConfirmedPayouts,
   notifyPortfolioChanged,
   type HoldingDetail,
@@ -28,7 +29,7 @@ import bondDec1 from "../../assets/bond-dec-1.png";
 import bondEx1 from "../../assets/bond-ex-1.png";
 import bondEx2 from "../../assets/bond-ex-2.png";
 import emptyBonds from "../../assets/empty-bonds.svg";
-import { estimatedRefund, getMarginalRate } from "../../lib/taxSettings";
+import { refundFromIncome, getMarginalRate } from "../../lib/taxSettings";
 import TaxStoryChapter, { type TaxStoryData } from "./TaxStoryChapter";
 import JarWidget from "./JarWidget";
 import Token3D from "./Token3D";
@@ -436,15 +437,18 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
     });
     return () => { alive = false; };
   }, []);
+  // The user's actual annual income drives the refund figures (income-based, same
+  // math as the tax-base page). Auto-syncs when the tax-base page saves.
+  const { income } = useUserIncome();
 
   const taxStory = useMemo<TaxStoryData>(() => ({
     rate: taxRate,
     year: yearProgress.year,
-    collectedRefund: estimatedRefund(yearProgress.credit, taxRate),
-    fullRefund: estimatedRefund(yearProgress.potentialWht, taxRate),
+    collectedRefund: refundFromIncome(yearProgress.credit, income ?? 0),
+    fullRefund: refundFromIncome(yearProgress.potentialWht, income ?? 0),
     confirmed: yearProgress.confirmed,
     total: yearProgress.total,
-  }), [taxRate, yearProgress]);
+  }), [taxRate, income, yearProgress]);
 
   // Story chapters in the right panel, in order:
   //   goal  — this year's tax-saving goal (staircase + gauge + text), plays first
@@ -989,6 +993,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             start={chapter === "income"}
             skip={introSkip}
             taxRate={taxRate}
+            income={income}
             resizing={layoutOpening}
           />
           </div>
@@ -1149,6 +1154,7 @@ function BuildingChart({
   start = true,
   skip = false,
   taxRate = 5,
+  income = null,
   resizing = false,
   tilted = false,
 }: {
@@ -1166,6 +1172,7 @@ function BuildingChart({
   start?: boolean; // gate the intro so it waits for the goal chapter to finish
   skip?: boolean; // skip button pressed → jump straight to the settled chart
   taxRate?: number; // marginal bracket %, for the detail card's refund estimate
+  income?: number | null; // actual annual income, drives the income-based refund
   resizing?: boolean; // layout opening → cubes track width instantly (no lag)
   tilted?: boolean; // resting bars stay in the iso 3D view instead of turning flat
 }) {
@@ -1627,7 +1634,7 @@ function BuildingChart({
           transition: "opacity 380ms ease, transform 420ms cubic-bezier(.45,0,.25,1)",
         }}
       >
-        {cardMonth && <MonthDetailCard month={cardMonth} matched={matched} taxRate={taxRate} />}
+        {cardMonth && <MonthDetailCard month={cardMonth} matched={matched} taxRate={taxRate} income={income} />}
       </div>
 
     </div>
@@ -1687,10 +1694,12 @@ function MonthDetailCard({
   month,
   matched,
   taxRate,
+  income,
 }: {
   month: ReturnType<typeof useTimeline>["months"][number];
   matched: ReturnType<typeof matchConfirmedPayouts>;
   taxRate: number;
+  income: number | null;
 }) {
   const t = useT();
   const lang = useLang();
@@ -1699,7 +1708,7 @@ function MonthDetailCard({
   const rows = [...month.payouts].sort((a, b) => a.amount - b.amount);
   const total = rows.reduce((s, p) => s + p.amount, 0);
   const wht = Math.round(total * 0.15); // Thai bond coupon withholding = 15%
-  const refund = Math.round(estimatedRefund(wht, taxRate));
+  const refund = Math.round(refundFromIncome(wht, income ?? 0));
   // The month's 50-ทวิ folder — pending (uncollected) slips only; folder shown
   // open while any remain, closed once every slip is confirmed.
   const folderSlips: SlipPaperData[] = month.payouts

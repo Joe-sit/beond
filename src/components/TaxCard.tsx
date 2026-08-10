@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Button } from "@heroui/react";
 import { IconAdjustmentsHorizontal } from "@tabler/icons-react";
-import { useTaxCredits, currentTaxYearBE } from "../hooks/usePortfolio";
+import { useTaxCredits, useUserIncome, currentTaxYearBE } from "../hooks/usePortfolio";
+import { refundFromIncome } from "../lib/taxSettings";
 import TaxCreditModal from "./TaxCreditModal";
 import moneyIllustration from "../assets/money-illustration.svg";
 
@@ -14,6 +15,7 @@ function formatTHB(value: number): string {
 export default function TaxCard() {
   const [taxOpen, setTaxOpen] = useState(false);
   const { docs, loading } = useTaxCredits();
+  const { income } = useUserIncome();
 
   // Overpaid tax reclaimable this year = the 15% withheld on bond-coupon income.
   // Match the จัดการภาษี ledger exactly: confirmed slips, summed for the latest
@@ -26,6 +28,10 @@ export default function TaxCard() {
   const credit = confirmedDocs
     .filter((d) => Number(d.taxYear) === year)
     .reduce((sum, d) => sum + Number(d.whtAmount ?? 0), 0);
+  // Reclaimable = the WHT over-withheld at the user's real income bracket (same
+  // income-based math as the tax-base page), not the raw WHT total. Income unset
+  // → 0, which yields the generous "no other income" estimate.
+  const refund = refundFromIncome(credit, income ?? 0);
   const pendingCount = docs.filter((d) => d.status === "pending").length;
 
   return (
@@ -44,7 +50,7 @@ export default function TaxCard() {
             <span className="mt-1.5 block h-6 w-28 animate-pulse rounded-lg bg-[#43507F]/10" />
           ) : (
             <p className="mt-1 text-xl font-bold text-[#43507F]">
-              ฿<span className="font-nunito">{formatTHB(credit)}</span>
+              ฿<span className="font-nunito">{formatTHB(refund)}</span>
             </p>
           )}
           {pendingCount > 0 && (

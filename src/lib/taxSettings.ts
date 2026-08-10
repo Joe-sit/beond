@@ -159,3 +159,28 @@ export async function saveMarginalRate(rate: number): Promise<{ ok: boolean; err
     .from("users").update({ marginal_tax_rate: rate }).eq("id", userId);
   return error ? { ok: false, error: error.message } : { ok: true };
 }
+
+// The caller's actual annual (net taxable) income in baht, or null when unset /
+// logged out / mock. Persisted per user so the tax-base page and summary cards
+// agree across devices (previously localStorage-only).
+export async function getAnnualIncome(): Promise<number | null> {
+  if (!supabaseEnabled || !supabase) return null;
+  const { data: sess } = await supabase.auth.getSession();
+  const userId = sess.session?.user.app_metadata?.public_user_id as string | undefined;
+  if (!userId) return null;
+  const { data } = await supabase
+    .from("users").select("annual_income").eq("id", userId).maybeSingle();
+  const v = data?.annual_income;
+  return v === null || v === undefined ? null : Number(v);
+}
+
+// Persist the caller's actual annual income (whole baht).
+export async function saveAnnualIncome(income: number): Promise<{ ok: boolean; error?: string }> {
+  if (!supabaseEnabled || !supabase) return { ok: true };
+  const { data: sess } = await supabase.auth.getSession();
+  const userId = sess.session?.user.app_metadata?.public_user_id as string | undefined;
+  if (!userId) return { ok: false, error: "ยังไม่ได้เข้าสู่ระบบ" };
+  const { error } = await supabase
+    .from("users").update({ annual_income: Math.max(0, Math.round(income)) }).eq("id", userId);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}

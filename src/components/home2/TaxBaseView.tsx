@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "@heroui/react";
-import { TAX_BRACKETS, refundFromIncome, bracketIndexForIncome, marginalRateForIncome, PERSONAL_ALLOWANCE } from "../../lib/taxSettings";
+import { TAX_BRACKETS, refundFromIncome, bracketIndexForIncome, marginalRateForIncome, PERSONAL_ALLOWANCE, getAnnualIncome, saveAnnualIncome } from "../../lib/taxSettings";
+import { notifyPortfolioChanged } from "../../hooks/usePortfolio";
 import { useT } from "../../lib/i18n";
 import CashStairsScene from "./CashStairsScene";
 
@@ -12,18 +13,21 @@ const fmtInt = (n: number) => new Intl.NumberFormat("th-TH", { maximumFractionDi
 const RATES = TAX_BRACKETS.map((b) => b.rate);
 // Brackets below 15% are the refund ("claim") zone — the steps you climb out of.
 const isRefund = (i: number) => TAX_BRACKETS[i].rate < 15;
-// Actual annual income is kept locally for now (no DB column yet).
-const INCOME_KEY = "beond.annualIncome";
 
 // "ฐานภาษี" page — enter your actual annual (net taxable) income; the bond
 // coupon is stacked on top and taxed up the progressive staircase to reveal how
 // much of the 15% WHT was over-withheld. Income auto-snaps to its bracket.
 export default function TaxBaseView({ wht, loading = false, onSaved }: { rate?: number; wht: number; loading?: boolean; onSaved: (r: number) => void }) {
   const t = useT();
-  const [income, setIncome] = useState<number>(() => {
-    const v = Number(localStorage.getItem(INCOME_KEY));
-    return Number.isFinite(v) && v > 0 ? v : 0;
-  });
+  const [income, setIncome] = useState<number>(0);
+  // Load the saved income (per-user, DB) on mount so it syncs across devices.
+  useEffect(() => {
+    let alive = true;
+    getAnnualIncome().then((v) => {
+      if (alive && v !== null) setIncome(v);
+    });
+    return () => { alive = false; };
+  }, []);
   const [mode, setMode] = useState<"year" | "month">("year"); // how the income is entered
   const [saving, setSaving] = useState(false);
 
@@ -45,10 +49,13 @@ export default function TaxBaseView({ wht, loading = false, onSaved }: { rate?: 
 
   const save = async () => {
     setSaving(true);
-    localStorage.setItem(INCOME_KEY, String(Math.max(0, Math.round(income))));
+    const res = await saveAnnualIncome(income);
     setSaving(false);
+    if (!res.ok) { toast.danger(res.error ?? t("tax_base_saved")); return; }
     toast.success(t("tax_base_saved"));
     onSaved(pickedRate);
+    // Let the tax cards (TaxCard / summary) re-read the new income immediately.
+    notifyPortfolioChanged();
   };
 
   return (
