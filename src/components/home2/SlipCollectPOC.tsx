@@ -57,7 +57,7 @@ export default function SlipCollectPOC() {
       </div>
 
       <AnimatePresence>
-        {playing && <SlipCollectOverlay slip={slip} onDone={() => setPlaying(false)} />}
+        {playing && <SlipCollectOverlay slips={[slip]} onDone={() => setPlaying(false)} />}
       </AnimatePresence>
     </div>
   );

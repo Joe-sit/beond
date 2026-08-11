@@ -302,7 +302,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   // persist the acknowledged ids so a reload never replays them. The very first
   // run (no stored ack) seeds every current LINE slip as acknowledged, so only
   // genuinely NEW confirmations (arriving live afterwards) trigger it.
-  const [flyInSlip, setFlyInSlip] = useState<SlipPaperData | null>(null);
+  // ALL unacknowledged LINE-confirmed slips are celebrated in ONE overlay (n
+  // papers fly in, n coins mint, a single รับทราบ) — not one modal per slip,
+  // which forced a refresh between each.
+  const [flyInSlips, setFlyInSlips] = useState<SlipPaperData[] | null>(null);
   const ackRef = useRef<Set<string> | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const jarRef = useRef<HTMLDivElement>(null); // coin-particle landing target (jar mouth)
@@ -313,7 +316,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   const [landFrac] = useState(0);
   const [barPulse] = useState(0);
   const barPopControls = useAnimationControls();
-  useEffect(() => { if (flyInSlip) setCollecting(true); }, [flyInSlip]);
+  useEffect(() => { if (flyInSlips) setCollecting(true); }, [flyInSlips]);
   useEffect(() => {
     // Only slips confirmed through the LINE OCR channel (webhook sets source
     // "line_ocr") — in-app web uploads don't get the celebration.
@@ -341,24 +344,27 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
         return; // baseline seeded — nothing to celebrate on this pass
       }
     }
-    if (flyInSlip) return; // one at a time
-    // Celebrate the next LINE-confirmed slip not yet acknowledged (persisted).
-    const next = confirmedIds.find((x) => !ackRef.current!.has(x.id));
+    if (flyInSlips) return; // a batch is already on screen
+    // Celebrate EVERY LINE-confirmed slip not yet acknowledged, together.
+    const pending = confirmedIds.filter((x) => !ackRef.current!.has(x.id));
     if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("collectlog")) {
       // eslint-disable-next-line no-console
-      console.log("[collect] confirmed:", confirmedIds.length, "acked:", ackRef.current!.size, "next:", next?.id ?? null);
+      console.log("[collect] confirmed:", confirmedIds.length, "acked:", ackRef.current!.size, "pending:", pending.length);
     }
-    if (next) setFlyInSlip(next.slip);
-  }, [matched, months, flyInSlip]);
+    if (pending.length) setFlyInSlips(pending.map((x) => x.slip));
+  }, [matched, months, flyInSlips]);
 
   // Acknowledge the shown slip: persist + dismiss, so it never replays.
   const acknowledgeSlip = () => {
-    if (flyInSlip && flyInSlip.id !== "__debug__" && ackRef.current && !ackRef.current.has(flyInSlip.id)) {
-      ackRef.current.add(flyInSlip.id);
-      saveCollectAck(ackRef.current);
+    if (flyInSlips && ackRef.current) {
+      let changed = false;
+      for (const s of flyInSlips) {
+        if (s.id !== "__debug__" && !ackRef.current.has(s.id)) { ackRef.current.add(s.id); changed = true; }
+      }
+      if (changed) saveCollectAck(ackRef.current);
     }
     setCollecting(false);
-    setFlyInSlip(null);
+    setFlyInSlips(null);
   };
 
   // `?collectreset` — wipe the persisted acknowledge set once on load so EVERY
@@ -376,7 +382,11 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   useEffect(() => {
     if (!import.meta.env.DEV || !new URLSearchParams(window.location.search).has("debugcollect")) return;
     const t = setTimeout(() => {
-      setFlyInSlip({ id: "__debug__", symbol: "BAM284A", issuer: "บริหารสินทรัพย์", installment: "1/2", wht: 2640, net: 14960 });
+      setFlyInSlips([
+        { id: "__debug__", symbol: "BAM284A", issuer: "บริหารสินทรัพย์", installment: "1/2", wht: 2640, net: 14960 },
+        { id: "__debug2__", symbol: "SIRI267A", issuer: "แสนสิริ", installment: "1/2", wht: 1560, net: 8840 },
+        { id: "__debug3__", symbol: "GULF276A", issuer: "กัลฟ์", installment: "2/2", wht: 3120, net: 17680 },
+      ]);
     }, 1500);
     return () => clearTimeout(t);
   }, []);
@@ -410,14 +420,15 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
       for (const p of m.payouts) {
         if (!matched.has(p.id)) continue;
         // The slip mid-celebration isn't in the jar yet — it drops in only once
-        // the user taps "acknowledge" (which clears flyInSlip), so the coin
-        // appears as a reward for collecting, not the instant it's confirmed.
-        if (flyInSlip && p.id === flyInSlip.id) continue;
+        // slips mid-celebration aren't in the jar yet — they drop in only once
+        // the user taps "acknowledge" (which clears flyInSlips), so the coins
+        // appear as a reward for collecting, not the instant they're confirmed.
+        if (flyInSlips && flyInSlips.some((s) => s.id === p.id)) continue;
         out.push({ id: p.id, symbol: p.symbol });
       }
     }
     return out;
-  }, [months, matched, month, flyInSlip]);
+  }, [months, matched, month, flyInSlips]);
 
   // Bar value shown: while collecting, start one slip behind and grow by landFrac
   // (the share of particles that have landed) so the fill tracks the particles.
@@ -1028,11 +1039,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
       {/* Full-screen slip-collected celebration — a confirmed slip pirouettes in
           and drops into the folder, centered over everything. */}
       <AnimatePresence>
-        {flyInSlip && (
+        {flyInSlips && (
           <SlipCollectOverlay
-            slip={flyInSlip}
+            slips={flyInSlips}
             onDone={acknowledgeSlip}
-            skipIntro={flyInSlip.id === "__debug__"}
           />
         )}
       </AnimatePresence>
@@ -1791,15 +1801,20 @@ function MonthDetailCard({
 // slip. Covers everything (fixed inset-0). Tapping รับทราบ fills the button green,
 // then bursts it into particles that fly into the year-progress bar.
 export function SlipCollectOverlay({
-  slip,
+  slips,
   onDone,
   skipIntro = false,
 }: {
-  slip: SlipPaperData;
+  slips: SlipPaperData[]; // one OR many — all fly in together, one acknowledge
   onDone: () => void;
   skipIntro?: boolean; // debug: jump straight to the acknowledge button
 }) {
   const t = useT();
+  const count = slips.length;
+  // Cap the minted coins so a big batch doesn't spawn dozens of WebGL canvases.
+  const COIN_CAP = 5;
+  const coinSlips = slips.slice(0, COIN_CAP);
+  const extraCoins = count - coinSlips.length;
   const [phase, setPhase] = useState(skipIntro ? 2 : 0); // 0 none → 1 folder → 2 slip flies in
   const [closed, setClosed] = useState(skipIntro); // cover shuts over the landed slip
   const [morphed, setMorphed] = useState(skipIntro); // folder collapses → issuer token forms
@@ -1854,7 +1869,7 @@ export function SlipCollectOverlay({
             animate={{ opacity: morphed ? 0 : 1, y: morphed ? -8 : 0 }}
             transition={{ duration: 0.4, ease: "easeOut" }}
           >
-            {t("slip_filed")}
+            {t("slip_filed")}{count > 1 ? ` · ${count} ${t("slip_unit")}` : ""}
           </motion.p>
           <motion.p
             className="col-start-1 row-start-1"
@@ -1862,7 +1877,7 @@ export function SlipCollectOverlay({
             animate={{ opacity: morphed ? 1 : 0, y: morphed ? 0 : 8 }}
             transition={{ duration: 0.45, ease: "easeOut", delay: morphed ? 0.35 : 0 }}
           >
-            {t("token_minted")}
+            {t("token_minted")}{count > 1 ? ` · ${count} ${t("coin_unit")}` : ""}
           </motion.p>
         </div>
         {/* Same layering as TaxStoryChapter: sheet (back z0) — flying slip (mid) —
@@ -1883,7 +1898,7 @@ export function SlipCollectOverlay({
               <Folder3D scale={0.72} rx={8} ry={-28} part="sheet" blank />
             </div>
             <div className="absolute inset-0" style={{ zIndex: closed ? 1 : 3 }}>
-              <PaperFly play={phase >= 2 && !morphed} slips={[slip]} left="50%" top="17%" />
+              <PaperFly play={phase >= 2 && !morphed} slips={slips} left="50%" top="17%" />
             </div>
             <div
               className="absolute z-2"
@@ -1937,17 +1952,46 @@ export function SlipCollectOverlay({
                 animate={{ scale: [0.4, 1.05, 0.85], opacity: [0, 0.9, 0] }}
                 transition={{ duration: 1.1, ease: "easeOut", times: [0, 0.4, 1], delay: 0.28 }}
               />
-              {/* Token rises up from where the folder sat and settles with a gentle
-                  spring. Entrance is opacity + rise ONLY (no CSS scale): scaling the
-                  canvas wrapper makes r3f measure the coin's frustum tiny, leaving
-                  it cropped-square. The 3D coin's own spin-in adds the flourish. */}
-              <motion.div
-                initial={{ opacity: 0, y: 44 }}
-                animate={{ opacity: bursting ? 0 : 1, y: 0 }}
-                transition={{ type: "spring", stiffness: 170, damping: 20, delay: 0.4 }}
-              >
-                <Token3D symbol={slip.symbol} size={190} fit={1.4} />
-              </motion.div>
+              {/* Token(s) rise up from where the folder sat and settle with a
+                  gentle spring. Entrance is opacity + rise ONLY (no CSS scale):
+                  scaling the canvas wrapper makes r3f measure the coin's frustum
+                  tiny, leaving it cropped-square. The 3D coin's own spin-in adds
+                  the flourish. A single slip mints one big coin; a batch mints a
+                  fanned row (capped at COIN_CAP, with a +N badge). */}
+              {count === 1 ? (
+                <motion.div
+                  initial={{ opacity: 0, y: 44 }}
+                  animate={{ opacity: bursting ? 0 : 1, y: 0 }}
+                  transition={{ type: "spring", stiffness: 170, damping: 20, delay: 0.4 }}
+                >
+                  <Token3D symbol={coinSlips[0].symbol} size={190} fit={1.4} />
+                </motion.div>
+              ) : (
+                <div className="relative flex items-center justify-center">
+                  {coinSlips.map((s, i) => (
+                    <motion.div
+                      key={s.id}
+                      className="relative"
+                      style={{ marginLeft: i === 0 ? 0 : -28, zIndex: i }}
+                      initial={{ opacity: 0, y: 44 }}
+                      animate={{ opacity: bursting ? 0 : 1, y: 0 }}
+                      transition={{ type: "spring", stiffness: 170, damping: 20, delay: 0.4 + i * 0.12 }}
+                    >
+                      <Token3D symbol={s.symbol} size={120} fit={1.4} />
+                    </motion.div>
+                  ))}
+                  {extraCoins > 0 && (
+                    <motion.div
+                      className="ml-1 flex size-12 items-center justify-center rounded-full bg-white/90 text-lg font-medium text-ink shadow-[0_6px_18px_rgba(0,0,0,0.18)]"
+                      initial={{ opacity: 0, scale: 0.6 }}
+                      animate={{ opacity: bursting ? 0 : 1, scale: 1 }}
+                      transition={{ type: "spring", stiffness: 170, damping: 20, delay: 0.4 + coinSlips.length * 0.12 }}
+                    >
+                      +{extraCoins}
+                    </motion.div>
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
