@@ -271,7 +271,12 @@ export async function confirmReviewedSlip(id: string, fields: SlipFields): Promi
       bond_id: bondId,
     })
     .eq("id", id);
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    // Confirming would duplicate a slip already collected (same doc_ref, or — when
+    // OCR couldn't read the ref — same bond + pay date + amounts). Don't double it.
+    if (error.code === "23505") return { ok: false, error: "สลิปนี้ถูกบันทึกไว้แล้ว" };
+    return { ok: false, error: error.message };
+  }
   await bindBondPayerTaxId(fields.bond_symbol, fields.payer_tax_id);
   // Tell the user in LINE that the slip was collected (they confirmed on the web,
   // so the chat has no reply otherwise). Server-side push — fire-and-forget.
