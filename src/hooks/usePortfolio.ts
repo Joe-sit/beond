@@ -127,6 +127,32 @@ function subscribePortfolio(cb: () => void): () => void {
   };
 }
 
+// True once Supabase reports an authenticated session. Data loads gate on this so
+// the first (pre-auth) render stays on the SKELETON instead of flashing an empty
+// portfolio — the app mounts HomeDashboard with a placeholder profile while the
+// LINE→Supabase session exchange is still in flight, and RLS returns 0 rows until
+// it lands. Flipping true fires notifyPortfolioChanged() so every mounted hook
+// reloads with real data (no hard refresh needed).
+let sessionReady = !supabaseEnabled; // no Supabase (dev/mock) → nothing to wait for
+if (supabaseEnabled && supabase) {
+  supabase.auth.getSession().then(({ data }) => {
+    if (data.session && !sessionReady) { sessionReady = true; notifyPortfolioChanged(); }
+  });
+  supabase.auth.onAuthStateChange((event, session) => {
+    if (session) {
+      const was = sessionReady;
+      sessionReady = true;
+      if (!was || event === "SIGNED_IN" || event === "TOKEN_REFRESHED") notifyPortfolioChanged();
+    } else if (event === "SIGNED_OUT") {
+      sessionReady = false;
+    }
+  });
+  // Safety net: if no session ever lands (e.g. the LINE-profile fallback where the
+  // DB session couldn't be minted), release the gate after a grace period so the UI
+  // renders — empty under RLS — instead of hanging on the skeleton forever.
+  setTimeout(() => { if (!sessionReady) { sessionReady = true; notifyPortfolioChanged(); } }, 6000);
+}
+
 // Re-runs `onChange` whenever a Postgres change lands on `table` (Supabase
 // Realtime), so views stay live without a page reload. Needs the table in the
 // `supabase_realtime` publication (migration 0006).
@@ -161,6 +187,7 @@ export function useAllocation(groupBy: "sector" | "rating" | "bond" = "sector"):
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
+    if (!sessionReady) return; // stay on skeleton until signed in; auth listener refetches
     const { data, error } = await supabase
       .from("holdings")
       .select("face_value, bonds(symbol, rating, sectors(id, label_th, color))");
@@ -244,6 +271,7 @@ export function useHoldings(): {
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
+    if (!sessionReady) return; // stay on skeleton until signed in; auth listener refetches
     setError(false);
     const { data, error } = await supabase
       .from("holdings")
@@ -302,6 +330,7 @@ export function useTimeline(): {
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
+    if (!sessionReady) return; // stay on skeleton until signed in; auth listener refetches
     const { data, error } = await supabase
       .from("payouts")
       .select(
@@ -418,6 +447,7 @@ export function useTaxCredits(): { docs: TaxDoc[]; loading: boolean; refetch: ()
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
+    if (!sessionReady) return; // stay on skeleton until signed in; auth listener refetches
     const { data, error } = await supabase
       .from("tax_documents")
       .select(
@@ -561,6 +591,7 @@ export function useAnnualIncome(yearCE?: number): { total: number } {
 
   const load = useCallback(async () => {
     if (!supabaseEnabled || !supabase) return;
+    if (!sessionReady) return; // stay on skeleton until signed in; auth listener refetches
     const { data, error } = await supabase
       .from("payouts")
       .select("amount")
@@ -588,6 +619,7 @@ export function useUserIncome(): { income: number | null; loading: boolean; refe
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
+    if (!sessionReady) return; // stay on skeleton until signed in; auth listener refetches
     const v = await getAnnualIncome();
     setIncome(v);
     setLoading(false);
