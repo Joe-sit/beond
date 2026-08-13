@@ -144,6 +144,32 @@ export function watchSession(onLost: () => void): () => void {
   return () => data.subscription.unsubscribe();
 }
 
+// Permanently delete the caller's account + all their data (irreversible). The
+// delete-account Edge Function scopes everything to the session JWT. Caller should
+// logout() / drop to the login page on success.
+export async function deleteAccount(): Promise<{ ok: boolean; error?: string }> {
+  if (!supabaseEnabled || !supabase || !SUPABASE_URL) return { ok: false, error: "ระบบยังไม่พร้อมใช้งาน" };
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) return { ok: false, error: "ยังไม่ได้เข้าสู่ระบบ" };
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/delete-account`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...(SUPABASE_ANON ? { apikey: SUPABASE_ANON } : {}),
+      },
+      body: "{}",
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.error) return { ok: false, error: body.error ?? `delete ${res.status}` };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 // Set while an explicit logout is in flight, so watchSession doesn't try to
 // silently re-authenticate the user right back in.
 let signingOut = false;

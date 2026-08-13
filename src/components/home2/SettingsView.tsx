@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
 import { toast } from "@heroui/react";
 import {
+  IconAlertTriangle,
   IconBell,
   IconBrandLine,
   IconChevronRight,
   IconLogout,
   IconShieldLock,
+  IconTrash,
 } from "@tabler/icons-react";
 import { useT, useLang, setLang } from "../../lib/i18n";
 import { getSlipReminderEnabled, saveSlipReminderEnabled, getLineFriend } from "../../lib/userSettings";
-import { getFriendFlag, LINE_OA_ADD_URL, type AuthProfile } from "../../lib/auth";
+import { getFriendFlag, deleteAccount, LINE_OA_ADD_URL, type AuthProfile } from "../../lib/auth";
 
 // User settings page (sidebar "ตั้งค่า"). Three sections: Profile (read-only LINE
 // identity + OA link status), Notifications (weekly slip-reminder opt-out), and
@@ -26,6 +28,9 @@ export default function SettingsView({
   const [remind, setRemind] = useState<boolean | null>(null); // null = still loading
   const [savingRemind, setSavingRemind] = useState(false);
   const [friend, setFriend] = useState<boolean | null>(null); // null = unknown (non-LIFF)
+  const [delOpen, setDelOpen] = useState(false); // delete-account confirm modal
+  const [delText, setDelText] = useState(""); // must match displayName to enable
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -56,6 +61,20 @@ export default function SettingsView({
   };
 
   const initial = profile.displayName?.slice(0, 1) ?? "b";
+  const delMatch = delText.trim() === (profile.displayName ?? "").trim() && !!profile.displayName;
+
+  const confirmDelete = async () => {
+    if (!delMatch || deleting) return;
+    setDeleting(true);
+    const res = await deleteAccount();
+    if (!res.ok) {
+      setDeleting(false);
+      toast.danger(res.error ?? t("settings_save_error"));
+      return;
+    }
+    toast.success(t("del_account_done"));
+    onLogout?.(); // drop to the login page — the account no longer exists
+  };
 
   return (
     <section className="flex h-full min-h-0 w-full flex-col overflow-y-auto rounded-3xl bg-white p-10">
@@ -179,14 +198,74 @@ export default function SettingsView({
             {/* Logout */}
             <button
               onClick={onLogout}
-              className="flex items-center gap-3 p-4 text-left text-sm font-medium text-[#D93A3A] transition hover:bg-[#D93A3A]/5"
+              className="flex items-center gap-3 p-4 text-left text-sm font-medium text-ink transition hover:bg-black/5"
             >
               <IconLogout size={20} />
               {t("logout")}
             </button>
           </div>
         </div>
+
+        {/* ── Danger zone: delete account ─────────────────────────── */}
+        <div className="flex flex-col gap-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-[#D93A3A]/60">{t("del_account_zone")}</p>
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-[#D93A3A]/20 bg-[#D93A3A]/[0.03] p-4">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-ink">{t("del_account")}</p>
+              <p className="text-sm text-ink/50">{t("del_account_desc")}</p>
+            </div>
+            <button
+              onClick={() => { setDelText(""); setDelOpen(true); }}
+              className="flex shrink-0 items-center gap-2 rounded-full border border-[#D93A3A]/30 px-4 py-2 text-sm font-medium text-[#D93A3A] transition hover:bg-[#D93A3A]/10"
+            >
+              <IconTrash size={18} />
+              {t("del_account")}
+            </button>
+          </div>
+        </div>
       </div>
+
+      {/* Delete-account confirm — must type the exact display name to enable. */}
+      {delOpen && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4" onClick={() => !deleting && setDelOpen(false)}>
+          <div className="w-full max-w-md rounded-3xl bg-white p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3">
+              <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-[#D93A3A]/10 text-[#D93A3A]">
+                <IconAlertTriangle size={24} />
+              </span>
+              <h3 className="text-lg font-medium text-ink">{t("del_account")}</h3>
+            </div>
+            <p className="mt-3 text-sm leading-relaxed text-ink/70">{t("del_account_warn")}</p>
+            <p className="mt-4 text-sm text-ink/70">
+              {t("del_account_type")} <span className="font-medium text-ink">{profile.displayName}</span>
+            </p>
+            <input
+              autoFocus
+              value={delText}
+              onChange={(e) => setDelText(e.target.value)}
+              placeholder={profile.displayName}
+              disabled={deleting}
+              className="mt-2 w-full rounded-2xl border border-black/10 px-4 py-3 text-base text-ink outline-none focus:border-[#D93A3A] disabled:opacity-50"
+            />
+            <div className="mt-5 flex gap-3">
+              <button
+                onClick={() => setDelOpen(false)}
+                disabled={deleting}
+                className="flex-1 rounded-full border border-black/10 py-3 text-sm font-medium text-ink transition hover:bg-black/5 disabled:opacity-50"
+              >
+                {t("cancel")}
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={!delMatch || deleting}
+                className="flex-1 rounded-full bg-[#D93A3A] py-3 text-sm font-medium text-white transition hover:bg-[#c22f2f] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {deleting ? t("del_account_deleting") : t("del_account_confirm")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
