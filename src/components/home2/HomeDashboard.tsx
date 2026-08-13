@@ -658,7 +658,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
           {/* Portfolio value card */}
           <section className="relative shrink-0 overflow-hidden rounded-3xl bg-white p-6">
             <div className="flex items-start justify-between gap-2">
-              <p className="flex items-center gap-1.5 text-base text-ink/80">
+              <p className="flex items-center gap-1.5 text-sm text-ink/80 lg:text-base">
                 {t("portfolio_title")}
                 <button
                   onClick={() => setHideValue((v) => !v)}
@@ -679,7 +679,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             {loading ? (
               <div className="mt-3 h-9 w-52 animate-pulse rounded-lg bg-black/10" />
             ) : (
-              <p className="mt-3 text-3xl font-medium text-ink">{hideValue ? "฿ ✱✱✱,✱✱✱" : `฿${fmtTHB(totalValue)}`}</p>
+              <p className="mt-3 text-2xl font-medium text-ink lg:text-3xl">{hideValue ? "฿ ✱✱✱,✱✱✱" : `฿${fmtTHB(totalValue)}`}</p>
             )}
             <div className="mt-4 flex items-center gap-6">
               <div>
@@ -687,7 +687,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                 {loading ? (
                   <div className="mt-1 h-7 w-16 animate-pulse rounded bg-black/10" />
                 ) : (
-                  <p className="text-2xl font-medium text-ink">{avgCoupon.toFixed(1)}%</p>
+                  <p className="text-xl font-medium text-ink lg:text-2xl">{avgCoupon.toFixed(1)}%</p>
                 )}
               </div>
               <span className="h-10 w-px bg-black/10" />
@@ -696,7 +696,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                 {loading ? (
                   <div className="mt-1 h-7 w-24 animate-pulse rounded bg-black/10" />
                 ) : (
-                  <p className="text-2xl font-medium text-ink">{avgRemainingYears.toFixed(2)} {t("year_unit")}</p>
+                  <p className="text-xl font-medium text-ink lg:text-2xl">{avgRemainingYears.toFixed(2)} {t("year_unit")}</p>
                 )}
               </div>
             </div>
@@ -726,7 +726,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                 </>
               ) : (
                 <>
-                  <p className="mt-1 text-3xl font-medium text-ink">{holdings.length} {t("holdings_unit")}</p>
+                  <p className="mt-1 text-2xl font-medium text-ink lg:text-3xl">{holdings.length} {t("holdings_unit")}</p>
                   <p className="mt-1 text-sm text-ink/80">{t("interest_per_month")}&nbsp; ~฿{fmtTHB2(monthly)}</p>
                 </>
               )}
@@ -795,7 +795,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                     <div className="flex items-center gap-4">
                       <IssuerLogo symbol={h.symbol} name={issuerName(h.symbol, h.issuer)} size={48} />
                       <div className="min-w-0">
-                        <p className="text-xl font-medium text-ink">{h.symbol}</p>
+                        <p className="text-lg font-medium text-ink lg:text-xl">{h.symbol}</p>
                         <p className="truncate text-sm text-ink/80">{issuerName(h.symbol, h.issuer)}</p>
                       </div>
                     </div>
@@ -913,12 +913,12 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             </div>
 
             {/* Left content — kept clear of the jar on the right */}
-            <div className="relative z-10 max-w-[58%]">
+            <div className="relative z-10 max-w-[64%] lg:max-w-[58%]">
               <p className="text-sm text-ink/80">{t("slips_to_collect")}</p>
               {/* Fixed row height (= issuer-logo size) so months with 0 logos
                   don't shrink the row and shift the chart below. */}
               <div className="mt-0.5 flex h-12 items-center gap-2">
-                <span className="text-3xl font-medium text-ink">{folder.slips.length} {t("slip_unit")}</span>
+                <span className="text-2xl font-medium text-ink lg:text-3xl">{folder.slips.length} {t("slip_unit")}</span>
                 {/* 3D issuer token per slip — rises in one-by-one (staggered),
                     spins fast then settles. Status badge + click-to-focus. */}
                 {folder.slips.map((s, i) => (
@@ -952,7 +952,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                 ))}
               </div>
 
-              <div className="mt-4 w-3/5">
+              <div className="mt-4 w-full lg:w-3/5">
                 <div className="flex items-center justify-between gap-4">
                   <p className="text-sm text-ink/70">
                     {t("collected_all_year")} (
