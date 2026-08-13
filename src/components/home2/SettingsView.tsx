@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Switch, toast } from "@heroui/react";
+import { toast } from "@heroui/react";
 import {
   IconBell,
   IconBrandLine,
@@ -120,16 +120,19 @@ export default function SettingsView({
                   <p className="text-sm text-ink/50">{t("set_notify_weekly_desc")}</p>
                 </div>
               </div>
-              <Switch
-                isSelected={remind ?? false}
-                onChange={toggleRemind}
-                isDisabled={remind === null || savingRemind}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={remind ?? false}
                 aria-label={t("set_notify_weekly")}
+                disabled={remind === null || savingRemind}
+                onClick={() => toggleRemind(!(remind ?? false))}
+                className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${remind ? "bg-[#12BC59]" : "bg-black/15"}`}
               >
-                <Switch.Control>
-                  <Switch.Thumb />
-                </Switch.Control>
-              </Switch>
+                <span
+                  className={`inline-block size-5 rounded-full bg-white shadow transition-transform ${remind ? "translate-x-6" : "translate-x-1"}`}
+                />
+              </button>
             </div>
             {/* If not a friend, the reminder can't be delivered — nudge to add. */}
             {friend === false && (
