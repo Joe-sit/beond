@@ -124,8 +124,12 @@ Deno.serve(async (req) => {
   const monthStart = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
   const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59).getTime();
 
-  // Users with a linked LINE account (optionally just the test target).
-  let uq = admin.from("users").select("id, line_user_id, slip_reminder_sent_at").not("line_user_id", "is", null);
+  // Users with a linked LINE account who haven't opted out (optionally just the
+  // test target).
+  let uq = admin.from("users")
+    .select("id, line_user_id, slip_reminder_sent_at")
+    .not("line_user_id", "is", null)
+    .eq("slip_reminder_enabled", true);
   if (body.userId) uq = uq.eq("id", body.userId);
   const { data: users, error: uErr } = await uq;
   if (uErr) return json(500, { error: uErr.message });

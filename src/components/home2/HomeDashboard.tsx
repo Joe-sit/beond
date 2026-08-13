@@ -36,6 +36,7 @@ import Token3D from "./Token3D";
 import InterestBarChart from "../InterestBarChart";
 import TaxBaseView from "./TaxBaseView";
 import YearlySummaryView from "./YearlySummaryView";
+import SettingsView from "./SettingsView";
 import lineIcon from "../../assets/line-logo.webp";
 import { useT, useLang, setLang } from "../../lib/i18n";
 import AddBondModal from "../AddBondModal";
@@ -180,7 +181,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   }, [payoutMonths]);
 
   const [monthIdx, setMonthIdx] = useState<number | null>(null);
-  const [view, setView] = useState<"home" | "annual" | "tax_base">("home"); // sidebar page
+  const [view, setView] = useState<"home" | "annual" | "tax_base" | "settings">("home"); // sidebar page
   const [addHover, setAddHover] = useState(false); // show add-bond art on button hover
   const [holdingHover, setHoldingHover] = useState<string | null>(null); // list row → show invested value
   const [hideValue, setHideValue] = useState(false); // mask the portfolio total
@@ -189,7 +190,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   const [editHolding, setEditHolding] = useState<HoldingDetail | null>(null);
 
   // Sidebar nav: leave any nested add/edit page before switching the view.
-  const navTo = (v: "home" | "annual" | "tax_base") => {
+  const navTo = (v: "home" | "annual" | "tax_base" | "settings") => {
     setAddBondOpen(false);
     setEditHolding(null);
     setView(v);
@@ -586,9 +587,11 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             {t("nav_download_ext")}
           </button>
           <button
-            disabled
-            title={t("coming_soon")}
-            className="flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium text-ink/40 disabled:cursor-not-allowed"
+            onClick={() => navTo("settings")}
+            aria-current={view === "settings" && !addBondOpen && !editHolding ? "page" : undefined}
+            className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium transition ${
+              view === "settings" && !addBondOpen && !editHolding ? "bg-[#43507F]/10 text-[#43507F]" : "text-ink/60 hover:bg-black/5 hover:text-ink"
+            }`}
           >
             <IconSettings size={20} stroke={1.75} />
             {t("nav_settings")}
@@ -630,6 +633,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
       ) : view === "tax_base" ? (
         <main className="min-h-0 w-full flex-1 overflow-hidden p-6">
           <TaxBaseView rate={taxRate} wht={yearProgress.potentialWht} loading={loading} onSaved={(r) => setTaxRate(r)} />
+        </main>
+      ) : view === "settings" ? (
+        <main className="min-h-0 w-full flex-1 overflow-hidden p-6">
+          <SettingsView profile={profile} onLogout={onLogout} />
         </main>
       ) : (
       <main className="grid min-h-0 w-full flex-1 grid-cols-1 gap-6 overflow-hidden p-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">

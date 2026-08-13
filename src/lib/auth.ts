@@ -89,6 +89,23 @@ export async function initAuth(): Promise<AuthProfile | null> {
   return { displayName: p.displayName, pictureUrl: p.pictureUrl };
 }
 
+// The beond LINE Official Account — its basic id drives the add-friend link shown
+// in settings when the user hasn't befriended it (LINE push needs friendship).
+export const LINE_OA_ID = "@085vmjoz";
+export const LINE_OA_ADD_URL = `https://line.me/R/ti/p/${LINE_OA_ID}`;
+
+// Is the user a friend of the beond OA? null = unknown (not LIFF / call failed) —
+// callers should treat null as "don't nag". LINE push only reaches friends.
+export async function getFriendFlag(): Promise<boolean | null> {
+  if (!liffEnabled || !liff.isLoggedIn()) return null;
+  try {
+    const { friendFlag } = await liff.getFriendship();
+    return friendFlag;
+  } catch {
+    return null;
+  }
+}
+
 // Starts the login flow. With LIFF this redirects to LINE and never
 // resolves; the mock path resolves immediately.
 export function login(): void {
