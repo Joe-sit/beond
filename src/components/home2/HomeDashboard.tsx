@@ -502,9 +502,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   };
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-[#EEF1F5] font-kanit">
-      {/* App sidebar — beond brand (top) + user profile (bottom). */}
-      <aside className="z-40 flex w-60 shrink-0 flex-col border-r border-black/6 bg-white px-5 py-6">
+    <div className="flex min-h-dvh flex-col overflow-x-hidden bg-[#EEF1F5] font-kanit lg:h-dvh lg:flex-row lg:overflow-hidden">
+      {/* App sidebar — beond brand (top) + user profile (bottom). Desktop only;
+          mobile uses a top bar + bottom tab nav (below). */}
+      <aside className="z-40 hidden w-60 shrink-0 flex-col border-r border-black/6 bg-white px-5 py-6 lg:flex">
         <div className="leading-tight text-[#43507F]">
           <span
             className="block h-5 w-auto [&_svg]:h-full [&_svg]:w-auto"
@@ -604,10 +605,22 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
       </aside>
 
       {/* Main content column */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col lg:min-h-0 lg:overflow-hidden">
+
+      {/* Mobile top bar — brand + profile (sidebar is hidden < lg). */}
+      <header className="flex shrink-0 items-center justify-between border-b border-black/6 bg-white px-4 py-3 lg:hidden">
+        <span
+          className="block h-5 w-auto text-[#43507F] [&_svg]:h-full [&_svg]:w-auto"
+          style={{ ["--fill-0" as string]: "#43507F" }}
+          aria-label="beond"
+          dangerouslySetInnerHTML={{ __html: wordmark }}
+        />
+        <ProfileBadge profile={profile} onLogout={onLogout} />
+      </header>
+
 
       {(addBondOpen || editHolding) ? (
-        <main className="min-h-0 w-full flex-1 overflow-hidden p-6">
+        <main className="min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
           <motion.section
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -627,19 +640,19 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
           </motion.section>
         </main>
       ) : view === "annual" ? (
-        <main className="min-h-0 w-full flex-1 overflow-hidden p-6">
+        <main className="min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
           <YearlySummaryView docs={docs} />
         </main>
       ) : view === "tax_base" ? (
-        <main className="min-h-0 w-full flex-1 overflow-hidden p-6">
+        <main className="min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
           <TaxBaseView rate={taxRate} wht={yearProgress.potentialWht} loading={loading} onSaved={(r) => setTaxRate(r)} />
         </main>
       ) : view === "settings" ? (
-        <main className="min-h-0 w-full flex-1 overflow-hidden p-6">
+        <main className="min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
           <SettingsView profile={profile} onLogout={onLogout} />
         </main>
       ) : (
-      <main className="grid min-h-0 w-full flex-1 grid-cols-1 gap-6 overflow-hidden p-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
+      <main className="grid w-full grid-cols-1 gap-4 p-3 pb-24 lg:min-h-0 lg:flex-1 lg:gap-6 lg:overflow-hidden lg:p-6 lg:pb-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
         {/* LEFT column */}
         <div className="flex min-h-0 flex-col gap-4">
           {/* Portfolio value card */}
@@ -687,14 +700,14 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                 )}
               </div>
             </div>
-            <img src={level.mascot} alt="" aria-hidden className="pointer-events-none absolute right-4 bottom-2 h-28 w-auto" />
+            <img src={level.mascot} alt="" aria-hidden className="pointer-events-none absolute right-2 bottom-2 hidden h-20 w-auto sm:block lg:right-4 lg:h-28" />
           </section>
 
           <ProfileLevelModal open={levelModalOpen} onClose={() => setLevelModalOpen(false)} />
 
           {/* Holdings card — header (count + monthly) then a bordered list card.
               Figma node 962:2937. */}
-          <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-white p-6">
+          <section className="relative flex min-h-[58vh] flex-col overflow-hidden rounded-3xl bg-white p-5 lg:min-h-0 lg:flex-1 lg:p-6">
             {/* Rolled paper tucked into the card's top-right corner (clipped) —
                 revealed with the rest of the add-bond art on button hover. */}
             <img
@@ -829,7 +842,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
         </div>
 
         {/* RIGHT blue panel */}
-        <section className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-3xl bg-gradient-to-b from-[#779BC6] to-white p-6">
+        <section className="relative flex min-h-[70vh] flex-col overflow-hidden rounded-3xl bg-gradient-to-b from-[#779BC6] to-white p-4 lg:h-full lg:min-h-0 lg:p-6">
           {/* IG-story style progress — one segment per intro chapter, filling over
               its duration; fades out once the intro ends. */}
           <IntroProgress chapter={chapter} chartSettled={chartSettled} />
@@ -895,7 +908,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                 Mounted only once the card is actually revealed (chapter "slip"),
                 so the coins DROP as the card appears instead of falling unseen
                 during the intro. */}
-            <div ref={jarRef} className="pointer-events-none absolute right-10 z-20" style={{ top: -96 }}>
+            <div ref={jarRef} className="pointer-events-none absolute right-0 -top-16 z-20 origin-top-right scale-[0.6] sm:scale-75 lg:right-10 lg:-top-24 lg:scale-100">
               {chapter === "slip" && <JarWidget coins={jarCoins} />}
             </div>
 
@@ -1054,6 +1067,29 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
         )}
       </AnimatePresence>
       </div>
+
+      {/* Mobile bottom tab nav — replaces the desktop sidebar < lg. */}
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex shrink-0 items-stretch border-t border-black/8 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden">
+        {([
+          { v: "home", icon: IconHome, label: t("nav_home") },
+          { v: "tax_base", icon: IconReceiptTax, label: t("nav_tax_base") },
+          { v: "annual", icon: IconReportAnalytics, label: t("nav_annual") },
+          { v: "settings", icon: IconSettings, label: t("nav_settings") },
+        ] as const).map(({ v, icon: Icon, label }) => {
+          const active = view === v && !addBondOpen && !editHolding;
+          return (
+            <button
+              key={v}
+              onClick={() => navTo(v)}
+              aria-current={active ? "page" : undefined}
+              className={`flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px] font-medium transition ${active ? "text-[#43507F]" : "text-ink/45"}`}
+            >
+              <Icon size={22} stroke={1.75} />
+              <span className="max-w-full truncate">{label}</span>
+            </button>
+          );
+        })}
+      </nav>
 
       {/* heroUI toasts — this view renders outside DashboardShell (?v2), so it
           needs its own provider or CRUD toasts never appear. */}
