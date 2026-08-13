@@ -196,6 +196,13 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
     setView(v);
   };
 
+  // Replay the home intro cinematic — clear the "already skipped" flag and reload
+  // so the dashboard mounts fresh and plays the full goal→income→slip sequence.
+  const replayIntro = () => {
+    localStorage.removeItem(INTRO_SKIP_KEY);
+    window.location.reload();
+  };
+
   const delHolding = async (h: HoldingDetail) => {
     if (!supabase) { setEditHolding(null); return; }
     // Remove the accumulated slips for this bond first. They're linked by bond_id
@@ -649,7 +656,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
         </main>
       ) : view === "settings" ? (
         <main className="min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
-          <SettingsView profile={profile} onLogout={onLogout} />
+          <SettingsView profile={profile} onLogout={onLogout} onReplayIntro={replayIntro} />
         </main>
       ) : (
       <main className="grid w-full grid-cols-1 gap-4 p-3 pb-24 lg:min-h-0 lg:flex-1 lg:gap-6 lg:overflow-hidden lg:p-6 lg:pb-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">

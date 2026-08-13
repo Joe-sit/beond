@@ -6,6 +6,7 @@ import {
   IconBrandLine,
   IconChevronRight,
   IconLogout,
+  IconPlayerPlay,
   IconShieldLock,
   IconTrash,
 } from "@tabler/icons-react";
@@ -19,9 +20,11 @@ import { getFriendFlag, deleteAccount, LINE_OA_ADD_URL, type AuthProfile } from 
 export default function SettingsView({
   profile,
   onLogout,
+  onReplayIntro,
 }: {
   profile: AuthProfile;
   onLogout?: () => void;
+  onReplayIntro?: () => void;
 }) {
   const t = useT();
   const lang = useLang();
@@ -181,6 +184,20 @@ export default function SettingsView({
                 ))}
               </div>
             </div>
+
+            {/* Replay the home intro cinematic. */}
+            {onReplayIntro && (
+              <button
+                onClick={onReplayIntro}
+                className="flex items-center justify-between gap-4 p-4 text-left transition hover:bg-black/5"
+              >
+                <span className="flex items-center gap-3 text-sm font-medium text-ink">
+                  <IconPlayerPlay size={20} className="text-ink/50" />
+                  {t("set_replay_intro")}
+                </span>
+                <IconChevronRight size={18} className="text-ink/30" />
+              </button>
+            )}
 
             {/* Privacy policy — page TBD (backlog); disabled placeholder. */}
             <button
