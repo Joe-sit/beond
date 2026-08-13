@@ -915,7 +915,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                 Mounted only once the card is actually revealed (chapter "slip"),
                 so the coins DROP as the card appears instead of falling unseen
                 during the intro. */}
-            <div ref={jarRef} className="pointer-events-none absolute right-0 -top-16 z-20 origin-top-right scale-[0.6] sm:scale-75 lg:right-10 lg:-top-24 lg:scale-100">
+            <div ref={jarRef} className="pointer-events-none absolute -top-14 right-0 z-20 origin-top-right scale-[0.55] sm:scale-[0.65] lg:-top-20 lg:right-8 lg:scale-[0.82]">
               {chapter === "slip" && <JarWidget coins={jarCoins} />}
             </div>
 
