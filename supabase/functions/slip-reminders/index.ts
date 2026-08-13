@@ -129,7 +129,8 @@ Deno.serve(async (req) => {
   let uq = admin.from("users")
     .select("id, line_user_id, slip_reminder_sent_at")
     .not("line_user_id", "is", null)
-    .eq("slip_reminder_enabled", true);
+    .eq("slip_reminder_enabled", true)
+    .or("line_friend.is.null,line_friend.eq.true"); // skip users who blocked the OA
   if (body.userId) uq = uq.eq("id", body.userId);
   const { data: users, error: uErr } = await uq;
   if (uErr) return json(500, { error: uErr.message });

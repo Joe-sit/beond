@@ -460,10 +460,22 @@ async function ensureUser(lineUserId: string): Promise<string> {
   const profile = await lineProfile(lineUserId);
   const { data, error } = await admin
     .from("users")
-    .insert({ line_user_id: lineUserId, display_name: profile.displayName, picture_url: profile.pictureUrl ?? null })
+    .insert({ line_user_id: lineUserId, display_name: profile.displayName, picture_url: profile.pictureUrl ?? null, line_friend: true, line_friend_at: new Date().toISOString() })
     .select("id").single();
   if (error) throw new Error(`insert user: ${error.message}`);
   return data.id;
+}
+
+// Record whether the user currently has beond added as a LINE friend (driven by
+// follow/unfollow webhook events). Best-effort — never blocks the event.
+async function setFriend(lineUserId: string, isFriend: boolean): Promise<void> {
+  try {
+    await admin.from("users")
+      .update({ line_friend: isFriend, line_friend_at: new Date().toISOString() })
+      .eq("line_user_id", lineUserId);
+  } catch (e) {
+    console.error("setFriend (skip):", (e as Error).message);
+  }
 }
 
 const SCAN_DAILY_LIMIT = 5;
@@ -498,7 +510,10 @@ async function bumpScanQuota(userId: string): Promise<void> {
 
 // ── Event handlers ──────────────────────────────────────────────────────────
 async function handleFollow(event: LineEvent): Promise<void> {
-  if (event.source?.userId) await ensureUser(event.source.userId);
+  if (event.source?.userId) {
+    await ensureUser(event.source.userId);
+    await setFriend(event.source.userId, true); // (re-)followed / unblocked
+  }
   if (event.replyToken) {
     await lineReply(event.replyToken, [
       {
@@ -864,6 +879,7 @@ Deno.serve(async (req) => {
   for (const event of events ?? []) {
     try {
       if (event.type === "follow") await handleFollow(event);
+      else if (event.type === "unfollow") { if (event.source?.userId) await setFriend(event.source.userId, false); }
       else if (event.type === "postback") await handlePostback(event);
       else if (event.type === "message" && event.message?.type === "image") await handleImage(event);
       else if (event.type === "message" && event.message?.type === "text") await handleText(event);

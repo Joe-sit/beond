@@ -4,6 +4,20 @@ import { supabase, supabaseEnabled } from "./supabase";
 // which owns the tax-bracket/income math). Each getter returns a sensible default
 // when logged out / mock so the UI never blocks.
 
+// Persistent LINE-friend status from the DB (set by the webhook follow/unfollow
+// events). null = unknown / logged out / mock. More reliable than the client
+// liff.getFriendship() snapshot because it survives outside the LIFF session.
+export async function getLineFriend(): Promise<boolean | null> {
+  if (!supabaseEnabled || !supabase) return null;
+  const { data: sess } = await supabase.auth.getSession();
+  const userId = sess.session?.user.app_metadata?.public_user_id as string | undefined;
+  if (!userId) return null;
+  const { data } = await supabase
+    .from("users").select("line_friend").eq("id", userId).maybeSingle();
+  const v = data?.line_friend;
+  return v === null || v === undefined ? null : Boolean(v);
+}
+
 // Whether the user wants the weekly LINE reminder of uncollected 50-ทวิ slips.
 // Defaults to true (opt-out) — matches the column default.
 export async function getSlipReminderEnabled(): Promise<boolean> {

@@ -8,7 +8,7 @@ import {
   IconShieldLock,
 } from "@tabler/icons-react";
 import { useT, useLang, setLang } from "../../lib/i18n";
-import { getSlipReminderEnabled, saveSlipReminderEnabled } from "../../lib/userSettings";
+import { getSlipReminderEnabled, saveSlipReminderEnabled, getLineFriend } from "../../lib/userSettings";
 import { getFriendFlag, LINE_OA_ADD_URL, type AuthProfile } from "../../lib/auth";
 
 // User settings page (sidebar "ตั้งค่า"). Three sections: Profile (read-only LINE
@@ -30,7 +30,13 @@ export default function SettingsView({
   useEffect(() => {
     let alive = true;
     getSlipReminderEnabled().then((v) => { if (alive) setRemind(v); });
-    getFriendFlag().then((v) => { if (alive) setFriend(v); });
+    // DB status (webhook-driven) is authoritative; fall back to the live LIFF
+    // snapshot when the DB has never seen a follow/unfollow for this user.
+    (async () => {
+      const db = await getLineFriend();
+      const v = db !== null ? db : await getFriendFlag();
+      if (alive) setFriend(v);
+    })();
     return () => { alive = false; };
   }, []);
 
