@@ -1,7 +1,7 @@
 import type { TaxDoc } from "../hooks/usePortfolio";
 
 // One 40(4) income row as the beond browser extension expects it (matches the
-// extension's `beond_bond_data` schema — see beond-extension/README.md). The
+// extension's `beond_bond_data` schema — see extension/README.md). The
 // extension autofills these into efiling.rd.go.th, one row per payer.
 export interface EfilingRow {
   issuer_name: string;

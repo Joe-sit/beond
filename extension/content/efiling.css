@@ -1,0 +1,140 @@
+/* Panel styling. Every rule is scoped under #beond-efiling-panel so nothing
+   leaks into the RD form, and the panel is fixed to the viewport corner so it
+   never reflows the page it sits on. */
+#beond-efiling-panel {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483647;
+  font-family: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+#beond-efiling-panel .beond-panel {
+  width: 300px;
+  max-height: 70vh;
+  overflow: auto;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.22);
+  color: #222;
+}
+
+#beond-efiling-panel .beond-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #43507f;
+  color: #fff;
+}
+
+#beond-efiling-panel .beond-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#beond-efiling-panel .beond-icon-btn {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  cursor: pointer;
+  line-height: 1;
+}
+
+#beond-efiling-panel .beond-collapsed .beond-body {
+  display: none;
+}
+
+#beond-efiling-panel .beond-body {
+  padding: 12px 14px 14px;
+}
+
+#beond-efiling-panel .beond-status,
+#beond-efiling-panel .beond-empty,
+#beond-efiling-panel .beond-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6b6b6b;
+}
+
+#beond-efiling-panel .beond-hint {
+  color: #43507f;
+  font-weight: 500;
+}
+
+#beond-efiling-panel .beond-row {
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 0.5px solid #e0e0e0;
+  border-radius: 12px;
+}
+
+#beond-efiling-panel .beond-row-name {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#beond-efiling-panel .beond-kv {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+#beond-efiling-panel .beond-k {
+  color: #8a8a8a;
+}
+
+#beond-efiling-panel .beond-v {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+#beond-efiling-panel .beond-copy {
+  border: 0;
+  border-radius: 999px;
+  background: #f0f2f7;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: #43507f;
+  cursor: pointer;
+}
+
+#beond-efiling-panel .beond-fill,
+#beond-efiling-panel .beond-map {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: #43507f;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  cursor: pointer;
+}
+
+#beond-efiling-panel .beond-map {
+  background: #f0f2f7;
+  color: #43507f;
+}
+
+#beond-efiling-panel .beond-fill:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+#beond-efiling-panel .beond-total {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+}

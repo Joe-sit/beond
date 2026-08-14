@@ -1,0 +1,75 @@
+body {
+  width: 290px;
+  margin: 0;
+  padding: 14px;
+  font-family: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #222;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+header strong {
+  color: #43507f;
+  font-size: 15px;
+}
+
+header span {
+  font-size: 11px;
+  color: #8a8a8a;
+}
+
+#status {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6b6b6b;
+}
+
+.row {
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 0.5px solid #e0e0e0;
+  border-radius: 12px;
+}
+
+.name {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+  color: #8a8a8a;
+}
+
+.kv .v {
+  color: #222;
+  font-variant-numeric: tabular-nums;
+}
+
+.total {
+  margin: 8px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+}
+
+footer {
+  margin-top: 12px;
+  text-align: center;
+}
+
+footer a {
+  font-size: 12px;
+  color: #43507f;
+}

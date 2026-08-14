@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "beond — e-Filing autofill",
+  "version": "0.1.0",
+  "description": "กรอกดอกเบี้ยหุ้นกู้ 40(4) ลง e-Filing จากสลิป 50 ทวิ ที่บันทึกไว้ในแอป beond",
+  "permissions": ["storage", "clipboardWrite"],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "beond",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://beond-dashboard.vercel.app/*",
+        "https://localhost/*",
+        "http://localhost/*"
+      ],
+      "js": ["content/bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://efiling.rd.go.th/*"],
+      "js": ["content/efiling.js"],
+      "css": ["content/efiling.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
