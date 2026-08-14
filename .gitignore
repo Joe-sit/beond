@@ -43,3 +43,6 @@ scratchpad/
 # skills installer copies (manifest is skills-lock.json)
 .agents/
 agent/
+
+# packaged extension builds
+beond-extension-*.zip
