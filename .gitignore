@@ -39,3 +39,7 @@ samples/
 # local temp
 .shot.mjs
 scratchpad/
+
+# skills installer copies (manifest is skills-lock.json)
+.agents/
+agent/
