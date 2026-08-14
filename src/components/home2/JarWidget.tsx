@@ -1,8 +1,9 @@
 import { useRef } from "react";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import { ContactShadows } from "@react-three/drei";
 import { Physics } from "@react-three/rapier";
-import JarGlass, { JarColliders, Coin, JAR_H } from "./Jar3D";
+import * as THREE from "three";
+import JarGlass, { JarColliders, JarSeal, Coin, JAR_H } from "./Jar3D";
 import { getIssuerLogoUrl } from "../../lib/issuerLogo";
 
 // Compact glass money jar for the tax panel corner: every confirmed slip this
@@ -14,7 +15,38 @@ const MAX_COINS = 60;
 
 type Spawn = [number, number, number];
 
-export default function JarWidget({ coins }: { coins: { id: string; symbol: string }[] }) {
+// Eases the orthographic camera toward a target zoom. Zooming the CAMERA is the
+// only way to scale this scene up — CSS-scaling the canvas wrapper would leave
+// r3f's frustum measured at the old size and crop the jar.
+function CameraZoom({ target }: { target: number }) {
+  useFrame((state, delta) => {
+    const cam = state.camera as THREE.OrthographicCamera;
+    if (Math.abs(cam.zoom - target) < 0.02) return;
+    cam.zoom = THREE.MathUtils.damp(cam.zoom, target, 5, delta);
+    cam.updateProjectionMatrix();
+  });
+  return null;
+}
+
+export default function JarWidget({
+  coins,
+  sealed = false,
+  zoom = 38,
+  className = "h-80 w-60",
+}: {
+  coins: { id: string; symbol: string }[];
+  // True once this year's rows have been sent to e-Filing — caps the jar with
+  // a lid + stamps an e-Filing sticker on it, so the "sent" state reads at a
+  // glance without another line of text.
+  sealed?: boolean;
+  // Camera zoom to ease toward. Raised while the jar is on the celebration
+  // stage, so the SAME jar grows instead of a second one being spun up.
+  zoom?: number;
+  // Canvas box. Defaults to its own fixed size (the home hero drops it into an
+  // `absolute` wrapper that carries no dimensions of its own); the year panel
+  // passes h-full/w-full so the jar can be flown by resizing its container.
+  className?: string;
+}) {
   const shown = coins.length > MAX_COINS ? coins.slice(-MAX_COINS) : coins;
 
   // Freeze each coin's spawn position the FIRST time we see its id. rapier
@@ -41,8 +73,9 @@ export default function JarWidget({ coins }: { coins: { id: string; symbol: stri
   });
 
   return (
-    <div className="pointer-events-none h-80 w-60">
-      <Canvas orthographic camera={{ position: [5, 5, 5], zoom: 38 }} className="h-full! w-full!">
+    <div className={`pointer-events-none relative ${className}`}>
+      <Canvas orthographic camera={{ position: [5, 5, 5], zoom }} className="h-full! w-full!">
+        <CameraZoom target={zoom} />
         <ambientLight intensity={0.9} />
         <directionalLight position={[3, 5, 4]} intensity={0.9} />
         <Physics gravity={[0, -9.81, 0]} timeStep={1 / 144} numSolverIterations={28}>
@@ -52,6 +85,9 @@ export default function JarWidget({ coins }: { coins: { id: string; symbol: stri
           ))}
         </Physics>
         <JarGlass />
+        {/* Sent-to-e-Filing seal — 3D lid + sticker, in-scene so they share the
+            jar's isometric projection. */}
+        <JarSeal active={sealed} />
         <ContactShadows position={[0, -JAR_H / 2 - 0.02, 0]} opacity={0.14} scale={6} blur={3} far={3} />
       </Canvas>
     </div>

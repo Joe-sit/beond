@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { toast } from "@heroui/react";
-import { IconInfoCircle, IconCheck, IconX, IconPencil, IconAlertTriangle } from "@tabler/icons-react";
-import { verifyTaxId } from "../../lib/verifyTaxId";
-import { matchConfirmedPayouts, notifyPortfolioChanged, useHoldings, useTimeline, useViewedYear, currentTaxYearBE, type TaxDoc } from "../../hooks/usePortfolio";
-import { supabase } from "../../lib/supabase";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toast, Select, ListBox } from "@heroui/react";
+import { AnimatePresence, motion } from "motion/react";
+import { IconCheck, IconAlertTriangle, IconFileText } from "@tabler/icons-react";
+import { matchConfirmedPayouts, useTimeline, useViewedYear, currentTaxYearBE, type TaxDoc } from "../../hooks/usePortfolio";
 import {
   buildEfilingRows,
   countUnfilable,
@@ -12,6 +11,8 @@ import {
 } from "../../lib/efilingSync";
 import CoinWall, { type CoinItem } from "./CoinWall";
 import JarWidget from "./JarWidget";
+import EfilingSealOverlay, { SEAL_AT } from "./EfilingSealOverlay";
+import TaxReportPrint from "./TaxReportPrint";
 import { getIssuerLogoUrl, issuerName } from "../../lib/issuerLogo";
 
 const fmtTHB = (n: number) =>
@@ -20,14 +21,13 @@ const fmtTHB = (n: number) =>
 // The RD e-Filing site the extension autofills, and the beond extension's
 // Chrome Web Store listing (TODO: real id once published — see backlog item 3).
 const EFILING_URL = "https://efiling.rd.go.th/rd-cms/";
-const CHROME_STORE_URL = "https://chromewebstore.google.com/"; // TODO: /detail/<beond-ext-id>
 
-// 13-digit tax id → 0-0000-00000-00-0 for display.
-const fmtTaxId = (id: string) => {
-  const d = id.replace(/\D/g, "");
-  if (d.length !== 13) return id;
-  return `${d[0]}-${d.slice(1, 5)}-${d.slice(5, 10)}-${d.slice(10, 12)}-${d[12]}`;
-};
+// Centre-stage box the jar flies to during the seal celebration, and the camera
+// zoom that fills it (the panel docks at 38).
+const STAGE_W = 420;
+const STAGE_H = 520;
+const STAGE_ZOOM = 76;
+const CHROME_STORE_URL = "https://chromewebstore.google.com/"; // TODO: /detail/<beond-ext-id>
 
 // Full Thai month name (as the timeline stores it) → short label for the coin
 // calendar slots.
@@ -53,19 +53,7 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
   // Expected coupon payouts across the whole timeline — the ceiling of what's
   // collectable. A confirmed slip matched to a payout = "collected".
   const { months } = useTimeline();
-  const { holdings } = useHoldings();
   const matched = useMemo(() => matchConfirmedPayouts(months, docs), [months, docs]);
-
-  // Canonical payer id per bond symbol (bonds.payer_tax_id) + the bond id so it
-  // can be edited in place. Held bonds only; deleted ones fall back to the OCR
-  // value from the slip.
-  const bondBySymbol = useMemo(() => {
-    const m = new Map<string, { bondId: string; issuer: string; taxId: string | null; verified: boolean; verifiedName: string | null }>();
-    for (const h of holdings)
-      if (!m.has(h.symbol))
-        m.set(h.symbol, { bondId: h.bondId, issuer: h.issuer, taxId: h.payerTaxId, verified: h.payerTaxIdVerified, verifiedName: h.payerVerifiedName });
-    return m;
-  }, [holdings]);
 
   // Years with either an expected payout (BE string on the month) or a slip.
   // Newest first.
@@ -111,12 +99,10 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
     if (year == null) return [];
     const beY = String(year);
     const out: CoinItem[] = [];
-    const usedDocIds = new Set<string>();
     for (const m of months) {
       if (m.year !== beY) continue;
       for (const p of m.payouts) {
         const doc = matched.get(p.id);
-        if (doc) usedDocIds.add(doc.id);
         out.push({
           id: p.id,
           symbol: p.symbol,
@@ -128,23 +114,8 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
         });
       }
     }
-    // Confirmed slips with no payout in the timeline (bond deleted, or a slip
-    // ahead of the schedule) — still show them as collected coins so the year's
-    // collection isn't lost.
-    for (const d of docs) {
-      if (d.taxYear !== year || d.status !== "confirmed" || usedDocIds.has(d.id)) continue;
-      out.push({
-        id: d.id,
-        symbol: d.symbol ?? "—",
-        issuer: d.payerName ?? "—",
-        monthLabel: d.payDate ? THAI_MONTHS_ABBR[new Date(d.payDate).getMonth()] : "",
-        collected: true,
-        wht: d.whtAmount ?? 0,
-        gross: d.grossAmount ?? 0,
-      });
-    }
     return out;
-  }, [months, matched, year, docs]);
+  }, [months, matched, year]);
 
   // Per-bond groups (Figma 1090:3553): each bond gets its own header + coin
   // panel + a claimable-tax total. `claimable` = WHT on the slips actually
@@ -166,18 +137,6 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
     () => coins.filter((c) => c.collected).map((c) => ({ id: c.id, symbol: c.symbol })),
     [coins],
   );
-  // Payer 13-digit tax id per bond symbol (from confirmed slips) — shown under
-  // the symbol in each group header.
-  const taxIdBySymbol = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const d of docs) {
-      if (!d.symbol || map.has(d.symbol)) continue;
-      const id = (d.payerTaxId ?? "").replace(/\D/g, "");
-      if (id.length === 13) map.set(d.symbol, id);
-    }
-    return map;
-  }, [docs]);
-
   const totalSlips = coins.length;
   const collectedSlips = jarTokens.length;
   const claimableTotal = useMemo(
@@ -199,6 +158,11 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
   const [hasExt, setHasExt] = useState<boolean | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [synced, setSynced] = useState(false);
+  // Seal celebration. `celebrate` puts the jar on the centre stage; `sealed`
+  // starts the lid + sticker, held back until the jar has finished flying so the
+  // two motions don't fight each other.
+  const [celebrate, setCelebrate] = useState(false);
+  const [sealed, setSealed] = useState(false);
   const recheckExt = () => { setHasExt(null); detectExtension().then(setHasExt); };
   useEffect(() => {
     detectExtension().then(setHasExt);
@@ -206,13 +170,68 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
   // A fresh set of rows (year change / edits) invalidates a previous sync.
   useEffect(() => { setSynced(false); }, [rows]);
 
+  // Where the jar sits in the side panel. The jar itself lives in a fixed layer
+  // (so it can fly to the centre without ever remounting — a remount would drop
+  // the coin pile and reset the WebGL context); this measured rect is the
+  // "docked" target it animates back to.
+  const slotRef = useRef<HTMLDivElement>(null);
+  const [slot, setSlot] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
+  useEffect(() => {
+    const el = slotRef.current;
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setSlot({ top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => { ro.disconnect(); window.removeEventListener("resize", measure); };
+  }, []);
+
+  // Export PDF — mount the printable report, let the browser lay it out (and
+  // settle webfonts), then open the print dialog where the user picks "Save as
+  // PDF". Unmounted again once printing ends so it never costs anything on
+  // screen. `onafterprint` doesn't fire in every browser, hence the fallback.
+  const [printing, setPrinting] = useState(false);
+  useEffect(() => {
+    if (!printing) return;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      setPrinting(false);
+    };
+    window.addEventListener("afterprint", finish);
+    const raf = requestAnimationFrame(() => {
+      // Two frames + a beat: the portal must be painted before print snapshots it.
+      setTimeout(() => {
+        window.print();
+        setTimeout(finish, 800);
+      }, 120);
+    });
+    return () => {
+      window.removeEventListener("afterprint", finish);
+      cancelAnimationFrame(raf);
+    };
+  }, [printing]);
+  const printReport = () => {
+    if (!yearDocs.length) return;
+    setPrinting(true);
+  };
+
   const onSync = async () => {
     if (!rows.length) return;
     setSyncing(true);
     const ok = await syncToExtension(rows);
     setSyncing(false);
-    if (ok) { setSynced(true); toast.success(`ส่ง ${rows.length} รายการเข้า e-Filing แล้ว`); }
-    else toast.danger("ส่งไม่สำเร็จ — ตรวจสอบ extension");
+    if (!ok) { toast.danger("ส่งไม่สำเร็จ — ตรวจสอบ extension"); return; }
+    setSynced(true);
+    setCelebrate(true);
+    // Beat 2 of the celebration — the jar has landed, now seal it. Shares the
+    // overlay's timeline so the lid drops exactly as the caption changes.
+    setTimeout(() => setSealed(true), SEAL_AT);
   };
 
   return (
@@ -224,19 +243,36 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
           <p className="text-sm text-ink/60">สรุปภาษีประจำปี</p>
           <h2 className="text-2xl font-medium text-ink">การสะสมสลิปประจำปี {year}</h2>
         </div>
+        <div className="flex shrink-0 items-center gap-2">
+        <button
+          onClick={printReport}
+          disabled={!yearDocs.length}
+          className="flex items-center gap-2 rounded-xl border border-line bg-white px-3 py-2 text-sm font-medium text-ink transition hover:bg-black/5 disabled:opacity-40 disabled:hover:bg-white"
+          title={yearDocs.length ? "บันทึกเป็น PDF หรือสั่งพิมพ์" : "ยังไม่มีสลิปในปีนี้"}
+        >
+          <IconFileText size={18} /> PDF
+        </button>
         {years.length > 0 && (
-          <select
-            value={year ?? ""}
-            onChange={(e) => setYear(Number(e.target.value))}
-            className="rounded-xl border border-line bg-white px-3 py-2 text-sm text-ink"
+          <Select
+            selectedKey={year != null ? String(year) : null}
+            onSelectionChange={(k) => k != null && setYear(Number(k))}
           >
-            {years.map((y) => (
-              <option key={y} value={y}>
-                ปีภาษี {y}
-              </option>
-            ))}
-          </select>
+            <Select.Trigger className="flex min-w-32 items-center justify-between gap-2 rounded-xl border border-line bg-white px-3 py-2 text-sm text-ink">
+              <Select.Value />
+              <Select.Indicator />
+            </Select.Trigger>
+            <Select.Popover>
+              <ListBox>
+                {years.map((y) => (
+                  <ListBox.Item key={y} id={String(y)}>
+                    ปีภาษี {y}
+                  </ListBox.Item>
+                ))}
+              </ListBox>
+            </Select.Popover>
+          </Select>
         )}
+        </div>
       </div>
 
       {/* Readiness warnings */}
@@ -247,41 +283,6 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
         </div>
       )}
 
-      {/* สรุปรายการที่จะกรอก e-Filing — the EXACT 40(4) rows the extension pushes
-          into efiling.rd.go.th, one per payer (coupons from a payer summed). This
-          is the "what will be filled" preview the user reviews before sending. */}
-      {rows.length > 0 && (
-        <div className="shrink-0 overflow-hidden rounded-2xl border border-line">
-          <div className="flex items-center justify-between gap-2 bg-[#f5f5f5] px-5 py-3">
-            <p className="text-base font-medium text-ink">รายการที่จะกรอก e-Filing</p>
-            <span className="rounded-full bg-brand-blue/10 px-2.5 py-1 text-xs font-medium text-brand-blue">
-              40(4) · {rows.length} ผู้จ่าย
-            </span>
-          </div>
-          {/* Column headers */}
-          <div className="flex items-center gap-3 border-b border-black/5 px-5 py-2 text-xs text-ink/50">
-            <span className="min-w-0 flex-1">ผู้จ่ายเงินได้ / เลข 13 หลัก</span>
-            <span className="w-28 shrink-0 text-right">เงินได้</span>
-            <span className="w-28 shrink-0 text-right">ภาษีหัก ณ ที่จ่าย</span>
-          </div>
-          {rows.map((r) => (
-            <div key={r.issuer_tax_id} className="flex items-center gap-3 border-b border-black/5 px-5 py-3 last:border-0">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-ink">{r.issuer_name}</p>
-                <p className="font-nunito text-xs text-ink/50">{fmtTaxId(r.issuer_tax_id)}</p>
-              </div>
-              <span className="w-28 shrink-0 text-right font-nunito text-sm text-ink">฿{fmtTHB(r.gross_interest)}</span>
-              <span className="w-28 shrink-0 text-right font-nunito text-sm text-ink">฿{fmtTHB(r.wht_amount)}</span>
-            </div>
-          ))}
-          {/* Totals row */}
-          <div className="flex items-center gap-3 bg-[#f5f5f5] px-5 py-3 text-sm font-medium text-ink">
-            <span className="min-w-0 flex-1">รวม</span>
-            <span className="w-28 shrink-0 text-right font-nunito">฿{fmtTHB(rows.reduce((s, r) => s + r.gross_interest, 0))}</span>
-            <span className="w-28 shrink-0 text-right font-nunito text-[#2E8B57]">฿{fmtTHB(rows.reduce((s, r) => s + r.wht_amount, 0))}</span>
-          </div>
-        </div>
-      )}
 
       {/* Per-bond collection groups (Figma 1090:3553): a header (symbol + issuer
           + logo) over a gray panel of that bond's coins, with the claimable-tax
@@ -299,14 +300,7 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
               <div className="flex items-center justify-between gap-4 bg-white px-6 py-4">
                 <div className="flex min-w-0 flex-col gap-1">
                   <p className="truncate text-2xl font-medium text-ink">{g.symbol}</p>
-                  <PayerTaxIdField
-                    issuer={issuerName(g.symbol, g.issuer)}
-                    symbol={g.symbol}
-                    bondId={bondBySymbol.get(g.symbol)?.bondId ?? null}
-                    value={bondBySymbol.get(g.symbol)?.taxId ?? taxIdBySymbol.get(g.symbol) ?? null}
-                    verified={bondBySymbol.get(g.symbol)?.verified ?? false}
-                    verifiedName={bondBySymbol.get(g.symbol)?.verifiedName ?? null}
-                  />
+                  <p className="truncate text-sm text-ink/50">{issuerName(g.symbol, g.issuer)}</p>
                 </div>
                 <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-black/10 bg-white">
                   {logo ? (
@@ -337,9 +331,9 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
         + the e-Filing sync action. */}
     <aside className="flex h-full w-[300px] shrink-0 flex-col overflow-hidden rounded-3xl bg-white p-6">
       <p className="shrink-0 text-sm text-ink/60">ขวดสะสมสลิปปี {year}</p>
-      <div className="relative min-h-0 flex-1">
-        <JarWidget coins={jarTokens} />
-      </div>
+      {/* Reserved space only — the jar is rendered in the fixed layer below so
+          it can fly to the celebration stage without remounting. */}
+      <div ref={slotRef} className="relative min-h-0 flex-1" />
       <div className="shrink-0 space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-sm text-ink/60">เก็บแล้ว</span>
@@ -430,133 +424,53 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
         )}
       </div>
     </aside>
+
+    {/* Printable report — hidden on screen, swapped in by the print stylesheet. */}
+    {printing && (
+      <TaxReportPrint
+        year={year}
+        rows={rows}
+        docs={yearDocs.filter((d) => d.status === "confirmed")}
+        unfilable={unfilable}
+      />
+    )}
+
+    {/* Sent-to-e-Filing celebration — backdrop + chrome only. */}
+    <AnimatePresence>
+      {celebrate && (
+        <EfilingSealOverlay rowCount={rows.length} year={year} onDone={() => setCelebrate(false)} />
+      )}
+    </AnimatePresence>
+
+    {/* THE jar — one instance for the whole view, parked over its panel slot and
+        flown to the centre stage for the celebration. Animating top/left/width/
+        height (never `transform: scale`) keeps r3f's ResizeObserver in the loop,
+        so the canvas re-measures as it grows instead of rendering cropped. */}
+    {slot && (
+      <motion.div
+        className="pointer-events-none fixed z-[131]"
+        initial={false}
+        animate={
+          celebrate
+            ? {
+                top: `calc(50% - ${STAGE_H / 2}px)`,
+                left: `calc(50% - ${STAGE_W / 2}px)`,
+                width: STAGE_W,
+                height: STAGE_H,
+              }
+            : { top: slot.top, left: slot.left, width: slot.width, height: slot.height }
+        }
+        transition={{ type: "spring", stiffness: 80, damping: 20, mass: 1 }}
+      >
+        <JarWidget
+          coins={jarTokens}
+          sealed={sealed || synced}
+          zoom={celebrate ? STAGE_ZOOM : 38}
+          className="h-full w-full"
+        />
+      </motion.div>
+    )}
     </div>
   );
 }
 
-// Payer 13-digit tax id shown under the bond symbol, editable in place when the
-// bond is still held (writes bonds.payer_tax_id). Also auto-filled by the 50-ทวิ
-// OCR; this is the manual override. No bondId (deleted bond) → read-only.
-function PayerTaxIdField({
-  issuer,
-  symbol,
-  bondId,
-  value,
-  verified,
-  verifiedName,
-}: {
-  issuer: string;
-  symbol: string;
-  bondId: string | null;
-  value: string | null;
-  verified: boolean;
-  verifiedName: string | null;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const startEdit = () => {
-    // Guard verified values — they came from an OCR slip + passed DBD. Warn
-    // before letting the user overwrite one by hand, so a careless edit can't
-    // replace a confirmed number with a wrong one.
-    if (verified && !window.confirm("เลขนี้ยืนยันแล้วจาก DBD และสลิป 50-ทวิ (OCR) — การแก้ไขอาจทำให้ข้อมูลผิด ยืนยันที่จะแก้ไข?")) return;
-    setDraft((value ?? "").replace(/\D/g, ""));
-    setEditing(true);
-  };
-
-  const save = async () => {
-    if (!bondId || !supabase || saving) return;
-    const digits = draft.replace(/\D/g, "");
-    if (digits.length && digits.length !== 13) return; // 13 digits or clear
-    setSaving(true);
-    // Write the raw value as UNVERIFIED first; verification may upgrade it.
-    const { error } = await supabase
-      .from("bonds")
-      .update({ payer_tax_id: digits || null, payer_tax_id_verified: false, payer_verified_name: null })
-      .eq("id", bondId);
-    if (error) {
-      setSaving(false);
-      toast.danger(`บันทึกไม่สำเร็จ: ${error.message}`);
-      return;
-    }
-    // Verify against DBD — a match upgrades to verified + propagates issuer-wide.
-    if (digits.length === 13) {
-      const res = await verifyTaxId(digits, issuer, symbol);
-      if (res.verified) toast.success(`ยืนยันแล้ว: ${res.officialName ?? ""}`);
-      else if (res.officialName) toast.danger(`เลขนี้เป็นของ "${res.officialName}" ไม่ตรงกับผู้ออก — โปรดตรวจสอบ`);
-      else toast.danger("ยืนยันกับ DBD ไม่ได้ — บันทึกไว้แบบยังไม่ยืนยัน");
-    }
-    setSaving(false);
-    notifyPortfolioChanged();
-    setEditing(false);
-  };
-
-  if (editing) {
-    return (
-      <div className="flex items-center gap-1.5">
-        <input
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value.replace(/\D/g, "").slice(0, 13))}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") save();
-            if (e.key === "Escape") setEditing(false);
-          }}
-          inputMode="numeric"
-          placeholder="เลข 13 หลัก"
-          className="w-44 rounded-lg border border-black/15 px-2 py-1 font-nunito text-sm outline-none focus:border-brand-blue"
-        />
-        <button onClick={save} disabled={saving} className="rounded-md p-1 text-[#3FA35B] transition hover:bg-black/5">
-          <IconCheck size={16} />
-        </button>
-        <button onClick={() => setEditing(false)} className="rounded-md p-1 text-ink/40 transition hover:bg-black/5">
-          <IconX size={16} />
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex min-w-0 flex-col">
-      <span className="flex items-center gap-1 text-xs text-ink/50">
-        เลขผู้จ่ายเงินได้
-        <IconInfoCircle
-          size={13}
-          className="cursor-help text-ink/40"
-          title="เลขประจำตัวผู้เสียภาษีอากรของผู้จ่ายเงินได้ ตามหนังสือรับรองการหัก ณ ที่จ่าย"
-        />
-      </span>
-      <span className="flex items-center gap-1.5">
-        <span className="truncate font-nunito text-base text-ink/70">
-          {value ? fmtTaxId(value) : issuer}
-        </span>
-        {value && verified && (
-          <span
-            className="flex shrink-0 items-center gap-0.5 rounded-full bg-[#E7F5EC] px-1.5 py-0.5 text-[11px] font-medium text-[#2E8B57]"
-            title={verifiedName ? `ยืนยันกับ DBD: ${verifiedName}` : "ยืนยันกับ DBD แล้ว"}
-          >
-            <IconCheck size={12} /> ยืนยันแล้ว
-          </span>
-        )}
-        {value && !verified && (
-          <span
-            className="flex shrink-0 items-center gap-0.5 rounded-full bg-[#FBEEDC] px-1.5 py-0.5 text-[11px] font-medium text-[#B7791F]"
-            title="ยังไม่ยืนยันกับ DBD — โปรดตรวจสอบก่อนยื่น"
-          >
-            <IconAlertTriangle size={12} /> ยังไม่ยืนยัน
-          </span>
-        )}
-        {bondId && (
-          <button
-            onClick={startEdit}
-            aria-label="แก้ไขเลขผู้จ่ายเงินได้"
-            className="shrink-0 rounded-md p-0.5 text-ink/40 transition hover:bg-black/5 hover:text-ink/70"
-          >
-            <IconPencil size={14} />
-          </button>
-        )}
-      </span>
-    </div>
-  );
-}

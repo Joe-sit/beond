@@ -396,3 +396,42 @@ button[data-disabled="true"],
 [data-disabled="true"] {
   cursor: not-allowed;
 }
+
+/* ── Printable year-end report ────────────────────────────────────────────────
+   TaxReportPrint portals #print-root into <body>. It stays hidden on screen and
+   takes the whole page when printing, so the browser's "Save as PDF" produces
+   the report and not a screenshot of the dashboard. Printing (rather than
+   generating a PDF in JS) is what keeps Thai text correct — the page's real
+   webfonts and the browser's own shaping do the work. */
+#print-root {
+  display: none;
+}
+@media print {
+  #root {
+    display: none !important;
+  }
+  #print-root {
+    display: block !important;
+  }
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+  /* Keep the table headers/fills the designer chose — Chrome drops backgrounds
+     in print unless asked to keep them — but drop the app's cream page colour,
+     which would otherwise flood every sheet. */
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    background: #fff !important;
+  }
+  table {
+    page-break-inside: auto;
+  }
+  tr {
+    page-break-inside: avoid;
+  }
+  thead {
+    display: table-header-group;
+  }
+}
