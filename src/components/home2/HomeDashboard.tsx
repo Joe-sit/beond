@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useAnimationControls } from "motion/react";
-import { IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconInfoCircle, IconCheck, IconCircleDotted, IconRestore, IconLogout, IconSettings, IconPlus, IconHome, IconReportAnalytics, IconPuzzle, IconReceiptTax, IconShieldLock } from "@tabler/icons-react";
+import { IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconInfoCircle, IconCheck, IconCircleDotted, IconRestore, IconLogout, IconSettings, IconUser, IconPlus, IconHome, IconReportAnalytics, IconPuzzle, IconReceiptTax, IconShieldLock } from "@tabler/icons-react";
 import { toast, Toast } from "@heroui/react";
 import type { AuthProfile } from "../../lib/auth";
 import { useIsAdmin } from "../../lib/adminAccess";
@@ -39,6 +39,7 @@ import YearlySummaryView from "./YearlySummaryView";
 import SettingsView from "./SettingsView";
 import lineIcon from "../../assets/line-logo.webp";
 import { useT, useLang, setLang } from "../../lib/i18n";
+import { useIsDesktop, isDesktopNow } from "../../lib/useIsDesktop";
 import AddBondModal from "../AddBondModal";
 
 const fmtTHB = (n: number) => new Intl.NumberFormat("th-TH").format(Math.round(n));
@@ -89,6 +90,7 @@ const COLLECT_ACK_KEY = "beond:collectAck:v2"; // v2 drops the old seed-everythi
 // Once the user skips the cinematic intro, remember it so it never replays until
 // this cache is cleared.
 const INTRO_SKIP_KEY = "beond:introSkipped:v1";
+
 const introAlreadySkipped = () => {
   try {
     return localStorage.getItem(INTRO_SKIP_KEY) === "1";
@@ -239,7 +241,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   // The folder card is hidden during the chart's intro, shown once it settles.
   // Seed from the skip cache: if the user skipped before, boot straight into the
   // settled slip view (no intro replay).
-  const skippedBefore = useRef(introAlreadySkipped());
+  // The cinematic intro is desktop-only: the mobile panel is a compact card in
+  // the page flow, with no room for the full-screen goal story or the cube tour.
+  // Booting mobile as "already skipped" lands it straight on the resting view.
+  const skippedBefore = useRef(introAlreadySkipped() || !isDesktopNow());
   const [chartSettled, setChartSettled] = useState(skippedBefore.current);
   // A cube is opened in the chart → hide the top folder/slip card behind the
   // month-detail view.
@@ -263,6 +268,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   };
   const FADE = "24px";
   const listMask = `linear-gradient(to bottom, ${edge.top ? "transparent" : "black"} 0, black ${FADE}, black calc(100% - ${FADE}), ${edge.bottom ? "transparent" : "black"} 100%)`;
+  // Layout mode. Several pieces here are desktop-only (the holdings list scrolls
+  // itself, the jar mounts) and can't be expressed as a Tailwind breakpoint
+  // because they're inline styles or whole subtrees we don't want mounted at all.
+  const isDesktop = useIsDesktop();
   // Recompute on holdings change + on resize so the bottom fade appears when the
   // list overflows even before the user scrolls.
   useLayoutEffect(() => {
@@ -614,15 +623,20 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
       {/* Main content column */}
       <div className="flex min-w-0 flex-1 flex-col lg:min-h-0 lg:overflow-hidden">
 
-      {/* Mobile top bar — brand + profile (sidebar is hidden < lg). */}
-      <header className="flex shrink-0 items-center justify-between border-b border-black/6 bg-white px-4 py-3 lg:hidden">
-        <span
-          className="block h-5 w-auto text-[#43507F] [&_svg]:h-full [&_svg]:w-auto"
-          style={{ ["--fill-0" as string]: "#43507F" }}
-          aria-label="beond"
-          dangerouslySetInnerHTML={{ __html: wordmark }}
-        />
-        <ProfileBadge profile={profile} onLogout={onLogout} />
+      {/* Mobile top bar — wordmark + tagline on the left, avatar only on the
+          right (Figma 1353:6268). The desktop sidebar carries the account name,
+          so repeating it here just crowds a 402px-wide bar. */}
+      <header className="flex shrink-0 items-center justify-between bg-white px-4 py-2 lg:hidden">
+        <span className="flex flex-col justify-center">
+          <span
+            className="block h-[18px] w-auto text-[#43507F] [&_svg]:h-full [&_svg]:w-auto"
+            style={{ ["--fill-0" as string]: "#43507F" }}
+            aria-label="beond"
+            dangerouslySetInnerHTML={{ __html: wordmark }}
+          />
+          <span className="text-[10px] font-medium text-[#43507F]/60">Bring Your Bonds Beyond</span>
+        </span>
+        <ProfileBadge profile={profile} onLogout={onLogout} avatarOnly />
       </header>
 
 
@@ -651,7 +665,9 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
           <YearlySummaryView docs={docs} />
         </main>
       ) : view === "tax_base" ? (
-        <main className="min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
+        /* `flex` so the card's h-full resolves against a definite height on
+           mobile, where the column is sized by min-h-dvh rather than h-dvh. */
+        <main className="flex min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
           <TaxBaseView rate={taxRate} wht={yearProgress.potentialWht} loading={loading} onSaved={(r) => setTaxRate(r)} />
         </main>
       ) : view === "settings" ? (
@@ -663,58 +679,63 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
         {/* LEFT column */}
         <div className="flex min-h-0 flex-col gap-4">
           {/* Portfolio value card */}
-          <section className="relative shrink-0 overflow-hidden rounded-3xl bg-white p-6">
+          <section className="relative shrink-0 overflow-hidden rounded-3xl bg-white p-4 lg:p-6">
+            {/* Title + level badge share one row (Figma 1353:6269) — on a 402px
+                screen a stacked badge pushes the value out of the card. */}
             <div className="flex items-start justify-between gap-2">
-              <p className="flex items-center gap-1.5 text-sm text-ink/80 lg:text-base">
+              <p className="flex items-center gap-1 whitespace-nowrap text-xs text-ink/60 lg:text-base lg:text-ink/80">
                 {t("portfolio_title")}
                 <button
                   onClick={() => setHideValue((v) => !v)}
                   aria-label={hideValue ? t("show_value") : t("hide_value")}
-                  className="rounded-full p-0.5 text-ink/40 transition hover:bg-[#F0F2F7] hover:text-ink/70"
+                  className="rounded-full p-0.5 text-[#43507F] transition hover:bg-[#F0F2F7] lg:text-ink/40 lg:hover:text-ink/70"
                 >
-                  {hideValue ? <IconEyeOff size={18} /> : <IconEye size={18} />}
+                  {hideValue ? <IconEyeOff size={16} /> : <IconEye size={16} />}
                 </button>
               </p>
               <button
                 onClick={() => setLevelModalOpen(true)}
                 aria-label={t("level_learn_more")}
-                className="flex items-center gap-1 rounded-full bg-[#F0F2F7] px-3 py-1 text-sm text-ink/80 transition hover:bg-[#E4E8EF]"
+                className="flex shrink-0 items-center gap-1 rounded-xl border border-black/10 px-2 py-1 text-xs text-ink/60 transition hover:bg-black/5 lg:rounded-full lg:border-0 lg:bg-[#F0F2F7] lg:px-3 lg:text-sm lg:text-ink/80 lg:hover:bg-[#E4E8EF]"
               >
-                {level.label} <IconInfoCircle size={16} className="text-ink/40" />
+                {level.label} <IconInfoCircle size={14} className="text-ink/40" />
               </button>
             </div>
             {loading ? (
-              <div className="mt-3 h-9 w-52 animate-pulse rounded-lg bg-black/10" />
+              <div className="mt-2 h-8 w-44 animate-pulse rounded-lg bg-black/10" />
             ) : (
-              <p className="mt-3 text-2xl font-medium text-ink lg:text-3xl">{hideValue ? "฿ ✱✱✱,✱✱✱" : `฿${fmtTHB(totalValue)}`}</p>
+              <p className="mt-2 text-2xl font-medium text-ink lg:mt-3 lg:text-3xl">{hideValue ? "฿ ✱✱✱,✱✱✱" : `฿${fmtTHB(totalValue)}`}</p>
             )}
-            <div className="mt-4 flex items-center gap-6">
+            <div className="mt-2 flex items-center gap-4 lg:mt-4 lg:gap-6">
               <div>
-                <p className="text-sm text-ink/60">{t("avg_coupon")}</p>
+                <p className="text-xs text-ink/60 lg:text-sm">{t("avg_coupon")}</p>
                 {loading ? (
-                  <div className="mt-1 h-7 w-16 animate-pulse rounded bg-black/10" />
+                  <div className="mt-1 h-6 w-16 animate-pulse rounded bg-black/10" />
                 ) : (
                   <p className="text-xl font-medium text-ink lg:text-2xl">{avgCoupon.toFixed(1)}%</p>
                 )}
               </div>
-              <span className="h-10 w-px bg-black/10" />
+              <span className="h-10 w-px rounded-full bg-black/10" />
               <div>
-                <p className="text-sm text-ink/60">{t("avg_remaining")}</p>
+                <p className="text-xs text-ink/60 lg:text-sm">{t("avg_remaining")}</p>
                 {loading ? (
-                  <div className="mt-1 h-7 w-24 animate-pulse rounded bg-black/10" />
+                  <div className="mt-1 h-6 w-24 animate-pulse rounded bg-black/10" />
                 ) : (
                   <p className="text-xl font-medium text-ink lg:text-2xl">{avgRemainingYears.toFixed(2)} {t("year_unit")}</p>
                 )}
               </div>
             </div>
-            <img src={level.mascot} alt="" aria-hidden className="pointer-events-none absolute right-2 bottom-2 hidden h-20 w-auto sm:block lg:right-4 lg:h-28" />
+            <img src={level.mascot} alt="" aria-hidden className="pointer-events-none absolute right-2 bottom-2 h-16 w-auto sm:h-20 lg:right-4 lg:h-28" />
           </section>
 
           <ProfileLevelModal open={levelModalOpen} onClose={() => setLevelModalOpen(false)} />
 
           {/* Holdings card — header (count + monthly) then a bordered list card.
               Figma node 962:2937. */}
-          <section className="relative flex min-h-[58vh] flex-col overflow-hidden rounded-3xl bg-white p-5 lg:min-h-0 lg:flex-1 lg:p-6">
+          {/* Mobile height follows the list (no min-height): a short portfolio
+              shouldn't leave a tall empty card. Desktop still stretches to fill
+              its column. */}
+          <section className="relative flex flex-col overflow-hidden rounded-3xl bg-white p-5 lg:min-h-0 lg:flex-1 lg:p-6">
             {/* Rolled paper tucked into the card's top-right corner (clipped) —
                 revealed with the rest of the add-bond art on button hover. */}
             <img
@@ -725,16 +746,16 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
               style={popStyle(addHover, 360)}
             />
             <div className="relative shrink-0">
-              <p className="text-base text-ink/80">{t("holdings_title")}</p>
+              <p className="text-xs text-ink/80 lg:text-base">{t("holdings_title")}</p>
               {loading ? (
                 <>
-                  <div className="mt-1 h-9 w-28 animate-pulse rounded-lg bg-black/10" />
-                  <div className="mt-2 h-5 w-44 animate-pulse rounded bg-black/10" />
+                  <div className="mt-1 h-8 w-28 animate-pulse rounded-lg bg-black/10" />
+                  <div className="mt-2 h-4 w-44 animate-pulse rounded bg-black/10" />
                 </>
               ) : (
                 <>
-                  <p className="mt-1 text-2xl font-medium text-ink lg:text-3xl">{holdings.length} {t("holdings_unit")}</p>
-                  <p className="mt-1 text-sm text-ink/80">{t("interest_per_month")}&nbsp; ~฿{fmtTHB2(monthly)}</p>
+                  <p className="mt-0.5 text-2xl font-medium text-ink lg:mt-1 lg:text-3xl">{holdings.length} {t("holdings_unit")}</p>
+                  <p className="mt-0.5 text-xs text-ink/80 lg:mt-1 lg:text-sm">{t("interest_per_month")}&nbsp; ~฿{fmtTHB2(monthly)}</p>
                 </>
               )}
 
@@ -755,22 +776,26 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
               onClick={() => setAddBondOpen(true)}
               onMouseEnter={() => setAddHover(true)}
               onMouseLeave={() => setAddHover(false)}
-              className="absolute bottom-full right-5 z-10 flex items-center gap-2 rounded-t-2xl border-[0.5px] border-b-0 border-[#d9d9d9] bg-white px-4 py-2.5 text-base font-medium text-ink transition hover:bg-[#F0F2F7]"
+              className="absolute bottom-full right-5 z-10 flex items-center gap-2 rounded-t-xl border-[0.5px] border-b-0 border-[#d9d9d9] bg-white px-6 py-2 text-xs font-medium text-ink transition hover:bg-[#F0F2F7] lg:rounded-t-2xl lg:px-4 lg:py-2.5 lg:text-base"
               style={{ marginBottom: -1 }}
             >
               {t("add_bond")}
-              <span className="flex size-6 items-center justify-center rounded-full border-[1.5px] border-current text-ink">
-                <IconPlus size={14} stroke={2.5} />
+              <span className="flex size-4 items-center justify-center rounded-full border-[1.5px] border-current lg:size-6 lg:text-ink">
+                <IconPlus size={10} stroke={2.5} className="lg:hidden" />
+                <IconPlus size={14} stroke={2.5} className="hidden lg:block" />
               </span>
             </button>
-            <div className="min-h-0 flex-1 overflow-hidden rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-1">
+            <div className="overflow-hidden rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-1 lg:min-h-0 lg:flex-1">
+              {/* Mobile: the list is as tall as its rows and the page scrolls.
+                  Desktop: the list itself scrolls inside a fixed-height column,
+                  with the edge-fade mask that tracks its scroll position. */}
               <ul
                 ref={listRef}
                 onScroll={onListScroll}
-                className="flex h-full flex-col overflow-y-auto px-3 py-1 scrollbar-none [&::-webkit-scrollbar]:hidden"
+                className="flex flex-col px-3 py-1 scrollbar-none lg:h-full lg:overflow-y-auto [&::-webkit-scrollbar]:hidden"
                 style={{
-                  WebkitMaskImage: listMask,
-                  maskImage: listMask,
+                  WebkitMaskImage: isDesktop ? listMask : undefined,
+                  maskImage: isDesktop ? listMask : undefined,
                 }}
               >
                 {loading &&
@@ -806,8 +831,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
                         <p className="truncate text-sm text-ink/80">{issuerName(h.symbol, h.issuer)}</p>
                       </div>
                     </div>
-                    {/* Hover a row → show invested value instead of coupon + rating. */}
-                    <div className="text-right">
+                    {/* Hover a row → show invested value instead of coupon +
+                        rating. Hidden on mobile: at 402px the symbol/issuer
+                        already fill the row and the extra column just crowds it. */}
+                    <div className="hidden text-right lg:block">
                       {hv ? (
                         <>
                           <p className="text-base font-medium text-ink">฿{fmtTHB(h.faceValue)}</p>
@@ -849,10 +876,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
         </div>
 
         {/* RIGHT blue panel */}
-        <section className="relative flex min-h-[70vh] flex-col overflow-hidden rounded-3xl bg-gradient-to-b from-[#779BC6] to-white p-4 lg:h-full lg:min-h-0 lg:p-6">
+        <section className="relative flex min-h-[640px] flex-col overflow-hidden rounded-3xl bg-gradient-to-b from-[#779BC6] to-white p-4 lg:h-full lg:min-h-0 lg:p-6">
           {/* IG-story style progress — one segment per intro chapter, filling over
-              its duration; fades out once the intro ends. */}
-          <IntroProgress chapter={chapter} chartSettled={chartSettled} />
+              its duration; fades out once the intro ends. Intro is desktop-only. */}
+          {isDesktop && <IntroProgress chapter={chapter} chartSettled={chartSettled} />}
           {/* Back button — panel top-left corner; shown while a cube is focused. */}
           <button
             onClick={() => cubeCloseRef.current?.()}
@@ -880,13 +907,19 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
               transition: "opacity 500ms ease, transform 600ms cubic-bezier(.34,1.2,.5,1)",
             }}
           >
-            {/* Tab row — pill + restore, spaced by the flex gap (no magic offset) */}
-            <div className="absolute bottom-full left-6 z-0 flex items-end gap-2">
-              <div className="flex items-center gap-2 rounded-t-2xl bg-white p-2 backdrop-blur">
+            {/* Tab row — pill + restore, spaced by the flex gap (no magic offset).
+                On mobile the month tab stretches the full card width and pushes
+                its chevrons to the edges (Figma 1353:6667); on desktop it stays a
+                compact folder-tab pill tucked against the card's left corner. */}
+            {/* Inset by the card's corner radius on both sides: a tab flush to the
+                card edge would sit over the rounded corner and leave a blue notch
+                where the two radii meet. */}
+            <div className="absolute inset-x-6 bottom-full z-0 flex items-end gap-2 lg:inset-x-auto lg:left-6">
+              <div className="flex flex-1 items-center justify-between gap-2 rounded-t-2xl bg-white p-2 backdrop-blur lg:flex-none lg:justify-start">
                 <button onClick={() => setMonthIdx((idx - 1 + payoutMonths.length) % payoutMonths.length)} aria-label={t("prev_month")} className="flex size-8 items-center justify-center rounded-full border border-black/10 text-ink transition hover:bg-[#F0F2F7]">
                   <IconChevronLeft size={22} />
                 </button>
-                <span className="min-w-[120px] text-center text-base font-medium text-ink">{month ? `${locMonth(month.month, lang)} ${locYear(month.year, lang)}` : folder.label}</span>
+                <span className="text-center text-base font-medium text-ink lg:min-w-[120px]">{month ? `${locMonth(month.month, lang)} ${locYear(month.year, lang)}` : folder.label}</span>
                 <button onClick={() => setMonthIdx((idx + 1) % payoutMonths.length)} aria-label={t("next_month")} className="flex size-8 items-center justify-center rounded-full border border-black/10 text-ink transition hover:bg-[#F0F2F7]">
                   <IconChevronRight size={22} />
                 </button>
@@ -914,13 +947,17 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             {/* Glass money jar — confirmed slips this year piled as issuer coins.
                 Mounted only once the card is actually revealed (chapter "slip"),
                 so the coins DROP as the card appears instead of falling unseen
-                during the intro. */}
-            <div ref={jarRef} className="pointer-events-none absolute -top-14 right-0 z-20 origin-top-right scale-[0.55] sm:scale-[0.65] lg:-top-20 lg:right-8 lg:scale-[0.82]">
-              {chapter === "slip" && <JarWidget coins={jarCoins} />}
-            </div>
+                during the intro. Desktop only: it's a WebGL canvas with a physics
+                world, far too heavy (and too cramped) for the 402px LIFF view. */}
+            {isDesktop && (
+              <div ref={jarRef} className="pointer-events-none absolute -top-14 right-8 z-20 origin-top-right scale-[0.82]">
+                {chapter === "slip" && <JarWidget coins={jarCoins} />}
+              </div>
+            )}
 
-            {/* Left content — kept clear of the jar on the right */}
-            <div className="relative z-10 max-w-[64%] lg:max-w-[58%]">
+            {/* Left content — full width on mobile (no jar to avoid), kept clear
+                of the jar on desktop. */}
+            <div className="relative z-10 lg:max-w-[58%]">
               <p className="text-sm text-ink/80">{t("slips_to_collect")}</p>
               {/* Fixed row height (= issuer-logo size) so months with 0 logos
                   don't shrink the row and shift the chart below. */}
@@ -1029,36 +1066,48 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             onViewMode={setViewMode}
             showWidgets={chapter === "slip"}
             start={chapter === "income"}
-            skip={introSkip}
+            // BuildingChart unmounts/remounts when the "home" view is left and
+            // returned to (annual/tax_base/settings are separate branches of the
+            // same ternary). Its grown/faced state resets on remount, but once
+            // the intro has already finished (chapter === "slip") `start` never
+            // flips true again — the growth effect would never fire and the
+            // chart would stay collapsed. Treat an already-finished intro as an
+            // implicit skip so a fresh mount snaps straight to the resting chart.
+            skip={introSkip || chapter === "slip"}
             taxRate={taxRate}
             income={income}
             resizing={layoutOpening}
           />
           </div>
 
-          {/* Tax goal chapter — the opener; hands off to the income cubes. */}
-          <div
-            className="pointer-events-none absolute inset-0 z-20"
-            style={{ opacity: chapter === "goal" ? 1 : 0, transition: "opacity 500ms ease" }}
-          >
-            <TaxStoryChapter
-              data={taxStory}
-              active={chapter === "goal"}
-              // Only advance goal→income. After a skip the chapter is already
-              // "slip"; the goal chapter's own timeline still fires onDone later,
-              // and without this guard it would snap the intro back on.
-              onDone={() => setChapter((c) => (c === "goal" ? "income" : c))}
-            />
-          </div>
+          {/* Tax goal chapter — the opener; hands off to the income cubes.
+              Desktop only, like the rest of the intro. */}
+          {isDesktop && (
+            <>
+              <div
+                className="pointer-events-none absolute inset-0 z-20"
+                style={{ opacity: chapter === "goal" ? 1 : 0, transition: "opacity 500ms ease" }}
+              >
+                <TaxStoryChapter
+                  data={taxStory}
+                  active={chapter === "goal"}
+                  // Only advance goal→income. After a skip the chapter is already
+                  // "slip"; the goal chapter's own timeline still fires onDone later,
+                  // and without this guard it would snap the intro back on.
+                  onDone={() => setChapter((c) => (c === "goal" ? "income" : c))}
+                />
+              </div>
 
-          {/* Skip the intro cinematic → jump to the resting slip view. */}
-          <button
-            onClick={skipIntro}
-            className="absolute right-6 top-6 z-30 rounded-full border border-black/10 bg-white/85 px-4 py-1.5 text-sm font-medium text-ink/70 backdrop-blur transition hover:bg-white hover:text-ink"
-            style={{ opacity: chapter !== "slip" ? 1 : 0, pointerEvents: chapter !== "slip" ? "auto" : "none", transition: "opacity 300ms ease" }}
-          >
-            {t("skip_intro")} ›
-          </button>
+              {/* Skip the intro cinematic → jump to the resting slip view. */}
+              <button
+                onClick={skipIntro}
+                className="absolute right-6 top-6 z-30 rounded-full border border-black/10 bg-white/85 px-4 py-1.5 text-sm font-medium text-ink/70 backdrop-blur transition hover:bg-white hover:text-ink"
+                style={{ opacity: chapter !== "slip" ? 1 : 0, pointerEvents: chapter !== "slip" ? "auto" : "none", transition: "opacity 300ms ease" }}
+              >
+                {t("skip_intro")} ›
+              </button>
+            </>
+          )}
         </section>
       </main>
       )}
@@ -1076,12 +1125,12 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
       </div>
 
       {/* Mobile bottom tab nav — replaces the desktop sidebar < lg. */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex shrink-0 items-stretch border-t border-black/8 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex shrink-0 items-stretch justify-between bg-white px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-4px_12px_rgba(0,0,0,0.12)] lg:hidden">
         {([
           { v: "home", icon: IconHome, label: t("nav_home") },
           { v: "tax_base", icon: IconReceiptTax, label: t("nav_tax_base") },
           { v: "annual", icon: IconReportAnalytics, label: t("nav_annual") },
-          { v: "settings", icon: IconSettings, label: t("nav_settings") },
+          { v: "settings", icon: IconUser, label: t("nav_me") },
         ] as const).map(({ v, icon: Icon, label }) => {
           const active = view === v && !addBondOpen && !editHolding;
           return (
@@ -1089,9 +1138,9 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
               key={v}
               onClick={() => navTo(v)}
               aria-current={active ? "page" : undefined}
-              className={`flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px] font-medium transition ${active ? "text-[#43507F]" : "text-ink/45"}`}
+              className={`flex flex-col items-center justify-center gap-1 rounded-2xl px-3 py-2 text-xs font-semibold transition ${active ? "text-[#43507F]" : "text-[#4d4d4d]"}`}
             >
-              <Icon size={22} stroke={1.75} />
+              <Icon size={24} stroke={1.75} />
               <span className="max-w-full truncate">{label}</span>
             </button>
           );
@@ -1106,7 +1155,15 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
 }
 
 // Header avatar → click opens a dropdown with profile info, settings, logout.
-function ProfileBadge({ profile, onLogout }: { profile: AuthProfile; onLogout?: () => void }) {
+function ProfileBadge({
+  profile,
+  onLogout,
+  avatarOnly = false,
+}: {
+  profile: AuthProfile;
+  onLogout?: () => void;
+  avatarOnly?: boolean; // mobile top bar — the name/subtitle don't fit at 402px
+}) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const name = profile.displayName ?? t("user");
@@ -1127,13 +1184,17 @@ function ProfileBadge({ profile, onLogout }: { profile: AuthProfile; onLogout?: 
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label={t("profile")}
-        className="flex w-full items-center gap-3 rounded-2xl p-2 text-left transition hover:bg-black/5"
+        className={`flex items-center text-left transition hover:bg-black/5 ${
+          avatarOnly ? "rounded-full" : "w-full gap-3 rounded-2xl p-2"
+        }`}
       >
-        <Avatar size={40} />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-ink">{name}</p>
-          <p className="text-xs text-ink/50">{t("beond_account")}</p>
-        </div>
+        <Avatar size={avatarOnly ? 44 : 40} />
+        {!avatarOnly && (
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-ink">{name}</p>
+            <p className="text-xs text-ink/50">{t("beond_account")}</p>
+          </div>
+        )}
       </button>
 
       <AnimatePresence>
@@ -1146,7 +1207,11 @@ function ProfileBadge({ profile, onLogout }: { profile: AuthProfile; onLogout?: 
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.96 }}
               transition={{ type: "spring", stiffness: 340, damping: 30 }}
-              className="absolute bottom-full left-0 z-50 mb-2 w-64 origin-bottom-left overflow-hidden rounded-2xl border border-black/10 bg-white shadow-xl"
+              className={`absolute z-50 w-64 overflow-hidden rounded-2xl border border-black/10 bg-white shadow-xl ${
+                avatarOnly
+                  ? "right-0 top-full mt-2 origin-top-right" // mobile bar sits at the top → drop down
+                  : "bottom-full left-0 mb-2 origin-bottom-left" // sidebar sits at the bottom → drop up
+              }`}
             >
               <div className="flex items-center gap-3 border-b border-black/10 p-4">
                 <Avatar size={44} />
@@ -1421,24 +1486,26 @@ function BuildingChart({
   const cardMonth = focusMonth ?? lastFocusRef.current;
 
   return (
-    <div className="relative z-10 mt-8 flex-1">
+    // Floor the cube stage on mobile: the panel is sized by content there, and
+    // flex-1 alone leaves the chart a sliver once the folder card takes its share.
+    <div className="relative z-10 mt-8 min-h-[360px] flex-1 lg:min-h-0">
       {/* Year summary — absolute overlays so they never steal stage height:
           bars top-left. */}
       {/* View-mode toggle — sits where the period-income header used to be;
           revealed with the resting chart, hidden while a cube is focused. */}
       {viewMode && onViewMode && (
         <div
-          className="absolute left-6 flex -translate-y-full"
+          className="absolute inset-x-6 flex -translate-y-full lg:inset-x-auto lg:left-6"
           style={{ top: "2rem", zIndex: 120, opacity: showWidgets && focused == null ? 1 : 0, pointerEvents: showWidgets && focused == null ? "auto" : "none", transition: "opacity 500ms ease" }}
         >
           {/* Folder tab attached to the card's top edge — same look as the month
               pager tab (rounded top, no bottom border, flush onto the card). */}
-          <div className="flex items-center gap-1 rounded-t-2xl bg-white p-2 backdrop-blur">
+          <div className="flex flex-1 items-center gap-1 rounded-t-2xl bg-white p-2 backdrop-blur lg:flex-none">
             {([["quarter", t("view_quarter")], ["month", t("view_month")]] as const).map(([mode, label]) => (
               <button
                 key={mode}
                 onClick={() => onViewMode(mode)}
-                className={`rounded-full px-4 py-1 text-base font-medium transition ${
+                className={`flex-1 rounded-full px-4 py-1 text-base font-medium transition lg:flex-none ${
                   viewMode === mode ? "bg-[#43507F] text-white" : "text-ink/70 hover:bg-[#F0F2F7]"
                 }`}
               >
@@ -1450,13 +1517,14 @@ function BuildingChart({
       )}
 
       {/* Scan via LINE — same row as the view-mode tab, pinned to the card's
-          top-right edge. Shown with the resting chart. */}
+          top-right edge. Shown with the resting chart. Desktop only: in the LIFF
+          view the user is already inside LINE, so the deep link is noise. */}
       <a
         href="https://lin.ee/ZrSGHsj"
         target="_blank"
         rel="noopener noreferrer"
         aria-label={`${t("scan_via_line")} @085vmjoz`}
-        className="absolute right-6 flex -translate-y-full items-center gap-2 rounded-t-2xl bg-[#06C755] px-4 py-3 text-base font-medium text-white"
+        className="absolute right-6 hidden -translate-y-full items-center gap-2 rounded-t-2xl bg-[#06C755] px-4 py-3 text-base font-medium text-white lg:flex"
         style={{ top: "2rem", zIndex: 120, opacity: showWidgets && focused == null ? 1 : 0, pointerEvents: showWidgets && focused == null ? "auto" : "none", transition: "opacity 500ms ease" }}
       >
         <img src={lineIcon} alt="" className="size-6 rounded-md" />
@@ -1495,17 +1563,25 @@ function BuildingChart({
         ))}
       </motion.div>
 
-      {/* Baseline stage — fills the panel; the card reaches the bottom edge. */}
-      <div ref={stageRef} className="absolute inset-x-0 bottom-0 top-2">
-        {/* Card surface behind the resting cube chart — matches the month view's
-            white card so both view modes sit in the same framed panel. Quarter
-            (cube) mode only; hidden during the intro and while a cube is focused. */}
-        {viewMode !== "month" && (
-          <div
-            className="pointer-events-none absolute inset-x-0 bottom-0 top-6 rounded-3xl bg-white"
-            style={{ zIndex: 0, opacity: flat && focused == null ? 1 : 0, transition: "opacity 400ms ease" }}
-          />
-        )}
+      {/* Baseline stage — fills the panel; the card reaches the bottom edge.
+          On mobile the stage is wider than the viewport and swipes sideways: the
+          cubes fan out from a measured stage width, so squeezing 12 months into
+          402px would overlap them into an unreadable pile. */}
+      {/* Card surface behind the resting cube chart — matches the month view's
+          white card so both view modes sit in the same framed panel. Quarter
+          (cube) mode only; hidden during the intro and while a cube is focused.
+          Outside the scroller: it's the frame, so it must stay put (and keep its
+          rounded corners) while the cubes swipe past it. */}
+      {viewMode !== "month" && (
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 top-8 rounded-3xl bg-white"
+          style={{ zIndex: 0, opacity: flat && focused == null ? 1 : 0, transition: "opacity 400ms ease" }}
+        />
+      )}
+      {/* Scroller carries the same radius so the cubes are clipped to the card's
+          rounded corners instead of running square to the panel edge. */}
+      <div className="absolute inset-x-0 bottom-0 top-2 overflow-x-auto overscroll-x-contain rounded-3xl scrollbar-none lg:overflow-visible [&::-webkit-scrollbar]:hidden">
+      <div ref={stageRef} className="relative h-full min-w-[640px] lg:min-w-0">
         {/* Count axis — gridlines + "n ใบ" labels aligned to the cube unit
             height (each level = one stacked coupon). Anchored to the cube
             baseline (deck sits at translateY(-8)) so lines meet the cube tops.
@@ -1668,17 +1744,22 @@ function BuildingChart({
             );
           })}
 
-        {/* Month view — a flat 2D stacked bar chart (net coupon income per month)
-            in place of the 3D cube deck. Revealed with the resting chart. */}
-        {viewMode === "month" && (
-          <div
-            className="absolute inset-x-0 bottom-0 top-6 overflow-hidden"
-            style={{ zIndex: 40, opacity: showWidgets && focused == null ? 1 : 0, pointerEvents: showWidgets && focused == null ? "auto" : "none", transition: "opacity 400ms ease" }}
-          >
-            <InterestBarChart months={yearMs} fill />
-          </div>
-        )}
       </div>
+      </div>
+
+      {/* Month view — a flat 2D stacked bar chart (net coupon income per month)
+          in place of the 3D cube deck. Revealed with the resting chart. Sits
+          outside the scroller, like the quarter card: the bars fit any width, so
+          it stays put and keeps its rounded corners instead of riding the
+          640px-wide cube stage sideways. */}
+      {viewMode === "month" && (
+        <div
+          className="absolute inset-x-0 bottom-0 top-8 overflow-hidden rounded-3xl"
+          style={{ zIndex: 40, opacity: showWidgets && focused == null ? 1 : 0, pointerEvents: showWidgets && focused == null ? "auto" : "none", transition: "opacity 400ms ease" }}
+        >
+          <InterestBarChart months={yearMs} fill />
+        </div>
+      )}
 
       {/* Detail card — slides in on the RIGHT when a month is focused, listing
           that month's coupon payouts (one row per stacked cube) + tax summary. */}

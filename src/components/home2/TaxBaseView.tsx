@@ -4,6 +4,7 @@ import { TAX_BRACKETS, refundFromIncome, bracketIndexForIncome, marginalRateForI
 import { notifyPortfolioChanged } from "../../hooks/usePortfolio";
 import { useT } from "../../lib/i18n";
 import CashStairsScene from "./CashStairsScene";
+import { useIsDesktop } from "../../lib/useIsDesktop";
 
 const fmtTHB = (n: number) =>
   new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
@@ -19,6 +20,7 @@ const isRefund = (i: number) => TAX_BRACKETS[i].rate < 15;
 // much of the 15% WHT was over-withheld. Income auto-snaps to its bracket.
 export default function TaxBaseView({ wht, loading = false, onSaved }: { rate?: number; wht: number; loading?: boolean; onSaved: (r: number) => void }) {
   const t = useT();
+  const isDesktop = useIsDesktop();
   const [income, setIncome] = useState<number>(0);
   // Load the saved income (per-user, DB) on mount so it syncs across devices.
   useEffect(() => {
@@ -59,16 +61,23 @@ export default function TaxBaseView({ wht, loading = false, onSaved }: { rate?: 
   };
 
   return (
-    <section className="relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-3xl bg-gradient-to-b from-white from-[28%] to-[#779BC6] p-10">
+    /* No h-full: the parent <main> gets its height from flex, so a percentage
+       height resolves against auto and collapses to the content. Letting the
+       flex row stretch this item instead fills the screen on every breakpoint. */
+    <section className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-3xl bg-gradient-to-b from-white from-[28%] to-[#779BC6] p-5 lg:p-10">
       {/* three.js staircase + falling cash — cash lands on the step the interest
-          climbs to (topIdx) whenever the income changes. */}
-      {!loading && (
+          climbs to (topIdx) whenever the income changes. Desktop only: on a
+          402px card the form covers the whole stage, so the scene would burn a
+          WebGL context and the animation loop for pixels nobody sees. */}
+      {!loading && isDesktop && (
         <div className="pointer-events-none absolute inset-0 select-none">
           <CashStairsScene steps={RATES.length} activeIndex={topIdx} bundleCount={bundleCount} refundZone={isRefund} />
         </div>
       )}
 
-      <div className="relative flex w-[423px] max-w-full flex-col gap-6">
+      {/* Full width on mobile; the fixed column keeps the staircase clear of the
+          text on desktop, where the scene has room beside it. */}
+      <div className="relative flex w-full flex-col gap-5 lg:w-[423px] lg:gap-6">
         <div className="flex flex-col gap-2">
           <p className="text-sm text-ink/60">{t("tax_base_label")}</p>
           <h2 className="text-2xl font-medium leading-snug text-ink">{t("tax_base_title")}</h2>
@@ -129,22 +138,22 @@ export default function TaxBaseView({ wht, loading = false, onSaved }: { rate?: 
 
         {/* Two figures: LEFT = all tax withheld at source this year (static);
             RIGHT = how much of it is over-withheld at this real income. */}
-        <div className="flex items-end gap-8">
-          <div className="flex flex-col">
+        <div className="flex items-end gap-5 lg:gap-8">
+          <div className="flex min-w-0 flex-1 flex-col lg:flex-none">
             <p className="text-sm leading-snug text-ink/60">{t("tax_wht_total")}</p>
             {loading ? (
               <span className="mt-2 h-8 w-28 animate-pulse rounded-lg bg-black/10" />
             ) : (
-              <p className="mt-1 font-nunito text-3xl font-extrabold text-ink">฿{fmtTHB(wht)}</p>
+              <p className="mt-1 font-nunito text-2xl font-extrabold lg:text-3xl text-ink">฿{fmtTHB(wht)}</p>
             )}
           </div>
           <span className="mb-2 h-10 w-px bg-black/10" />
-          <div className="flex flex-col">
+          <div className="flex min-w-0 flex-1 flex-col lg:flex-none">
             <p className="text-sm leading-snug text-ink/60">{t("tax_overpaid")}</p>
             {loading ? (
               <span className="mt-2 h-8 w-28 animate-pulse rounded-lg bg-black/10" />
             ) : (
-              <p className="mt-1 font-nunito text-3xl font-extrabold text-[#2E8B57]">฿{fmtTHB(refund)}</p>
+              <p className="mt-1 font-nunito text-2xl font-extrabold lg:text-3xl text-[#2E8B57]">฿{fmtTHB(refund)}</p>
             )}
           </div>
         </div>

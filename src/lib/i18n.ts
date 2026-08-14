@@ -39,6 +39,7 @@ const TH: Dict = {
   nav_annual: "สรุปประจำปี",
   nav_download_ext: "ดาวน์โหลดส่วนขยาย",
   nav_settings: "ตั้งค่า",
+  nav_me: "ฉัน",
   nav_tax_base: "ฐานภาษี",
 
   portfolio_title: "พอร์ตโฟลิโอของฉัน",
@@ -287,6 +288,7 @@ const EN: Dict = {
   nav_annual: "Annual Summary",
   nav_download_ext: "Download Extension",
   nav_settings: "Settings",
+  nav_me: "Me",
   nav_tax_base: "Tax bracket",
 
   portfolio_title: "My Portfolio",

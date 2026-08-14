@@ -138,8 +138,11 @@ export default function InterestBarChart({ months, fill = false }: { months: Tim
           ))}
         </div>
 
-        {/* Plot */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        {/* Plot — swipes sideways on mobile (the Y axis stays pinned): a full
+            year of bars squeezed into a 402px card leaves each month a few
+            pixels wide and the labels unreadable. */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-x-auto overscroll-x-contain scrollbar-none lg:overflow-visible [&::-webkit-scrollbar]:hidden">
+        <div className="flex h-full min-w-[560px] flex-col lg:min-w-0">
           <div
             className={`relative ${fill ? "min-h-0 flex-1" : "h-64"}`}
             onMouseMove={(e) => {
@@ -251,6 +254,7 @@ export default function InterestBarChart({ months, fill = false }: { months: Tim
               );
             })}
           </div>
+        </div>
         </div>
       </div>
     </div>
