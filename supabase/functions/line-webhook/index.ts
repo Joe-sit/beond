@@ -15,7 +15,8 @@
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
-import { dbdLookup, namesMatch } from "../_shared/dbd.ts";
+import { namesMatch } from "../_shared/dbd.ts";
+import { lookupJuristic } from "../_shared/dbdRegistry.ts";
 import { ART, C, circleLogo, fmtTHB, groupCard, headerStrip, kv, thDate, thMonth } from "../_shared/flex.ts";
 import { buildSavedFlex } from "../_shared/savedSlip.ts";
 import { autoAddHolding, previewAutoAdd } from "../_shared/autoHolding.ts";
@@ -417,7 +418,7 @@ async function checkPayerTaxId(taxId: string | null, bondId: string | null): Pro
   const issuer = (bond?.issuer ?? "").trim();
   if (!issuer) return { state: "unchecked", officialName: null };
 
-  const lookup = await dbdLookup(digits);
+  const lookup = await lookupJuristic(admin, digits);
   // DBD unreachable → "unchecked", never "not_found": an outage must not accuse
   // a valid slip of carrying a bogus tax id (nor block saving it).
   if (lookup.status === "error") return { state: "unchecked", officialName: null };

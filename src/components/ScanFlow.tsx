@@ -610,7 +610,12 @@ function ReviewStep({
     // save — includes an incomplete id (deleted a digit → not 13) and a complete
     // one that doesn't match / isn't found. Empty is allowed (slip saved without
     // a filable id, surfaced later as unfilable).
-    if (taxDigits.length > 0 && !taxVerified) { setTaxIdError(true); return; }
+    //
+    // A DBD outage is the one exception: the gate exists to catch a wrong number,
+    // and an unreachable registry is no evidence of one. Blocking there would
+    // punish the user for someone else's downtime, so the slip saves unverified
+    // and gets checked later.
+    if (taxDigits.length > 0 && !taxVerified && !taxLookupFailed) { setTaxIdError(true); return; }
     // Bond not in the portfolio yet → collect the invested amount, then auto-add.
     if (bondUnheld) { setAddError(null); setAskFace(true); return; }
     onSubmit();
@@ -846,9 +851,7 @@ function ReviewStep({
                 </button>
               </div>
             ) : taxLookupFailed ? (
-              <p className="mt-1.5 text-[11px] text-black/45">
-                ตรวจสอบกับกรมพัฒนาธุรกิจการค้าไม่สำเร็จ ลองใหม่อีกครั้ง
-              </p>
+              <p className="mt-1.5 text-[11px] text-black/45">ระบบตรวจสอบของกรมพัฒนาธุรกิจการค้าขัดข้องชั่วคราว (ไม่ใช่ปัญหาจาก beond) — บันทึกได้ตามปกติ แล้วระบบจะตรวจสอบให้ภายหลัง</p>
             ) : liveName === null ? (
               <p className="mt-1.5 text-[11px] text-[#B7791F]">ไม่พบเลขนี้ในทะเบียนกรมพัฒนาธุรกิจการค้า</p>
             ) : null}

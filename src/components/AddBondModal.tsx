@@ -895,7 +895,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
           ) : !!liveName && !liveMatch ? (
             <p className="text-xs text-[#B7791F]">เลขนี้จดทะเบียนในชื่อ “{liveName}” ไม่ตรงกับบริษัทผู้ออก — ตรวจสอบอีกครั้ง</p>
           ) : taxLookupFailed ? (
-            <p className="text-xs text-black/40">ตรวจสอบกับกรมพัฒนาธุรกิจการค้าไม่สำเร็จ ลองใหม่อีกครั้ง</p>
+            <p className="text-xs text-black/40">ระบบตรวจสอบของกรมพัฒนาธุรกิจการค้าขัดข้องชั่วคราว (ไม่ใช่ปัญหาจาก beond) — บันทึกได้ตามปกติ แล้วระบบจะตรวจสอบให้ภายหลัง</p>
           ) : liveName === null ? (
             <p className="text-xs text-[#B7791F]">ไม่พบเลขนี้ในทะเบียนกรมพัฒนาธุรกิจการค้า</p>
           ) : warn ? (
