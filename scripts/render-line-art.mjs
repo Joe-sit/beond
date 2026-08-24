@@ -24,6 +24,7 @@ const PIECES = [
     width: 520,
     transform: "rotate(41deg) skewX(-22deg) scaleY(0.92)",
   },
+  { name: "taxid-error", file: "badges/taxid-error.svg", width: 340, transform: "none" },
   {
     name: "slip-front",
     file: "landing-slip-front.svg",
