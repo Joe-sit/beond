@@ -269,13 +269,7 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
         .update({ status: "rejected", image_path: null }).eq("id", documentId);
       await deleteSlipImage(imagePath);
       imagePath = null;
-      await linePush(lineUserId, [{
-        type: "text",
-        text:
-          "อ่านข้อมูลจากรูปไม่ได้ครับ 😅\n" +
-          "อาจเพราะภาพเบลอ แสงน้อย หรือไม่ใช่ใบ 50 ทวิ\n\n" +
-          "📸 ถ่ายใหม่ให้ชัด แสงพอ เห็นทั้งใบ แล้วส่งมาอีกครั้งนะครับ",
-      }]);
+      await linePush(lineUserId, [unreadableFlex()]);
       return;
     }
 
@@ -367,10 +361,82 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
       await deleteSlipImage(imagePath);
       await admin.from("tax_documents").update({ image_path: null }).eq("id", documentId);
     }
-    await linePush(lineUserId, [
-      { type: "text", text: "ขออภัย อ่านเอกสารไม่สำเร็จ 😢 ลองส่งรูปที่ชัดขึ้นอีกครั้งนะครับ" },
-    ]);
+    await linePush(lineUserId, [unreadableFlex(true)]);
   }
+}
+
+/**
+ * Nothing usable came back from the image. Two ways to get here — OCR returned a
+ * slip with no money figure at all (a blurry shot, or not a 50-ทวิ), or the read
+ * threw outright — so `failed` distinguishes "we couldn't read it" from "it
+ * broke on our side", which are different apologies.
+ *
+ * The tips are the ones that actually change the outcome, and the quick replies
+ * open the camera in the chat so retaking is one tap rather than a trip through
+ * the photo picker.
+ */
+function unreadableFlex(failed = false): unknown {
+  const tips = [
+    "วางใบบนพื้นเรียบ สีตัดกับกระดาษ",
+    "แสงสว่างพอ เลี่ยงเงามือและแสงสะท้อน",
+    "ถือกล้องตรง ๆ เหนือใบ ให้เห็นครบทั้งใบ",
+    "โฟกัสให้ตัวเลขคมชัด ไม่เบลอ",
+  ].map((t) => ({
+    type: "box",
+    layout: "horizontal",
+    spacing: "sm",
+    margin: "md",
+    contents: [
+      { type: "text", text: "•", size: "xs", color: C.muted, flex: 0 },
+      { type: "text", text: t, size: "xs", color: C.ink, wrap: true, flex: 1 },
+    ],
+  }));
+
+  return {
+    type: "flex",
+    altText: failed ? "อ่านเอกสารไม่สำเร็จ ลองส่งรูปใหม่อีกครั้ง" : "อ่านข้อมูลจากรูปไม่ได้ ลองถ่ายใหม่อีกครั้ง",
+    contents: {
+      type: "bubble",
+      size: "mega",
+      header: headerStrip({
+        title: failed ? "อ่านเอกสารไม่สำเร็จ" : "อ่านข้อมูลจากรูปไม่ได้",
+        subtitle: failed ? "ขออภัย ลองส่งรูปเข้ามาใหม่อีกครั้ง" : "ภาพอาจเบลอ แสงน้อย หรือไม่ใช่ใบ 50 ทวิ",
+        bg: "#FDF1E3",
+        fg: "#9A6318",
+        art: { file: "taxid-error.png", ratio: "340:357", width: 76, offsetBottom: "-8px", offsetEnd: "6px" },
+      }),
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "20px",
+        spacing: "none",
+        contents: [
+          { type: "text", text: "ถ่ายใหม่ให้ได้แบบนี้ 📸", size: "sm", weight: "bold", color: C.ink },
+          ...tips,
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "12px",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            color: C.brand,
+            height: "sm",
+            action: { type: "camera", label: "ถ่ายรูปใหม่" },
+          },
+        ],
+      },
+    },
+    quickReply: {
+      items: [
+        { type: "action", action: { type: "camera", label: "📷 ถ่ายรูปสลิป" } },
+        { type: "action", action: { type: "cameraRoll", label: "🖼️ เลือกรูปสลิป" } },
+      ],
+    },
+  };
 }
 
 // Remove a slip image from storage (best-effort — a stale image must never
