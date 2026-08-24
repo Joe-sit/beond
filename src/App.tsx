@@ -13,6 +13,7 @@ import TaxStoryPOC from "./components/home2/TaxStoryPOC";
 import IntroPOC from "./components/home2/IntroPOC";
 import SlipCollectPOC from "./components/home2/SlipCollectPOC";
 import JarPOC from "./components/home2/JarPOC";
+import TaxIdSheetPOC from "./components/home2/TaxIdSheetPOC";
 import ScanFlow from "./components/ScanFlow";
 import { notifyPortfolioChanged } from "./hooks/usePortfolio";
 import { initAuth, login, logout, liffEnabled, watchSession, type AuthProfile } from "./lib/auth";
@@ -133,6 +134,8 @@ function App() {
     if (q.has("collect")) return <SlipCollectPOC />;
     // `?jar` — tune the 3D glass money jar.
     if (q.has("jar")) return <JarPOC />;
+    // `?sheet` — tune the payer-tax-id mismatch bottom sheet without a scan.
+    if (q.has("sheet")) return <TaxIdSheetPOC />;
 
     // `?v2` — preview the reworked full-viewport home (works pre-auth with a
     // placeholder profile).

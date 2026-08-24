@@ -17,7 +17,6 @@ import {
 } from "@tabler/icons-react";
 import slipArt from "../assets/review-slip.png";
 import dbdVerified from "../assets/badges/dbd-verified.svg";
-import taxidError from "../assets/badges/taxid-error.svg";
 import dbdLogo from "../assets/badges/dbd-logo.svg";
 import { EMPTY_SLIP, type SlipFields } from "../lib/scanTypes";
 import { ensureCatalog, searchBonds, fetchThaibmaFeature, type BondCandidate } from "../lib/secApi";
@@ -29,6 +28,7 @@ import { useHoldings, notifyPortfolioChanged } from "../hooks/usePortfolio";
 import { issuerName, issuerTickerFromTaxId } from "../lib/issuerLogo";
 import AddBondModal from "./AddBondModal";
 import IssuerLogo from "./IssuerLogo";
+import TaxIdErrorSheet from "./TaxIdErrorSheet";
 import { motion } from "motion/react";
 import Folder3D from "./home2/Folder3D";
 import PaperFly from "./home2/PaperFly";
@@ -898,42 +898,13 @@ function ReviewStep({
         </button>
       </div>
 
-      {/* Payer-tax-id mismatch — blocks save until the number matches the bond's
-          company (Figma 1287:4348). */}
       {taxIdError && (
-        <div className="fixed inset-0 z-[130] flex flex-col justify-end" onClick={() => setTaxIdError(false)}>
-          <div className="absolute inset-0 bg-black/50" />
-          <div
-            className="relative flex flex-col items-center rounded-t-3xl bg-white px-8 pt-8 pb-6"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <img src={taxidError} alt="" className="h-52 w-auto" />
-            <p className="mt-4 text-center text-xl font-bold text-[#1B1C1D]">
-              เลขประจำตัวผู้เสียภาษีของผู้จ่ายไม่ถูกต้อง
-            </p>
-            <p className="mt-2 text-center text-base leading-relaxed text-black/60">
-              กรุณาตรวจสอบหมายเลขจากเอกสาร<br />หรือส่งรูปภาพสลิปใหม่ในแชท
-            </p>
-            {/* Reason + the value that was read */}
-            <p className="mt-5 w-full text-right text-sm text-black/60">
-              {taxDigits.length !== 13
-                ? "เลขไม่ครบ 13 หลัก"
-                : liveName === null
-                  ? "ไม่พบหมายเลขประจำตัวนี้"
-                  : `จดทะเบียนในชื่อ “${liveName}”`}
-            </p>
-            <div className="mt-1 flex w-full items-center justify-between rounded-2xl bg-black/5 px-4 py-2">
-              <span className="text-base font-medium text-[#1B1C1D]">ค่าที่อ่านได้</span>
-              <span className="font-nunito text-base text-black/60">{fields.payer_tax_id ?? "-"}</span>
-            </div>
-            <button
-              onClick={() => setTaxIdError(false)}
-              className="mt-6 h-14 w-full rounded-2xl bg-[#E0E6E9] text-base font-bold text-[#006AAA]"
-            >
-              รับทราบ
-            </button>
-          </div>
-        </div>
+        <TaxIdErrorSheet
+          readValue={fields.payer_tax_id ?? null}
+          digits={taxDigits}
+          liveName={liveName}
+          onClose={() => setTaxIdError(false)}
+        />
       )}
 
       {/* Auto-add invested-amount sheet — the one field the slip can't supply. */}
