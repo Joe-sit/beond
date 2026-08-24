@@ -15,9 +15,10 @@
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
-import { dbdName, namesMatch } from "../_shared/dbd.ts";
+import { dbdLookup, namesMatch } from "../_shared/dbd.ts";
 import { ART, C, circleLogo, fmtTHB, groupCard, headerStrip, kv, thDate, thMonth } from "../_shared/flex.ts";
 import { buildSavedFlex } from "../_shared/savedSlip.ts";
+import { createHoldingFromSlip, deriveFaceValue, loadBondFacts } from "../_shared/autoHolding.ts";
 
 const LINE_TOKEN = Deno.env.get("LINE_MESSAGING_ACCESS_TOKEN")!;
 const LINE_SECRET = Deno.env.get("LINE_MESSAGING_CHANNEL_SECRET")!;
@@ -349,7 +350,11 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
     await admin.from("tax_documents")
       .update({ payer_tax_id_verified: taxCheck.state === "verified" }).eq("id", documentId);
 
-    await linePush(lineUserId, [buildConfirmFlex(documentId, f, taxCheck)]);
+    // Preview the auto-add on the confirm card, so "บันทึก" never silently
+    // changes the portfolio — the user sees the position size we derived first.
+    const preview = await previewAutoAdd(doc.user_id as string, bondId, f, gross);
+
+    await linePush(lineUserId, [buildConfirmFlex(documentId, f, taxCheck, preview)]);
   } catch (err) {
     console.error("processSlip failed:", err);
     // Never keep the ID document around, even on failure.
@@ -408,8 +413,12 @@ async function checkPayerTaxId(taxId: string | null, bondId: string | null): Pro
   const issuer = (bond?.issuer ?? "").trim();
   if (!issuer) return { state: "unchecked", officialName: null };
 
-  const officialName = await dbdName(digits);
-  if (!officialName) return { state: "not_found", officialName: null };
+  const lookup = await dbdLookup(digits);
+  // DBD unreachable → "unchecked", never "not_found": an outage must not accuse
+  // a valid slip of carrying a bogus tax id (nor block saving it).
+  if (lookup.status === "error") return { state: "unchecked", officialName: null };
+  if (lookup.status === "not_found") return { state: "not_found", officialName: null };
+  const officialName = lookup.name;
   if (!namesMatch(officialName, issuer)) return { state: "mismatch", officialName };
 
   // Same trust upgrade the web path performs (verify-tax-id): a DBD-confirmed id
@@ -458,7 +467,12 @@ function taxIdRow(check: TaxIdCheck): Record<string, unknown> {
 // data is complete AND the payer id checks out; otherwise the user is sent to
 // edit, so neither an incomplete coupon nor one filed against the wrong company
 // can be saved from the chat.
-function buildConfirmFlex(documentId: string, f: SlipFields, check: TaxIdCheck): unknown {
+function buildConfirmFlex(
+  documentId: string,
+  f: SlipFields,
+  check: TaxIdCheck,
+  autoAdd: number | null,
+): unknown {
   const miss = missingFields(f);
   const blocked = check.state === "mismatch" || check.state === "not_found";
   const complete = miss.length === 0 && !blocked;
@@ -483,6 +497,16 @@ function buildConfirmFlex(documentId: string, f: SlipFields, check: TaxIdCheck):
         : []),
       kv("วันที่จ่าย", thDate(f.pay_date)),
     ], "lg"),
+    ...(autoAdd !== null
+      ? [{
+          type: "text",
+          text: `หุ้นกู้นี้ยังไม่มีในพอร์ต — จะเพิ่มให้อัตโนมัติ เงินลงทุนโดยประมาณ ฿${fmtTHB(autoAdd)} (คำนวณจากดอกเบี้ยบนสลิป)`,
+          size: "xxs",
+          color: C.brand,
+          wrap: true,
+          margin: "md",
+        }]
+      : []),
     groupCard([
       kv("ดอกเบี้ย", `฿${fmtTHB(num(f.gross_amount))}`),
       kv("ภาษีหัก ณ ที่จ่าย", `฿${fmtTHB(num(f.wht_amount))}${f.wht_rate ? ` (${f.wht_rate}%)` : ""}`, { strong: true }),
@@ -541,6 +565,72 @@ function buildConfirmFlex(documentId: string, f: SlipFields, check: TaxIdCheck):
       footer: { type: "box", layout: "vertical", paddingAll: "12px", spacing: "none", contents: footer },
     },
   };
+}
+
+/**
+ * The face value we'd derive if this slip were confirmed — null when the bond is
+ * already held or the size can't be derived confidently. Read-only: it changes
+ * nothing, it just lets the confirm card say what will happen.
+ */
+async function previewAutoAdd(
+  userId: string,
+  bondId: string | null,
+  f: SlipFields,
+  gross: number | null,
+): Promise<number | null> {
+  if (!bondId || !gross) return null;
+  const { data: held } = await admin
+    .from("holdings").select("id").eq("user_id", userId).eq("bond_id", bondId).limit(1);
+  if (held?.length) return null;
+  const facts = await loadBondFacts(admin, f.bond_symbol ?? "", f.payer_name ?? null);
+  if (!facts) return null;
+  return deriveFaceValue(gross, facts, f.pay_date ?? null);
+}
+
+/**
+ * Add the slip's bond to the user's portfolio if they don't hold it yet.
+ * Returns what was added, or null when nothing was (already held, or the
+ * position size couldn't be derived with confidence — see deriveFaceValue).
+ */
+async function autoAddHolding(
+  userId: string,
+  bondId: string | null,
+  documentId: string,
+): Promise<{ symbol: string; faceValue: number } | null> {
+  if (!bondId) return null;
+
+  const { data: doc } = await admin
+    .from("tax_documents")
+    .select("gross_amount, pay_date, payer_name, payer_tax_id, payer_tax_id_verified")
+    .eq("id", documentId)
+    .maybeSingle();
+  const gross = Number(doc?.gross_amount ?? 0);
+  if (!gross) return null;
+
+  const { data: bond } = await admin.from("bonds").select("symbol").eq("id", bondId).maybeSingle();
+  const symbol = bond?.symbol as string | undefined;
+  if (!symbol) return null;
+
+  // Already in the portfolio → nothing to do (the common case, from the second
+  // coupon onwards).
+  const { data: held } = await admin
+    .from("holdings").select("id").eq("user_id", userId).eq("bond_id", bondId).limit(1);
+  if (held?.length) return null;
+
+  const facts = await loadBondFacts(admin, symbol, doc?.payer_name ?? null);
+  if (!facts) return null;
+  const faceValue = deriveFaceValue(gross, facts, (doc?.pay_date as string | null) ?? null);
+  if (faceValue === null) return null;
+
+  // Only a DBD-verified id is worth writing onto the shared catalog row.
+  const taxId = doc?.payer_tax_id_verified ? ((doc?.payer_tax_id as string | null) ?? null) : null;
+  const created = await createHoldingFromSlip(admin, userId, facts, faceValue, taxId);
+  if (!created) return null;
+
+  // Point the slip at the holding it now belongs to, so it shows as a collected
+  // coupon rather than an orphan.
+  await admin.from("tax_documents").update({ holding_id: created.holdingId }).eq("id", documentId);
+  return { symbol, faceValue };
 }
 
 // Upsert the user by LINE id, returning our internal uuid.
@@ -726,12 +816,32 @@ async function handlePostback(event: LineEvent): Promise<void> {
       ]);
       return;
     }
+    // The bond may not be in the portfolio yet — this is the user's first slip
+    // for it. Add it now, deriving the position size from the coupon on the
+    // slip, so a bond can be tracked without ever opening the web app.
+    let added: { symbol: string; faceValue: number } | null = null;
+    try {
+      added = await autoAddHolding(docRow.user_id as string, docRow.bond_id as string, id);
+    } catch (e) {
+      // A failed auto-add must not block saving the credit — the slip is still a
+      // valid tax record; it just sits unmatched until the bond is added.
+      console.error("autoAddHolding failed (continuing):", (e as Error).message);
+    }
+
     await admin.from("tax_documents").update({ status: "confirmed" }).eq("id", id);
     // Same card the web confirm sends (slip-confirmed), so the chat reads the
     // same whichever way the slip was approved.
-    await lineReply(event.replyToken, [
-      await buildSavedFlex(admin, docRow.user_id as string, id, LIFF_REVIEW_URL),
-    ]);
+    const messages: unknown[] = [await buildSavedFlex(admin, docRow.user_id as string, id, LIFF_REVIEW_URL)];
+    if (added) {
+      messages.unshift({
+        type: "text",
+        text:
+          `เพิ่ม ${added.symbol} เข้าพอร์ตให้แล้ว ✅\n` +
+          `เงินลงทุนโดยประมาณ ฿${fmtTHB(added.faceValue)} (คำนวณจากดอกเบี้ยบนสลิป)\n` +
+          `ถ้าไม่ตรง แก้ได้ในแอป beond`,
+      });
+    }
+    await lineReply(event.replyToken, messages);
   } else if (action === "reject") {
     await admin.from("tax_documents").update({ status: "rejected" }).eq("id", id);
     await lineReply(event.replyToken, [

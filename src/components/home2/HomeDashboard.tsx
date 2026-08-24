@@ -1090,7 +1090,11 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
               >
                 <TaxStoryChapter
                   data={taxStory}
-                  active={chapter === "goal"}
+                  // Hold the opener until the portfolio has actually loaded: in
+                  // prod the first paint is a skeleton, and a cinematic narrating
+                  // a year of coupons over placeholder figures plays out before
+                  // the real numbers arrive — and can't be replayed.
+                  active={chapter === "goal" && !loading}
                   // Only advance goal→income. After a skip the chapter is already
                   // "slip"; the goal chapter's own timeline still fires onDone later,
                   // and without this guard it would snap the intro back on.

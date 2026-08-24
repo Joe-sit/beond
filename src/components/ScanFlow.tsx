@@ -571,23 +571,34 @@ function ReviewStep({
 
   // Live DBD check on the payer 13-digit id — runs right here on the OCR review
   // screen so a mismatch is caught before saving. `liveName` = official DBD name
-  // (null = not found), undefined until the field is a full 13 digits.
+  // (null = not found or unreachable), undefined until the field is a full 13
+  // digits. `taxLookupFailed` separates "DBD says no such company" from "we
+  // couldn't reach DBD" — the second must not be reported as the first.
   const [liveName, setLiveName] = useState<string | null | undefined>(undefined);
+  const [taxLookupFailed, setTaxLookupFailed] = useState(false);
   const [checkingTax, setCheckingTax] = useState(false);
   useEffect(() => {
     const digits = (fields.payer_tax_id ?? "").replace(/\D/g, "");
-    if (digits.length !== 13) { setLiveName(undefined); setCheckingTax(false); return; }
+    if (digits.length !== 13) {
+      setLiveName(undefined);
+      setTaxLookupFailed(false);
+      setCheckingTax(false);
+      return;
+    }
     let alive = true;
     setCheckingTax(true);
     const timer = setTimeout(async () => {
-      const name = await lookupTaxIdName(digits);
-      if (alive) { setLiveName(name); setCheckingTax(false); }
+      const r = await lookupTaxIdName(digits);
+      if (!alive) return;
+      setLiveName(r.name);
+      setTaxLookupFailed(r.status === "error");
+      setCheckingTax(false);
     }, 400);
     return () => { alive = false; clearTimeout(timer); };
   }, [fields.payer_tax_id]);
   const taxMatch = liveName ? companyNamesMatch(liveName, fields.payer_name ?? "") : false;
   const taxVerified = !checkingTax && !!liveName && taxMatch;
-  const taxWarn = !checkingTax && ((!!liveName && !taxMatch) || liveName === null);
+  const taxWarn = !checkingTax && ((!!liveName && !taxMatch) || (liveName === null && !taxLookupFailed));
 
   // Gate saving on the payer tax id: it must match the bond's company before a
   // slip is stored (a wrong 13-digit id makes the e-Filing row unfilable/wrong).
@@ -834,6 +845,10 @@ function ReviewStep({
                   <IconCheck size={13} /> ใช้ชื่อ “{liveName}”
                 </button>
               </div>
+            ) : taxLookupFailed ? (
+              <p className="mt-1.5 text-[11px] text-black/45">
+                ตรวจสอบกับกรมพัฒนาธุรกิจการค้าไม่สำเร็จ ลองใหม่อีกครั้ง
+              </p>
             ) : liveName === null ? (
               <p className="mt-1.5 text-[11px] text-[#B7791F]">ไม่พบเลขนี้ในทะเบียนกรมพัฒนาธุรกิจการค้า</p>
             ) : null}

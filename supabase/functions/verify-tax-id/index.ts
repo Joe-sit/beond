@@ -11,7 +11,7 @@
 // Env: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY injected automatically.
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { dbdName, namesMatch } from "../_shared/dbd.ts";
+import { dbdLookup, namesMatch } from "../_shared/dbd.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -53,8 +53,27 @@ Deno.serve(async (req) => {
   // write, no trust decision. The client uses it for live UI feedback while
   // typing; nothing is persisted until a real (symbol-resolved) save.
   if (body.lookupOnly) {
-    const name = await dbdName(id);
-    return json(200, { verified: false, officialName: name, reason: name ? "match" : "not_found" });
+    // Serve a previously DBD-confirmed id straight from the catalog. Beyond the
+    // latency, it keeps a typing user off DBD entirely — the live check fires on
+    // every completed 13-digit value, and DBD starts dropping requests when
+    // leaned on.
+    const { data: known } = await admin
+      .from("bonds")
+      .select("payer_verified_name")
+      .eq("payer_tax_id", id)
+      .eq("payer_tax_id_verified", true)
+      .not("payer_verified_name", "is", null)
+      .limit(1)
+      .maybeSingle();
+    if (known?.payer_verified_name) {
+      return json(200, { verified: false, officialName: known.payer_verified_name, reason: "match" });
+    }
+
+    const r = await dbdLookup(id);
+    if (r.status === "found") return json(200, { verified: false, officialName: r.name, reason: "match" });
+    // "error" must not read as "no such company" — the caller shows a retry
+    // hint instead of telling the user their correct id is unknown.
+    return json(200, { verified: false, officialName: null, reason: r.status === "not_found" ? "not_found" : "error" });
   }
 
   if (!symbol) return json(400, { error: "symbol required" });
@@ -70,10 +89,15 @@ Deno.serve(async (req) => {
   const issuer = (bond?.issuer ?? "").trim();
   if (!issuer) return json(404, { verified: false, officialName: null, reason: "not_found" });
 
-  const officialName = await dbdName(id);
-  if (!officialName) {
-    return json(200, { verified: false, officialName: null, reason: "not_found" });
+  const lookup = await dbdLookup(id);
+  if (lookup.status !== "found") {
+    return json(200, {
+      verified: false,
+      officialName: null,
+      reason: lookup.status === "not_found" ? "not_found" : "error",
+    });
   }
+  const officialName = lookup.name;
   // Compare DBD's official name against the DB issuer (authoritative).
   const verified = namesMatch(officialName, issuer);
 

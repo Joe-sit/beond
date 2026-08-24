@@ -396,15 +396,26 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   // `checking` while in-flight; `liveName` = official name DBD returned (null =
   // not found), or undefined when the field isn't a full 13 digits.
   const [liveName, setLiveName] = useState<string | null | undefined>(undefined);
+  // DBD unreachable ≠ id unknown; keep them apart so an outage doesn't accuse a
+  // valid number.
+  const [taxLookupFailed, setTaxLookupFailed] = useState(false);
   const [checkingTax, setCheckingTax] = useState(false);
   useEffect(() => {
     const digits = mTaxId.replace(/\D/g, "");
-    if (digits.length !== 13) { setLiveName(undefined); setCheckingTax(false); return; }
+    if (digits.length !== 13) {
+      setLiveName(undefined);
+      setTaxLookupFailed(false);
+      setCheckingTax(false);
+      return;
+    }
     let alive = true;
     setCheckingTax(true);
     const timer = setTimeout(async () => {
-      const name = await lookupTaxIdName(digits);
-      if (alive) { setLiveName(name); setCheckingTax(false); }
+      const r = await lookupTaxIdName(digits);
+      if (!alive) return;
+      setLiveName(r.name);
+      setTaxLookupFailed(r.status === "error");
+      setCheckingTax(false);
     }, 400);
     return () => { alive = false; clearTimeout(timer); };
   }, [mTaxId]);
@@ -837,7 +848,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     const warn =
       !checkingTax &&
       ((!!liveName && !liveMatch) ||
-        liveName === null ||
+        (liveName === null && !taxLookupFailed) ||
         (liveName === undefined && editing && !!editHolding?.payerTaxId && !editHolding?.payerTaxIdVerified));
     return (
       <div className="flex flex-col items-center gap-2 rounded-3xl bg-[rgba(30,125,235,0.05)] p-2">
@@ -883,6 +894,8 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             <p className="text-xs text-[#222]">เลขนี้ยืนยันจากสลิป 50 ทวิ และตรวจสอบกับกรมพัฒนาธุรกิจการค้าแล้ว</p>
           ) : !!liveName && !liveMatch ? (
             <p className="text-xs text-[#B7791F]">เลขนี้จดทะเบียนในชื่อ “{liveName}” ไม่ตรงกับบริษัทผู้ออก — ตรวจสอบอีกครั้ง</p>
+          ) : taxLookupFailed ? (
+            <p className="text-xs text-black/40">ตรวจสอบกับกรมพัฒนาธุรกิจการค้าไม่สำเร็จ ลองใหม่อีกครั้ง</p>
           ) : liveName === null ? (
             <p className="text-xs text-[#B7791F]">ไม่พบเลขนี้ในทะเบียนกรมพัฒนาธุรกิจการค้า</p>
           ) : warn ? (

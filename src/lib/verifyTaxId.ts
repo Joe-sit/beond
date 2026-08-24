@@ -25,25 +25,37 @@ export function companyNamesMatch(a: string, b: string): boolean {
   return x === y || x.includes(y) || y.includes(x);
 }
 
+export interface LookupResult {
+  /** DBD's registered name, or null when it wasn't returned. */
+  name: string | null;
+  /** `not_found` = DBD says no such company. `error` = we couldn't ask it. */
+  status: "found" | "not_found" | "error";
+}
+
 // Lookup-only: DBD's official name for a 13-digit id (no write, no trust). For
-// live UI feedback while typing. null = not found / error.
-export async function lookupTaxIdName(taxId: string): Promise<string | null> {
+// live UI feedback while typing. A failed lookup reports `error`, NOT
+// `not_found` — DBD drops requests often enough that conflating the two told
+// users a perfectly good tax id was unregistered.
+export async function lookupTaxIdName(taxId: string): Promise<LookupResult> {
   const digits = taxId.replace(/\D/g, "");
-  if (digits.length !== 13 || !supabaseEnabled || !supabase || !SUPABASE_URL) return null;
+  if (digits.length !== 13 || !supabaseEnabled || !supabase || !SUPABASE_URL) {
+    return { name: null, status: "error" };
+  }
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
-  if (!token) return null;
+  if (!token) return { name: null, status: "error" };
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/verify-tax-id`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ taxId: digits, lookupOnly: true }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) return { name: null, status: "error" };
     const out = (await res.json()) as VerifyResult;
-    return out.officialName;
+    if (out.officialName) return { name: out.officialName, status: "found" };
+    return { name: null, status: out.reason === "not_found" ? "not_found" : "error" };
   } catch {
-    return null;
+    return { name: null, status: "error" };
   }
 }
 
