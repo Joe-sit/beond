@@ -123,6 +123,10 @@ export default defineConfig(({ mode }) => {
     plugins: [react(), tailwindcss(), basicSsl(), thaibmaProxy()],
     server: {
       port: 5199,
+      // Fail instead of hopping to 5200/5201 when the port is taken: the LIFF
+      // endpoint and the LINE Login callback are registered for 5199 only, so a
+      // silent fallback starts a server that can't log in.
+      strictPort: true,
       // SEC Open Data API proxy: keeps the subscription key server-side
       // (SEC_API_KEY has no VITE_ prefix, so it never reaches the bundle).
       proxy: {
