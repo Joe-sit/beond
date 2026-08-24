@@ -15,6 +15,9 @@
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
+import { dbdName, namesMatch } from "../_shared/dbd.ts";
+import { ART, C, circleLogo, fmtTHB, groupCard, headerStrip, kv, thDate, thMonth } from "../_shared/flex.ts";
+import { buildSavedFlex } from "../_shared/savedSlip.ts";
 
 const LINE_TOKEN = Deno.env.get("LINE_MESSAGING_ACCESS_TOKEN")!;
 const LINE_SECRET = Deno.env.get("LINE_MESSAGING_CHANNEL_SECRET")!;
@@ -340,7 +343,13 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
     await deleteSlipImage(imagePath);
     imagePath = null;
 
-    await linePush(lineUserId, [buildConfirmFlex(documentId, f)]);
+    // Verify the payer id against DBD before offering to save. A slip filed
+    // against the wrong company is worse than one not filed at all.
+    const taxCheck = await checkPayerTaxId(f.payer_tax_id, bondId);
+    await admin.from("tax_documents")
+      .update({ payer_tax_id_verified: taxCheck.state === "verified" }).eq("id", documentId);
+
+    await linePush(lineUserId, [buildConfirmFlex(documentId, f, taxCheck)]);
   } catch (err) {
     console.error("processSlip failed:", err);
     // Never keep the ID document around, even on failure.
@@ -369,10 +378,6 @@ function netOf(f: SlipFields): number | null {
   return num(f.net_amount);
 }
 
-function fmtTHB(n: number | null): string {
-  return n === null ? "-" : new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2 }).format(n);
-}
-
 // Required fields for a coupon to be saveable. Without a resolved bond it can't
 // be mapped to a payout (the web app would show an orphan slip), and without a
 // pay_date / amount it isn't a usable tax record — so these gate the confirm.
@@ -385,68 +390,155 @@ function missingFields(f: SlipFields): string[] {
   return miss;
 }
 
-// Flex bubble summarising the extracted slip. Confirm is only offered when the
-// data is complete; otherwise the user is sent to edit (add the missing bond
-// code etc.) so an incomplete coupon can never be saved.
-function buildConfirmFlex(documentId: string, f: SlipFields): unknown {
-  const row = (label: string, value: string) => ({
+// DBD verdict for the payer tax id read off the slip. `verified` only when DBD
+// knows the number AND the registered name matches the bond's issuer — the same
+// bar the web app applies before saving (see verify-tax-id).
+interface TaxIdCheck {
+  state: "verified" | "mismatch" | "not_found" | "unchecked";
+  officialName: string | null;
+}
+
+// Check the OCR'd payer id against DBD. The issuer to compare against comes from
+// the catalog row, never from the slip: a forged payer name on a doctored slip
+// would otherwise verify itself.
+async function checkPayerTaxId(taxId: string | null, bondId: string | null): Promise<TaxIdCheck> {
+  const digits = (taxId ?? "").replace(/\D/g, "");
+  if (digits.length !== 13 || !bondId) return { state: "unchecked", officialName: null };
+  const { data: bond } = await admin.from("bonds").select("issuer").eq("id", bondId).maybeSingle();
+  const issuer = (bond?.issuer ?? "").trim();
+  if (!issuer) return { state: "unchecked", officialName: null };
+
+  const officialName = await dbdName(digits);
+  if (!officialName) return { state: "not_found", officialName: null };
+  if (!namesMatch(officialName, issuer)) return { state: "mismatch", officialName };
+
+  // Same trust upgrade the web path performs (verify-tax-id): a DBD-confirmed id
+  // is promoted into the shared catalog, issuer-wide, so the next user of that
+  // issuer starts out verified.
+  await admin.from("bonds")
+    .update({ payer_tax_id: digits, payer_tax_id_verified: true, payer_verified_name: officialName })
+    .eq("issuer", issuer)
+    .eq("payer_tax_id_verified", false);
+  return { state: "verified", officialName };
+}
+
+// The issuer identity block — logo, series, company — shared by every slip card.
+function issuerRow(symbol: string | null, payerName: string | null): Record<string, unknown> {
+  const logo = symbol ? circleLogo(symbol) : null;
+  const text = {
     type: "box",
-    layout: "baseline",
-    spacing: "sm",
+    layout: "vertical",
+    spacing: "none",
+    flex: 1,
     contents: [
-      { type: "text", text: label, color: "#8A8A8A", size: "sm", flex: 4 },
-      { type: "text", text: value || "-", wrap: true, color: "#111111", size: "sm", flex: 6 },
+      { type: "text", text: symbol ?? "ยังไม่ระบุรุ่น", size: "sm", weight: "bold", color: symbol ? C.ink : C.muted },
+      { type: "text", text: payerName ?? "-", size: "xxs", color: C.muted, wrap: true },
     ],
-  });
+  };
+  return {
+    type: "box",
+    layout: "horizontal",
+    spacing: "md",
+    alignItems: "center",
+    contents: logo ? [logo, text] : [text],
+  };
+}
+
+// The tax-id row states its verdict rather than the number: the digits add
+// nothing the user can act on, and a tax id is one more thing not to leave
+// sitting in a chat history.
+function taxIdRow(check: TaxIdCheck): Record<string, unknown> {
+  if (check.state === "verified") return kv("เลขผู้เสียภาษี", "✓ ตรงกับ DBD", { color: C.green, strong: true });
+  if (check.state === "mismatch") return kv("เลขผู้เสียภาษี", "✕ ไม่ตรงกับ DBD", { color: C.red, strong: true });
+  if (check.state === "not_found") return kv("เลขผู้เสียภาษี", "ไม่พบในทะเบียน DBD", { color: C.red });
+  return kv("เลขผู้เสียภาษี", "ยังไม่ได้ตรวจสอบ", { color: C.muted });
+}
+
+// Flex bubble summarising the extracted slip. Confirm is only offered when the
+// data is complete AND the payer id checks out; otherwise the user is sent to
+// edit, so neither an incomplete coupon nor one filed against the wrong company
+// can be saved from the chat.
+function buildConfirmFlex(documentId: string, f: SlipFields, check: TaxIdCheck): unknown {
   const miss = missingFields(f);
-  const complete = miss.length === 0;
+  const blocked = check.state === "mismatch" || check.state === "not_found";
+  const complete = miss.length === 0 && !blocked;
 
   const body: Record<string, unknown>[] = [
-    { type: "text", text: "หัก ณ ที่จ่าย 50 ทวิ", weight: "bold", size: "lg", color: "#43507F" },
     {
       type: "text",
-      text: complete ? "ตรวจสอบข้อมูลก่อนบันทึกนะครับ" : "ข้อมูลไม่ครบ กรุณากด “แก้ไข” เพิ่มก่อนบันทึก",
+      text: complete
+        ? "ตรวจสอบข้อมูลก่อนบันทึกนะครับ"
+        : blocked
+          ? "เลขผู้เสียภาษีของผู้จ่ายไม่ผ่านการตรวจสอบ จึงยังบันทึกให้ไม่ได้"
+          : `ข้อมูลไม่ครบ (ขาด: ${miss.join(", ")}) กด “แก้ไข” เพิ่มก่อนบันทึก`,
       size: "xs",
-      color: complete ? "#8A8A8A" : "#C0563B",
+      color: complete ? C.muted : C.red,
       wrap: true,
     },
-    { type: "separator", margin: "md" },
-    row("ผู้จ่าย", f.payer_name ?? "-"),
-    row("เลขผู้จ่าย 13 หลัก", f.payer_tax_id ?? "-"),
-    row("หุ้นกู้", f.bond_symbol ?? "-"),
-    row("ดอกเบี้ย", `฿${fmtTHB(num(f.gross_amount))}`),
-    row("ภาษีหัก", `฿${fmtTHB(num(f.wht_amount))} (${f.wht_rate ?? "-"}%)`),
-    row("คงเหลือจ่ายจริง", `฿${fmtTHB(netOf(f))}`),
-    row("วันที่จ่าย", f.pay_date ?? "-"),
-    row("ปีภาษี", f.tax_year ? String(f.tax_year) : "-"),
+    groupCard([
+      issuerRow(f.bond_symbol, f.payer_name),
+      taxIdRow(check),
+      ...(check.state === "mismatch" && check.officialName
+        ? [kv("จดทะเบียนในชื่อ", check.officialName)]
+        : []),
+      kv("วันที่จ่าย", thDate(f.pay_date)),
+    ], "lg"),
+    groupCard([
+      kv("ดอกเบี้ย", `฿${fmtTHB(num(f.gross_amount))}`),
+      kv("ภาษีหัก ณ ที่จ่าย", `฿${fmtTHB(num(f.wht_amount))}${f.wht_rate ? ` (${f.wht_rate}%)` : ""}`, { strong: true }),
+      kv("คงเหลือจ่ายจริง", `฿${fmtTHB(netOf(f))}`),
+    ]),
   ];
-  if (!complete) {
-    body.push({
-      type: "text",
-      text: `⚠️ ยังขาด: ${miss.join(", ")}`,
-      size: "xs",
-      color: "#C0563B",
-      wrap: true,
-      margin: "md",
+
+  const footer: Record<string, unknown>[] = [];
+  if (complete) {
+    footer.push({
+      type: "button",
+      style: "primary",
+      color: C.brand,
+      height: "sm",
+      action: { type: "postback", label: "บันทึกเป็นเครดิตภาษี", data: `action=confirm&id=${documentId}` },
+    });
+    footer.push({
+      type: "button",
+      style: "link",
+      height: "sm",
+      color: C.muted,
+      action: { type: "uri", label: "แก้ไข", uri: `${LIFF_REVIEW_URL}?review=${documentId}` },
+    });
+  } else {
+    footer.push({
+      type: "button",
+      style: "primary",
+      color: C.brand,
+      height: "sm",
+      action: { type: "uri", label: "เข้าไปแก้ไข", uri: `${LIFF_REVIEW_URL}?review=${documentId}` },
     });
   }
 
-  // One action only: open the web app (LIFF) to review/confirm thoroughly.
-  const reviewButton = {
-    type: "button",
-    style: "primary",
-    height: "sm",
-    color: "#43507F",
-    action: { type: "uri", label: "ตรวจสอบในเว็บแอป", uri: `${LIFF_REVIEW_URL}?review=${documentId}` },
-  };
-
   return {
     type: "flex",
-    altText: "สรุปข้อมูลหนังสือรับรองหักภาษี ณ ที่จ่าย",
+    altText: complete ? "ตรวจสอบข้อมูล 50 ทวิ ก่อนบันทึก" : "ยังบันทึก 50 ทวิ ไม่ได้ — ต้องแก้ไขก่อน",
     contents: {
       type: "bubble",
-      body: { type: "box", layout: "vertical", spacing: "md", contents: body },
-      footer: { type: "box", layout: "vertical", spacing: "sm", contents: [reviewButton] },
+      size: "mega",
+      header: complete
+        ? headerStrip({
+            title: "อ่านสลิปสำเร็จ",
+            subtitle: "ตรวจสอบก่อนบันทึกเป็นเครดิตภาษี",
+            bg: "#E8F0FF",
+            fg: "#2F3C6B",
+            art: { file: "slip-front.png", ratio: "1104:749", width: 96, offsetBottom: "-6px" },
+          })
+        : headerStrip({
+            title: "ยังบันทึกไม่ได้",
+            subtitle: blocked ? "เลขผู้เสียภาษีไม่ตรงกับผู้ออกหุ้นกู้" : "ข้อมูลบนสลิปยังไม่ครบ",
+            bg: "#FDE8E8",
+            fg: "#A33131",
+            art: { file: "taxid-error.png", ratio: "340:357", width: 76, offsetBottom: "-8px", offsetEnd: "6px" },
+          }),
+      body: { type: "box", layout: "vertical", paddingAll: "20px", spacing: "none", contents: body },
+      footer: { type: "box", layout: "vertical", paddingAll: "12px", spacing: "none", contents: footer },
     },
   };
 }
@@ -635,8 +727,10 @@ async function handlePostback(event: LineEvent): Promise<void> {
       return;
     }
     await admin.from("tax_documents").update({ status: "confirmed" }).eq("id", id);
+    // Same card the web confirm sends (slip-confirmed), so the chat reads the
+    // same whichever way the slip was approved.
     await lineReply(event.replyToken, [
-      { type: "text", text: "บันทึกเครดิตภาษีเรียบร้อย ✅ ดูสรุปทั้งหมดได้ในแอป beond" },
+      await buildSavedFlex(admin, docRow.user_id as string, id, LIFF_REVIEW_URL),
     ]);
   } else if (action === "reject") {
     await admin.from("tax_documents").update({ status: "rejected" }).eq("id", id);
@@ -664,8 +758,6 @@ const SCAN_PROMPT =
   "• ให้เห็นทั้งใบเต็มกรอบ ไม่มีส่วนขาด\n" +
   "• โฟกัสให้ตัวเลข/ตัวหนังสือคมชัด ไม่เบลอ\n\n" +
   "พร้อมแล้วส่งรูปมาได้เลยครับ 👍";
-
-const TH_MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 
 // Footer "ดูทั้งหมดในแอป" button, shared by the data cards.
 const openAppFooter = (label: string) => ({
@@ -709,7 +801,7 @@ async function buildPortfolioMessage(userId: string): Promise<unknown> {
     .from("holdings")
     .select("face_value, bonds(symbol, coupon_rate)")
     .eq("user_id", userId);
-  const rows = (data ?? []) as { face_value: number; bonds: { symbol: string; coupon_rate: number } | null }[];
+  const rows = (data ?? []) as unknown as { face_value: number; bonds: { symbol: string; coupon_rate: number } | null }[];
   if (!rows.length) return emptyCard("ยังไม่มีหุ้นกู้ในพอร์ต", "เพิ่มหุ้นกู้ที่คุณถือ เพื่อดูพอร์ตและเครดิตภาษี");
 
   rows.sort((a, b) => Number(b.face_value) - Number(a.face_value));
@@ -766,16 +858,22 @@ async function buildPortfolioMessage(userId: string): Promise<unknown> {
   };
 }
 
-// Chat card: the next upcoming coupon payouts across the user's holdings.
+// Chat card: the year's coupon calendar, one bubble per month with a payout.
+// A carousel rather than one long list — a bubble can't scroll, so a busy year
+// would simply be cut off at the bottom of a single card.
+const CAL_ROW_CAP = 5;      // rows per month before the "+N" tail
+const CAL_MONTH_CAP = 12;   // LINE's own carousel limit
+
 async function buildCalendarMessage(userId: string): Promise<unknown> {
+  const year = new Date().getFullYear();
   const { data } = await admin
     .from("payouts")
     .select("amount, payout_date, installment, holdings!inner(user_id, bonds(symbol, total_installments))")
     .eq("holdings.user_id", userId)
-    .gte("payout_date", today())
-    .order("payout_date")
-    .limit(6);
-  const rows = (data ?? []) as {
+    .gte("payout_date", `${year}-01-01`)
+    .lte("payout_date", `${year}-12-31`)
+    .order("payout_date");
+  const rows = (data ?? []) as unknown as {
     amount: number;
     payout_date: string;
     installment: number;
@@ -783,60 +881,146 @@ async function buildCalendarMessage(userId: string): Promise<unknown> {
   }[];
   if (!rows.length) return emptyCard("ยังไม่มีกำหนดรับดอกเบี้ย", "เพิ่มหุ้นกู้ที่คุณถือ เพื่อดูปฏิทินรับดอกเบี้ย");
 
-  // Only month-level precision: the exact payout DAY is derived (stepped from
-  // maturity), not from SEC — so we show เดือน/ปี, never a specific date.
-  const body: unknown[] = [];
-  rows.forEach((r, i) => {
-    if (i) body.push({ type: "separator", margin: "md" });
-    const d = new Date(r.payout_date);
-    body.push({
-      type: "box",
-      layout: "horizontal",
-      margin: i ? "md" : "none",
-      spacing: "md",
-      contents: [
-        {
+  // Which coupons already have a confirmed slip: matched on symbol + pay_date,
+  // the same pairing the app and the weekly reminder use.
+  const { data: docs } = await admin
+    .from("tax_documents")
+    .select("pay_date, bonds(symbol)")
+    .eq("user_id", userId)
+    .eq("status", "confirmed")
+    .gte("pay_date", `${year}-01-01`)
+    .lte("pay_date", `${year}-12-31`);
+  const collected = new Set(
+    ((docs ?? []) as unknown as { pay_date: string | null; bonds: { symbol: string } | null }[])
+      .filter((d) => d.pay_date && d.bonds?.symbol)
+      .map((d) => `${d.bonds!.symbol}@${d.pay_date}`),
+  );
+
+  const byMonth = new Map<number, typeof rows>();
+  for (const r of rows) {
+    const m = new Date(r.payout_date).getMonth();
+    (byMonth.get(m) ?? byMonth.set(m, []).get(m)!).push(r);
+  }
+
+  const today = new Date();
+  const bubbles = [...byMonth.entries()]
+    .sort(([a], [b]) => a - b)
+    .slice(0, CAL_MONTH_CAP)
+    .map(([month, items]) => {
+      const shown = items.slice(0, CAL_ROW_CAP);
+      const more = items.length - shown.length;
+      const total = items.reduce((s, r) => s + Number(r.amount), 0);
+      const paidCount = items.filter((r) => collected.has(
+        `${r.holdings?.bonds?.symbol}@${r.payout_date}`,
+      )).length;
+
+      const body: unknown[] = [];
+      shown.forEach((r, i) => {
+        if (i) body.push({ type: "separator", margin: "lg", color: C.hair });
+        const d = new Date(r.payout_date);
+        const symbol = r.holdings?.bonds?.symbol ?? "-";
+        const paid = collected.has(`${symbol}@${r.payout_date}`);
+        const logo = circleLogo(symbol, 28);
+        body.push({
+          type: "box",
+          layout: "horizontal",
+          spacing: "md",
+          margin: "lg",
+          alignItems: "center",
+          contents: [
+            ...(logo ? [logo] : []),
+            {
+              type: "box",
+              layout: "vertical",
+              spacing: "none",
+              flex: 1,
+              contents: [
+                { type: "text", text: symbol, size: "sm", weight: "bold", color: C.ink },
+                {
+                  type: "text",
+                  text: `งวด ${r.installment}/${r.holdings?.bonds?.total_installments ?? "-"}`,
+                  size: "xxs",
+                  color: C.muted,
+                },
+              ],
+            },
+            { type: "text", text: `${d.getDate()} ${thMonth(d)}`, size: "xs", color: C.muted, flex: 0, gravity: "center" },
+            {
+              type: "text",
+              text: fmtTHB(Number(r.amount)),
+              size: "sm",
+              weight: "bold",
+              align: "end",
+              gravity: "center",
+              margin: "md",
+              flex: 0,
+              // Green marks a coupon whose slip is already collected — the one
+              // status worth colouring, since it's what the user is chasing.
+              color: paid ? C.green : C.ink,
+            },
+          ],
+        });
+      });
+      if (more > 0) {
+        body.push({ type: "text", text: `+${more} รายการ`, size: "xs", color: C.muted, align: "center", margin: "lg" });
+      }
+
+      const subtitle = month === today.getMonth()
+        ? `${items.length} รายการ · เก็บสลิปแล้ว ${paidCount}`
+        : `${items.length} รายการ · เก็บสลิปแล้ว ${paidCount}`;
+
+      return {
+        type: "bubble",
+        size: "mega",
+        header: {
           type: "box",
           layout: "vertical",
-          flex: 0,
-          width: "52px",
-          justifyContent: "center",
+          backgroundColor: "#CEE7FF",
+          paddingAll: "16px",
+          paddingEnd: "104px",
+          spacing: "none",
           contents: [
-            { type: "text", text: TH_MONTHS[d.getMonth()], weight: "bold", size: "md", align: "center", color: "#2968A5" },
-            { type: "text", text: String(d.getFullYear() + 543), size: "xxs", align: "center", color: "#8A8A8A" },
+            { type: "text", text: "ปฏิทินดอกเบี้ย", size: "xs", color: C.brand },
+            { type: "text", text: thMonth(new Date(year, month, 1), true), size: "xxl", weight: "bold", color: C.ink, margin: "sm" },
+            { type: "text", text: subtitle, size: "xs", color: C.brand },
+            // The landing-hero illustration, in pieces so each can be placed:
+            // Flex has no transform, so the slips' tilt is baked into the PNGs.
+            ...([
+              ["money-bill.png", "300:253", "72px", "10px", "30px"],
+              ["slip-back.png", "1073:688", "26px", "26px", "66px"],
+              ["slip-front.png", "1104:749", "14px", "16px", "78px"],
+              ["coins.png", "240:133", "10px", "6px", "26px"],
+            ] as const).map(([file, ratio, end, bottom, width]) => ({
+              type: "box",
+              layout: "vertical",
+              position: "absolute",
+              offsetEnd: end,
+              offsetBottom: bottom,
+              width,
+              contents: [{ type: "image", url: `${ART}/${file}`, size: "full", aspectRatio: ratio, aspectMode: "fit" }],
+            })),
           ],
         },
-        {
+        body: { type: "box", layout: "vertical", paddingAll: "16px", spacing: "none", contents: body },
+        footer: {
           type: "box",
-          layout: "vertical",
-          flex: 1,
-          justifyContent: "center",
+          layout: "horizontal",
+          paddingAll: "16px",
+          paddingTop: "none",
+          alignItems: "center",
           contents: [
-            { type: "text", text: r.holdings?.bonds?.symbol ?? "-", weight: "bold", size: "sm", color: "#111111" },
-            { type: "text", text: `งวด ${r.installment}/${r.holdings?.bonds?.total_installments ?? "-"}`, size: "xxs", color: "#8A8A8A" },
+            { type: "text", text: "รวม", size: "xs", color: C.muted, flex: 0 },
+            { type: "text", text: `฿${fmtTHB(total)}`, size: "md", weight: "bold", color: C.brand, align: "end", margin: "md" },
           ],
         },
-        { type: "text", text: `฿${fmtTHB(Number(r.amount))}`, size: "sm", weight: "bold", align: "end", gravity: "center", color: "#12BC59", flex: 0 },
-      ],
+        action: { type: "uri", uri: LIFF_REVIEW_URL },
+      };
     });
-  });
 
   return {
     type: "flex",
-    altText: "ปฏิทินรายรับดอกเบี้ย",
-    contents: {
-      type: "bubble",
-      header: {
-        type: "box",
-        layout: "vertical",
-        contents: [
-          { type: "text", text: "ปฏิทินรายรับดอกเบี้ย", weight: "bold", size: "lg", color: "#43507F" },
-          { type: "text", text: "งวดถัดไป · ประมาณการรายเดือน", size: "xs", color: "#8A8A8A" },
-        ],
-      },
-      body: { type: "box", layout: "vertical", spacing: "none", contents: body },
-      footer: openAppFooter("ดูปฏิทินในแอป"),
-    },
+    altText: `ปฏิทินดอกเบี้ยปี ${year + 543}`,
+    contents: { type: "carousel", contents: bubbles },
   };
 }
 
