@@ -19,6 +19,8 @@ import { dbdLookup, namesMatch } from "../_shared/dbd.ts";
 import { ART, C, circleLogo, fmtTHB, groupCard, headerStrip, kv, thDate, thMonth } from "../_shared/flex.ts";
 import { buildSavedFlex } from "../_shared/savedSlip.ts";
 import { createHoldingFromSlip, deriveFaceValue, loadBondFacts } from "../_shared/autoHolding.ts";
+import type { BondFacts } from "../_shared/autoHolding.ts";
+import { buildAddedBondFlex } from "../_shared/addedBond.ts";
 
 const LINE_TOKEN = Deno.env.get("LINE_MESSAGING_ACCESS_TOKEN")!;
 const LINE_SECRET = Deno.env.get("LINE_MESSAGING_CHANNEL_SECRET")!;
@@ -596,7 +598,7 @@ async function autoAddHolding(
   userId: string,
   bondId: string | null,
   documentId: string,
-): Promise<{ symbol: string; faceValue: number } | null> {
+): Promise<{ facts: BondFacts; faceValue: number; installments: number } | null> {
   if (!bondId) return null;
 
   const { data: doc } = await admin
@@ -630,7 +632,10 @@ async function autoAddHolding(
   // Point the slip at the holding it now belongs to, so it shows as a collected
   // coupon rather than an orphan.
   await admin.from("tax_documents").update({ holding_id: created.holdingId }).eq("id", documentId);
-  return { symbol, faceValue };
+
+  const { count } = await admin
+    .from("payouts").select("id", { count: "exact", head: true }).eq("holding_id", created.holdingId);
+  return { facts: { ...facts, id: created.bondId }, faceValue, installments: count ?? 0 };
 }
 
 // Upsert the user by LINE id, returning our internal uuid.
@@ -819,7 +824,7 @@ async function handlePostback(event: LineEvent): Promise<void> {
     // The bond may not be in the portfolio yet — this is the user's first slip
     // for it. Add it now, deriving the position size from the coupon on the
     // slip, so a bond can be tracked without ever opening the web app.
-    let added: { symbol: string; faceValue: number } | null = null;
+    let added: { facts: BondFacts; faceValue: number; installments: number } | null = null;
     try {
       added = await autoAddHolding(docRow.user_id as string, docRow.bond_id as string, id);
     } catch (e) {
@@ -833,13 +838,7 @@ async function handlePostback(event: LineEvent): Promise<void> {
     // same whichever way the slip was approved.
     const messages: unknown[] = [await buildSavedFlex(admin, docRow.user_id as string, id, LIFF_REVIEW_URL)];
     if (added) {
-      messages.unshift({
-        type: "text",
-        text:
-          `เพิ่ม ${added.symbol} เข้าพอร์ตให้แล้ว ✅\n` +
-          `เงินลงทุนโดยประมาณ ฿${fmtTHB(added.faceValue)} (คำนวณจากดอกเบี้ยบนสลิป)\n` +
-          `ถ้าไม่ตรง แก้ได้ในแอป beond`,
-      });
+      messages.unshift(buildAddedBondFlex(added.facts, added.faceValue, added.installments, LIFF_REVIEW_URL));
     }
     await lineReply(event.replyToken, messages);
   } else if (action === "reject") {
