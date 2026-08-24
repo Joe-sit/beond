@@ -368,7 +368,6 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
   const [mSymbol, setMSymbol] = useState("");
   const [mIssuer, setMIssuer] = useState("");
   const [mTaxId, setMTaxId] = useState(""); // payer 13-digit tax id (bonds.payer_tax_id)
-  const [taxIdUnlocked, setTaxIdUnlocked] = useState(false); // allow editing a DBD-verified id
   const [mCoupon, setMCoupon] = useState<number>(NaN);
   const [mIssue, setMIssue] = useState("");
   const [mTermY, setMTermY] = useState<number>(NaN); // bond term — years
@@ -492,7 +491,6 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
     const h = editHolding;
     setManual(true);
     setMSymbol(h.symbol);
-    setTaxIdUnlocked(false);
     setMIssuer(issuerName(h.symbol, h.issuer));
     setMTaxId(h.payerTaxId ?? "");
     setMCoupon(h.couponRate);
@@ -859,7 +857,11 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
               value={mTaxId}
               onChange={(e) => setMTaxId(e.target.value.replace(/\D/g, "").slice(0, 13))}
               inputMode="numeric"
-              readOnly={editing && !!editHolding?.payerTaxIdVerified && !taxIdUnlocked}
+              // A DBD-verified id is locked outright — there is no "edit anyway".
+              // The number came off the slip and was confirmed against the
+              // registry, so any hand-edit can only make it wrong. Editing stays
+              // open exactly while it is unverified or absent.
+              readOnly={editing && !!editHolding?.payerTaxIdVerified}
               placeholder={t("payer_tax_id_ph")}
               className="min-w-0 bg-transparent font-nunito text-base font-medium text-black outline-none"
             />
@@ -902,17 +904,6 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             <p className="text-xs text-[#B7791F]">ยังไม่ได้ยืนยันเลขนี้กับกรมพัฒนาธุรกิจการค้า</p>
           ) : (
             <p className="text-xs text-black/40">เลข 13 หลักจากสลิป 50 ทวิ — ระบบตรวจสอบชื่อกับกรมพัฒนาธุรกิจการค้าให้อัตโนมัติ</p>
-          )}
-          {editing && editHolding?.payerTaxIdVerified && !taxIdUnlocked && (
-            <button
-              type="button"
-              onClick={() => {
-                if (window.confirm("เลขนี้ยืนยันแล้วจากสลิป 50 ทวิ และกรมพัฒนาธุรกิจการค้า — การแก้ไขอาจทำให้ข้อมูลผิด ยืนยันที่จะแก้ไข?")) setTaxIdUnlocked(true);
-              }}
-              className="shrink-0 text-xs font-medium text-brand-blue underline"
-            >
-              แก้ไข
-            </button>
           )}
         </div>
       </div>

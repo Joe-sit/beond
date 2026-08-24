@@ -22,12 +22,20 @@ export default function TaxIdErrorSheet({ readValue, digits, liveName, onClose }
   return (
     <div className="fixed inset-0 z-[130] flex flex-col justify-end" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50" />
+      {/* The illustration overhangs the sheet's top edge onto the dimmed
+          backdrop. It is 13rem tall and sits 6rem above the edge, so 7rem of it
+          falls inside — pt-32 (8rem) clears that with room to spare. Change one,
+          change the other. */}
       <div
-        className="relative flex flex-col items-center rounded-t-3xl bg-white px-8 pt-8 pb-6"
+        className="relative flex flex-col items-center rounded-t-3xl bg-white px-8 pt-32 pb-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <img src={taxidError} alt="" className="h-52 w-auto" />
-        <p className="mt-4 text-center text-xl font-bold text-[#1B1C1D]">
+        <img
+          src={taxidError}
+          alt=""
+          className="pointer-events-none absolute -top-24 left-1/2 h-52 w-auto -translate-x-1/2 select-none"
+        />
+        <p className="text-center text-xl font-bold text-[#1B1C1D]">
           เลขประจำตัวผู้เสียภาษีของผู้จ่ายไม่ถูกต้อง
         </p>
         <p className="mt-2 text-center text-base leading-relaxed text-black/60">
