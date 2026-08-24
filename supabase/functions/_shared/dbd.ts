@@ -43,14 +43,23 @@ const BROWSER_HEADERS = {
   Referer: "https://openapi.dbd.go.th/",
 };
 
+/**
+ * DBD answers in 7–11s under normal conditions (measured, repeatedly). The
+ * original 8s budget therefore aborted a large share of perfectly good lookups,
+ * which is what made the check look random: the same tax id came back พบ or
+ * ไม่พบ depending on where in that range the request landed.
+ */
+const TIMEOUT_MS = 20_000;
+
 async function attempt(id: string, timeoutMs: number): Promise<DbdResult> {
   try {
     const res = await fetch(`${DBD_URL}/${id}`, {
       signal: AbortSignal.timeout(timeoutMs),
       headers: BROWSER_HEADERS,
     });
-    // 4xx that isn't 404 is still the registry answering — but 429/5xx are the
-    // WAF or an outage, which must not read as "this company doesn't exist".
+    // 403 is the Imperva WAF in front of DBD, not DBD itself (an id it dislikes
+    // gets an HTML challenge page, never JSON) — like 429/5xx it means we never
+    // got an answer, and must not read as "this company doesn't exist".
     if (res.status === 429 || res.status >= 500) return { status: "error" };
     if (!res.ok) return res.status === 404 ? { status: "not_found" } : { status: "error" };
 
@@ -76,10 +85,10 @@ async function attempt(id: string, timeoutMs: number): Promise<DbdResult> {
  * user watching the field shouldn't be told their correct tax id is unknown.
  */
 export async function dbdLookup(id: string): Promise<DbdResult> {
-  const first = await attempt(id, 8000);
+  const first = await attempt(id, TIMEOUT_MS);
   if (first.status !== "error") return first;
   await new Promise((r) => setTimeout(r, 400));
-  return await attempt(id, 8000);
+  return await attempt(id, TIMEOUT_MS);
 }
 
 /** Back-compat shim: name on success, null for both "not found" and "error". */
