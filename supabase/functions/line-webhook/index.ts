@@ -1011,6 +1011,13 @@ async function handlePostback(event: LineEvent): Promise<void> {
 
   if (!id) return;
 
+  // Postback data is client-supplied: nothing below may act on a document id (or
+  // a batch id) without first proving the sender owns it. Resolve the caller's
+  // own user row and scope every read and write to it.
+  const requesterLineId = event.source?.userId;
+  if (!requesterLineId) return;
+  const requesterId = await ensureUser(requesterLineId);
+
   // Save every saveable slip in a batch in one tap. Each row still goes through
   // the same guards as a single confirm — a stale card must not double-add a
   // coupon, and an incomplete or DBD-rejected slip must not slip through just
@@ -1018,12 +1025,14 @@ async function handlePostback(event: LineEvent): Promise<void> {
   if (action === "confirm_set") {
     const { data: rows } = await admin
       .from("tax_documents")
-      .select("id, user_id, status, bond_id, pay_date, gross_amount, wht_amount, payer_tax_id_verified")
+      .select("id, user_id, status, bond_id, pay_date, gross_amount, wht_amount, ocr_raw")
       .eq("image_set_id", id)
+      .eq("user_id", requesterId)
       .order("image_set_index");
     const docs = (rows ?? []) as {
       id: string; user_id: string; status: string; bond_id: string | null;
       pay_date: string | null; gross_amount: number | null; wht_amount: number | null;
+      ocr_raw: { taxCheck?: TaxIdCheck } | null;
     }[];
     if (!docs.length) {
       await lineReply(event.replyToken, [{ type: "text", text: "ไม่พบรายการชุดนี้แล้วครับ 🙏" }]);
@@ -1036,6 +1045,12 @@ async function handlePostback(event: LineEvent): Promise<void> {
     for (const d of docs) {
       if (d.status !== "pending") { skipped++; continue; }
       if (!d.bond_id || !d.pay_date || d.gross_amount === null || d.wht_amount === null) { skipped++; continue; }
+      // The card withholds its save button when DBD contradicts the slip; the
+      // batch button must honour the same verdict, or a mismatched payer id
+      // would be filed simply because it arrived next to valid slips. An
+      // unreachable registry ("unchecked") is not a contradiction and still saves.
+      const state = d.ocr_raw?.taxCheck?.state;
+      if (state === "mismatch" || state === "not_found") { skipped++; continue; }
       if (await findDuplicateCoupon(d.user_id, d.bond_id, d.pay_date, d.id)) {
         await admin.from("tax_documents").update({ status: "rejected" }).eq("id", d.id);
         skipped++;
@@ -1063,7 +1078,11 @@ async function handlePostback(event: LineEvent): Promise<void> {
     // Guard stale cards: an old bubble stays in the chat forever (LINE can't
     // recall a sent message), so a second tap must not double-add the coupon.
     const { data: docRow } = await admin
-      .from("tax_documents").select("status, user_id, bond_id, pay_date, gross_amount, wht_amount").eq("id", id).maybeSingle();
+      .from("tax_documents")
+      .select("status, user_id, bond_id, pay_date, gross_amount, wht_amount, ocr_raw")
+      .eq("id", id)
+      .eq("user_id", requesterId)
+      .maybeSingle();
     if (!docRow) {
       await lineReply(event.replyToken, [{ type: "text", text: "ไม่พบรายการนี้แล้วครับ 🙏" }]);
       return;
@@ -1075,6 +1094,17 @@ async function handlePostback(event: LineEvent): Promise<void> {
     // Never save an incomplete coupon — without a bond it can't be mapped to a
     // payout (orphan slip). Guards a stale card whose confirm is tapped even
     // though the data is missing.
+    // The card only offers "บันทึก" when DBD didn't contradict the slip, but the
+    // postback payload is client-supplied — re-check rather than trust the tap.
+    const cardState = (docRow.ocr_raw as { taxCheck?: TaxIdCheck } | null)?.taxCheck?.state;
+    if (cardState === "mismatch" || cardState === "not_found") {
+      await lineReply(event.replyToken, [{
+        type: "text",
+        text: "ยังบันทึกไม่ได้ครับ เลขผู้เสียภาษีของผู้จ่ายไม่ตรงกับผู้ออกหุ้นกู้ 🙏\nกด “เข้าไปแก้ไข” ที่การ์ดเพื่อตรวจสอบก่อนนะครับ",
+      }]);
+      return;
+    }
+
     const incomplete: string[] = [];
     if (!docRow.bond_id) incomplete.push("รหัสหุ้นกู้");
     if (!docRow.pay_date) incomplete.push("วันที่จ่าย");
@@ -1118,7 +1148,7 @@ async function handlePostback(event: LineEvent): Promise<void> {
     }
     await lineReply(event.replyToken, messages);
   } else if (action === "reject") {
-    await admin.from("tax_documents").update({ status: "rejected" }).eq("id", id);
+    await admin.from("tax_documents").update({ status: "rejected" }).eq("id", id).eq("user_id", requesterId);
     await lineReply(event.replyToken, [
       { type: "text", text: "ยกเลิกรายการแล้ว หากต้องการแก้ไข ส่งรูปเอกสารเข้ามาใหม่ได้เลยครับ" },
     ]);
