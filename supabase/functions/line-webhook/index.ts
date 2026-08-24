@@ -411,21 +411,26 @@ function unreadableFlex(failed = false): unknown {
         paddingAll: "20px",
         spacing: "none",
         contents: [
-          { type: "text", text: "ถ่ายใหม่ให้ได้แบบนี้ 📸", size: "sm", weight: "bold", color: C.ink },
+          { type: "text", text: "กรุณาถ่ายใบสลิปตามแนวทางนี้ 📸", size: "sm", weight: "bold", color: C.ink },
           ...tips,
         ],
       },
+      // No camera button here: `camera` is a quick-reply-only action, and LINE
+      // rejects the whole message (400) when it appears on a flex button — which
+      // is why an unreadable photo silently got no reply at all. The camera lives
+      // in quickReply below, where it's allowed.
       footer: {
         type: "box",
         layout: "vertical",
         paddingAll: "12px",
         contents: [
           {
-            type: "button",
-            style: "primary",
-            color: C.brand,
-            height: "sm",
-            action: { type: "camera", label: "ถ่ายรูปใหม่" },
+            type: "text",
+            text: "ถ่ายใหม่แล้วส่งเข้ามาในแชทนี้ได้เลย",
+            size: "xs",
+            color: C.muted,
+            align: "center",
+            wrap: true,
           },
         ],
       },
