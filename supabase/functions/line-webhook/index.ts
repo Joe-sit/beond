@@ -18,7 +18,7 @@ import { encodeBase64 } from "jsr:@std/encoding/base64";
 import { dbdLookup, namesMatch } from "../_shared/dbd.ts";
 import { ART, C, circleLogo, fmtTHB, groupCard, headerStrip, kv, thDate, thMonth } from "../_shared/flex.ts";
 import { buildSavedFlex } from "../_shared/savedSlip.ts";
-import { createHoldingFromSlip, deriveFaceValue, loadBondFacts } from "../_shared/autoHolding.ts";
+import { autoAddHolding, previewAutoAdd } from "../_shared/autoHolding.ts";
 import type { BondFacts } from "../_shared/autoHolding.ts";
 import { buildAddedBondFlex } from "../_shared/addedBond.ts";
 
@@ -354,7 +354,9 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
 
     // Preview the auto-add on the confirm card, so "บันทึก" never silently
     // changes the portfolio — the user sees the position size we derived first.
-    const preview = await previewAutoAdd(doc.user_id as string, bondId, f, gross);
+    const preview = await previewAutoAdd(
+      admin, doc.user_id as string, bondId, f.bond_symbol, f.payer_name, f.pay_date, gross,
+    );
 
     await linePush(lineUserId, [buildConfirmFlex(documentId, f, taxCheck, preview)]);
   } catch (err) {
@@ -569,75 +571,6 @@ function buildConfirmFlex(
   };
 }
 
-/**
- * The face value we'd derive if this slip were confirmed — null when the bond is
- * already held or the size can't be derived confidently. Read-only: it changes
- * nothing, it just lets the confirm card say what will happen.
- */
-async function previewAutoAdd(
-  userId: string,
-  bondId: string | null,
-  f: SlipFields,
-  gross: number | null,
-): Promise<number | null> {
-  if (!bondId || !gross) return null;
-  const { data: held } = await admin
-    .from("holdings").select("id").eq("user_id", userId).eq("bond_id", bondId).limit(1);
-  if (held?.length) return null;
-  const facts = await loadBondFacts(admin, f.bond_symbol ?? "", f.payer_name ?? null);
-  if (!facts) return null;
-  return deriveFaceValue(gross, facts, f.pay_date ?? null);
-}
-
-/**
- * Add the slip's bond to the user's portfolio if they don't hold it yet.
- * Returns what was added, or null when nothing was (already held, or the
- * position size couldn't be derived with confidence — see deriveFaceValue).
- */
-async function autoAddHolding(
-  userId: string,
-  bondId: string | null,
-  documentId: string,
-): Promise<{ facts: BondFacts; faceValue: number; installments: number } | null> {
-  if (!bondId) return null;
-
-  const { data: doc } = await admin
-    .from("tax_documents")
-    .select("gross_amount, pay_date, payer_name, payer_tax_id, payer_tax_id_verified")
-    .eq("id", documentId)
-    .maybeSingle();
-  const gross = Number(doc?.gross_amount ?? 0);
-  if (!gross) return null;
-
-  const { data: bond } = await admin.from("bonds").select("symbol").eq("id", bondId).maybeSingle();
-  const symbol = bond?.symbol as string | undefined;
-  if (!symbol) return null;
-
-  // Already in the portfolio → nothing to do (the common case, from the second
-  // coupon onwards).
-  const { data: held } = await admin
-    .from("holdings").select("id").eq("user_id", userId).eq("bond_id", bondId).limit(1);
-  if (held?.length) return null;
-
-  const facts = await loadBondFacts(admin, symbol, doc?.payer_name ?? null);
-  if (!facts) return null;
-  const faceValue = deriveFaceValue(gross, facts, (doc?.pay_date as string | null) ?? null);
-  if (faceValue === null) return null;
-
-  // Only a DBD-verified id is worth writing onto the shared catalog row.
-  const taxId = doc?.payer_tax_id_verified ? ((doc?.payer_tax_id as string | null) ?? null) : null;
-  const created = await createHoldingFromSlip(admin, userId, facts, faceValue, taxId);
-  if (!created) return null;
-
-  // Point the slip at the holding it now belongs to, so it shows as a collected
-  // coupon rather than an orphan.
-  await admin.from("tax_documents").update({ holding_id: created.holdingId }).eq("id", documentId);
-
-  const { count } = await admin
-    .from("payouts").select("id", { count: "exact", head: true }).eq("holding_id", created.holdingId);
-  return { facts: { ...facts, id: created.bondId }, faceValue, installments: count ?? 0 };
-}
-
 // Upsert the user by LINE id, returning our internal uuid.
 async function ensureUser(lineUserId: string): Promise<string> {
   const { data: existing, error: selErr } = await admin
@@ -826,7 +759,7 @@ async function handlePostback(event: LineEvent): Promise<void> {
     // slip, so a bond can be tracked without ever opening the web app.
     let added: { facts: BondFacts; faceValue: number; installments: number } | null = null;
     try {
-      added = await autoAddHolding(docRow.user_id as string, docRow.bond_id as string, id);
+      added = await autoAddHolding(admin, docRow.user_id as string, docRow.bond_id as string, id);
     } catch (e) {
       // A failed auto-add must not block saving the credit — the slip is still a
       // valid tax record; it just sits unmatched until the bond is added.

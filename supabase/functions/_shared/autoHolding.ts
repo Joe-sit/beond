@@ -13,10 +13,14 @@ import { deriveCouponSchedule } from "./couponSchedule.ts";
 import { thaibmaFeature } from "./thaibma.ts";
 
 const FALLBACK_SECTOR_ID = "other";
-/** Thai retail bonds are issued in ฿1,000 units. */
-const UNIT = 1_000;
-/** Below this, a derived face value is more likely a misread than a real position. */
-const MIN_FACE = 10_000;
+/**
+ * Retail bond subscriptions move in ฿100,000 steps, so a real position is always
+ * a multiple of it. That makes the step a correction, not just a tidy-up: OCR
+ * satang drift and a rate carried to two decimals put the derived figure a few
+ * hundred baht off (199,900 for a ฿200,000 position), and snapping lands it
+ * exactly right.
+ */
+const UNIT = 100_000;
 /** Above this it's not a retail position; something upstream is wrong. */
 const MAX_FACE = 100_000_000;
 
@@ -122,14 +126,18 @@ export function deriveFaceValue(
   return roundToUnit((gross / (rate / 100) / nominalDays) * 365);
 }
 
-// Snap to the ฿1,000 unit bonds are sold in, and refuse anything outside the
-// range a retail position can plausibly occupy. This is a sanity bound, not a
-// correctness proof: the figure is only as good as the coupon rate we matched,
-// which is why the user is always shown the number before it is written and can
-// correct it in the app afterwards.
+// Snap to the subscription step, then refuse anything outside the range a retail
+// position can plausibly occupy. This is a sanity bound, not a correctness
+// proof: the figure is only as good as the coupon rate we matched, which is why
+// the user is always shown the number before it is written and can correct it in
+// the app afterwards.
 function roundToUnit(face: number): number | null {
-  if (!Number.isFinite(face) || face < MIN_FACE || face > MAX_FACE) return null;
-  return Math.round(face / UNIT) * UNIT;
+  if (!Number.isFinite(face) || face <= 0) return null;
+  const rounded = Math.round(face / UNIT) * UNIT;
+  // Below one step there is no position to round to — treat it as underivable
+  // rather than inflating a misread into the minimum subscription.
+  if (rounded < UNIT || rounded > MAX_FACE) return null;
+  return rounded;
 }
 
 /**
@@ -204,4 +212,86 @@ export async function createHoldingFromSlip(
   }
 
   return { holdingId: holding.id as string, bondId };
+}
+
+/**
+ * The face value we'd derive if this slip were confirmed — null when the bond is
+ * already held or the size can't be derived confidently. Read-only: it changes
+ * nothing, it just lets the confirm card say what will happen.
+ */
+export async function previewAutoAdd(
+  admin: SupabaseClient,
+  userId: string,
+  bondId: string | null,
+  bondSymbol: string | null,
+  payerName: string | null,
+  payDate: string | null,
+  gross: number | null,
+): Promise<number | null> {
+  if (!bondId || !gross) return null;
+  const { data: held } = await admin
+    .from("holdings").select("id").eq("user_id", userId).eq("bond_id", bondId).limit(1);
+  if (held?.length) return null;
+  const facts = await loadBondFacts(admin, bondSymbol ?? "", payerName);
+  if (!facts) return null;
+  return deriveFaceValue(gross, facts, payDate);
+}
+
+// Auto-add stays silent by design (it declines rather than guesses), which made
+// "nothing happened" impossible to tell apart from "it failed". Log the reason.
+function skip(documentId: string, why: string): void {
+  console.log(`autoAddHolding skipped (${documentId}): ${why}`);
+}
+
+/**
+ * Add the slip's bond to the user's portfolio if they don't hold it yet.
+ * Returns what was added, or null when nothing was (already held, or the
+ * position size couldn't be derived with confidence — see deriveFaceValue).
+ */
+export async function autoAddHolding(
+  admin: SupabaseClient,
+  userId: string,
+  bondId: string | null,
+  documentId: string,
+): Promise<{ facts: BondFacts; faceValue: number; installments: number } | null> {
+  if (!bondId) return null;
+
+  const { data: doc } = await admin
+    .from("tax_documents")
+    .select("gross_amount, pay_date, payer_name, payer_tax_id, payer_tax_id_verified")
+    .eq("id", documentId)
+    .maybeSingle();
+  const gross = Number(doc?.gross_amount ?? 0);
+  if (!gross) { skip(documentId, "no gross amount"); return null; }
+
+  const { data: bond } = await admin.from("bonds").select("symbol").eq("id", bondId).maybeSingle();
+  const symbol = bond?.symbol as string | undefined;
+  if (!symbol) { skip(documentId, "bond row has no symbol"); return null; }
+
+  // Already in the portfolio → nothing to do (the common case, from the second
+  // coupon onwards).
+  const { data: held } = await admin
+    .from("holdings").select("id").eq("user_id", userId).eq("bond_id", bondId).limit(1);
+  if (held?.length) return null;
+
+  const facts = await loadBondFacts(admin, symbol, doc?.payer_name ?? null);
+  if (!facts) { skip(documentId, `no coupon facts for ${symbol}`); return null; }
+  const faceValue = deriveFaceValue(gross, facts, (doc?.pay_date as string | null) ?? null);
+  if (faceValue === null) {
+    skip(documentId, `face value underivable for ${symbol} (rate=${facts.couponRate}, freq=${facts.frequency}, maturity=${facts.maturityDate}, gross=${gross})`);
+    return null;
+  }
+
+  // Only a DBD-verified id is worth writing onto the shared catalog row.
+  const taxId = doc?.payer_tax_id_verified ? ((doc?.payer_tax_id as string | null) ?? null) : null;
+  const created = await createHoldingFromSlip(admin, userId, facts, faceValue, taxId);
+  if (!created) { skip(documentId, "holding already exists"); return null; }
+
+  // Point the slip at the holding it now belongs to, so it shows as a collected
+  // coupon rather than an orphan.
+  await admin.from("tax_documents").update({ holding_id: created.holdingId }).eq("id", documentId);
+
+  const { count } = await admin
+    .from("payouts").select("id", { count: "exact", head: true }).eq("holding_id", created.holdingId);
+  return { facts: { ...facts, id: created.bondId }, faceValue, installments: count ?? 0 };
 }
