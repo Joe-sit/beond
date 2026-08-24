@@ -37,7 +37,9 @@ const json = (status: number, body: unknown) =>
 
 const DAY = 86_400_000;
 const MATCH_WINDOW = 45 * DAY; // slip pay_date can drift from the scheduled payout
-const THROTTLE = 6 * DAY; // don't renotify within ~a week
+// Don't renotify within this window. Kept comfortably under the weekly cron's
+// 7-day gap so a mid-week manual test can't swallow the next scheduled run.
+const THROTTLE = 4 * DAY;
 
 async function linePush(to: string, messages: unknown[]): Promise<boolean> {
   const r = await fetch("https://api.line.me/v2/bot/message/push", {
@@ -138,7 +140,7 @@ Deno.serve(async (req) => {
 
   let pushed = 0;
   for (const u of users) {
-    // Throttle: skip anyone reminded within the last ~week (unless forced).
+    // Throttle: skip anyone reminded within the last THROTTLE window (unless forced).
     if (!body.force && u.slip_reminder_sent_at &&
         now - new Date(u.slip_reminder_sent_at as string).getTime() < THROTTLE) continue;
 
