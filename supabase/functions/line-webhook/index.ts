@@ -269,7 +269,7 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
         .update({ status: "rejected", image_path: null }).eq("id", documentId);
       await deleteSlipImage(imagePath);
       imagePath = null;
-      await linePush(lineUserId, [unreadableFlex()]);
+      await pushOrHold(documentId, lineUserId, [unreadableFlex()]);
       return;
     }
 
@@ -297,6 +297,11 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
       if (!bondId) f.bond_symbol = null;
     }
 
+    // Verify the payer id against DBD before the row is written, so the verdict
+    // is stored with the fields and the batch carousel can rebuild each card
+    // without re-checking every slip.
+    const taxCheck = await checkPayerTaxId(f.payer_tax_id, bondId);
+
     // A coupon is one (bond, pay_date) per user. If it's already been saved,
     // don't offer to add it again — reject this scan and tell the user.
     const dup = await findDuplicateCoupon(doc.user_id, bondId, f.pay_date, documentId);
@@ -305,7 +310,7 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
         .update({ status: "rejected", image_path: null }).eq("id", documentId);
       await deleteSlipImage(imagePath);
       imagePath = null;
-      await linePush(lineUserId, [duplicateMsg(f)]);
+      await pushOrHold(documentId, lineUserId, [duplicateMsg(f)]);
       return;
     }
 
@@ -323,7 +328,7 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
       doc_ref: f.doc_ref ?? null,
       tax_year: taxYear,
       bond_id: bondId,
-      ocr_raw: { fields: f },
+      ocr_raw: { fields: f, taxCheck },
       image_path: null,
     };
     let { error: updErr } = await admin
@@ -343,7 +348,6 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
 
     // Verify the payer id against DBD before offering to save. A slip filed
     // against the wrong company is worse than one not filed at all.
-    const taxCheck = await checkPayerTaxId(f.payer_tax_id, bondId);
     await admin.from("tax_documents")
       .update({ payer_tax_id_verified: taxCheck.state === "verified" }).eq("id", documentId);
 
@@ -353,7 +357,7 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
       admin, doc.user_id as string, bondId, f.bond_symbol, f.payer_name, f.pay_date, gross,
     );
 
-    await linePush(lineUserId, [buildConfirmFlex(documentId, f, taxCheck, preview)]);
+    await pushOrHold(documentId, lineUserId, [buildConfirmFlex(documentId, f, taxCheck, preview)]);
   } catch (err) {
     console.error("processSlip failed:", err);
     // Never keep the ID document around, even on failure.
@@ -361,7 +365,7 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
       await deleteSlipImage(imagePath);
       await admin.from("tax_documents").update({ image_path: null }).eq("id", documentId);
     }
-    await linePush(lineUserId, [unreadableFlex(true)]);
+    await pushOrHold(documentId, lineUserId, [unreadableFlex(true)]);
   }
 }
 
@@ -439,6 +443,186 @@ function unreadableFlex(failed = false): unknown {
       items: [
         { type: "action", action: { type: "camera", label: "📷 ถ่ายรูปสลิป" } },
         { type: "action", action: { type: "cameraRoll", label: "🖼️ เลือกรูปสลิป" } },
+      ],
+    },
+  };
+}
+
+/**
+ * Deliver a per-slip result — unless the slip belongs to a multi-photo batch, in
+ * which case nothing is sent until the last image of the batch has been read,
+ * and then the whole batch goes out as one carousel.
+ *
+ * The "slow OCR" nudge deliberately still pushes immediately: it exists to say
+ * we're alive, and holding it back would defeat the point.
+ */
+async function pushOrHold(documentId: string, lineUserId: string, messages: unknown[]): Promise<void> {
+  const { data: doc } = await admin
+    .from("tax_documents").select("image_set_id, image_set_total, user_id").eq("id", documentId).maybeSingle();
+  const setId = doc?.image_set_id as string | null;
+  if (!setId) {
+    await linePush(lineUserId, messages);
+    return;
+  }
+
+  // Processed = OCR wrote its fields, or the slip was rejected outright
+  // (unreadable / duplicate). Both are terminal for this image.
+  const { count } = await admin
+    .from("tax_documents")
+    .select("id", { count: "exact", head: true })
+    .eq("image_set_id", setId)
+    .or("ocr_raw.not.is.null,status.eq.rejected");
+
+  if ((count ?? 0) < (doc?.image_set_total ?? 0)) {
+    // Still waiting on siblings — unless one of them never came back. An isolate
+    // can be evicted mid-OCR, and waiting for a photo that will never finish
+    // would leave the user with silence instead of the slips we did read.
+    const { data: setRow } = await admin
+      .from("line_image_sets").select("created_at").eq("set_id", setId).maybeSingle();
+    const age = setRow?.created_at ? Date.now() - new Date(setRow.created_at as string).getTime() : 0;
+    if (age < 3 * 60_000) return;
+  }
+
+  // Every image runs in its own isolate, so two of them can reach "all done" at
+  // once. The claim is what makes exactly one of them send.
+  const { data: claimed } = await admin
+    .from("line_image_sets")
+    .update({ pushed: true })
+    .eq("set_id", setId)
+    .eq("pushed", false)
+    .select("set_id")
+    .maybeSingle();
+  if (!claimed) return;
+
+  await linePush(lineUserId, await buildSetMessages(setId, doc!.user_id as string));
+}
+
+/**
+ * The batch as one carousel: a bubble per readable slip, then a summary bubble
+ * that totals them and offers to save the lot in one tap.
+ */
+async function buildSetMessages(setId: string, userId: string): Promise<unknown[]> {
+  const { data: rows } = await admin
+    .from("tax_documents")
+    .select("id, status, ocr_raw, bond_id, gross_amount, wht_amount")
+    .eq("image_set_id", setId)
+    .order("image_set_index");
+  const docs = (rows ?? []) as {
+    id: string;
+    status: string;
+    ocr_raw: { fields?: SlipFields; taxCheck?: TaxIdCheck } | null;
+    bond_id: string | null;
+    gross_amount: number | null;
+    wht_amount: number | null;
+  }[];
+
+  const usable = docs.filter((d) => d.status === "pending" && d.ocr_raw?.fields);
+  const dropped = docs.length - usable.length;
+  // Nothing survived — say so once, rather than sending an empty carousel.
+  if (!usable.length) return [unreadableFlex()];
+
+  const bubbles: Record<string, unknown>[] = [];
+  const saveable: string[] = [];
+  let totalGross = 0;
+  let totalWht = 0;
+
+  for (const [i, d] of usable.entries()) {
+    const f = d.ocr_raw!.fields!;
+    const check = d.ocr_raw!.taxCheck ?? { state: "unchecked" as const, officialName: null };
+    const preview = await previewAutoAdd(
+      admin, userId, d.bond_id, f.bond_symbol, f.payer_name, f.pay_date, num(d.gross_amount),
+    );
+    const { bubble, complete } = buildConfirmBubble(d.id, f, check, preview, `${i + 1}/${usable.length}`);
+    bubbles.push(bubble);
+    if (complete) {
+      saveable.push(d.id);
+      totalGross += Number(d.gross_amount ?? 0);
+      totalWht += Number(d.wht_amount ?? 0);
+    }
+  }
+
+  bubbles.push(buildSetSummaryBubble(setId, usable.length, saveable.length, dropped, totalGross, totalWht));
+
+  return [{
+    type: "flex",
+    altText: `อ่านสลิป ${usable.length} ใบแล้ว — ตรวจสอบก่อนบันทึก`,
+    // LINE caps a carousel at 12 bubbles; the summary takes the last slot.
+    contents: { type: "carousel", contents: bubbles.slice(0, 12) },
+  }];
+}
+
+function buildSetSummaryBubble(
+  setId: string,
+  read: number,
+  saveable: number,
+  dropped: number,
+  totalGross: number,
+  totalWht: number,
+): Record<string, unknown> {
+  const body: Record<string, unknown>[] = [
+    { type: "text", text: "รวมทั้งชุด", size: "xxs", color: C.muted },
+    { type: "text", text: `${read} ใบ`, size: "xxl", weight: "bold", color: C.ink },
+    groupCard(
+      [
+        kv("ดอกเบี้ยรวม", `฿${fmtTHB(totalGross)}`),
+        kv("ภาษีหักรวม", `฿${fmtTHB(totalWht)}`, { strong: true }),
+      ],
+      "lg",
+    ),
+  ];
+  if (saveable < read) {
+    body.push({
+      type: "text",
+      text: `มี ${read - saveable} ใบที่ยังบันทึกไม่ได้ — ปัดดูการ์ดแล้วกด “เข้าไปแก้ไข”`,
+      size: "xxs",
+      color: C.red,
+      wrap: true,
+      margin: "md",
+    });
+  }
+  if (dropped > 0) {
+    body.push({
+      type: "text",
+      text: `อีก ${dropped} ใบอ่านไม่ได้หรือบันทึกไปแล้ว`,
+      size: "xxs",
+      color: C.muted,
+      wrap: true,
+      margin: "sm",
+    });
+  }
+
+  return {
+    type: "bubble",
+    size: "mega",
+    header: headerStrip({
+      title: "สรุปทั้งชุด",
+      subtitle: `บันทึกได้ทันที ${saveable} ใบ`,
+      bg: "#E8F0FF",
+      fg: "#2F3C6B",
+      art: { file: "coins.png", ratio: "240:133", width: 76, offsetBottom: "-4px", offsetEnd: "6px" },
+    }),
+    body: { type: "box", layout: "vertical", paddingAll: "20px", spacing: "none", contents: body },
+    footer: {
+      type: "box",
+      layout: "vertical",
+      paddingAll: "12px",
+      contents: [
+        saveable > 0
+          ? {
+              type: "button",
+              style: "primary",
+              color: C.brand,
+              height: "sm",
+              action: { type: "postback", label: `บันทึกทั้งหมด ${saveable} ใบ`, data: `action=confirm_set&id=${setId}` },
+            }
+          : {
+              type: "text",
+              text: "แก้ไขทีละใบก่อนจึงจะบันทึกได้",
+              size: "xs",
+              color: C.muted,
+              align: "center",
+              wrap: true,
+            },
       ],
     },
   };
@@ -543,12 +727,13 @@ function taxIdRow(check: TaxIdCheck): Record<string, unknown> {
 // data is complete AND the payer id checks out; otherwise the user is sent to
 // edit, so neither an incomplete coupon nor one filed against the wrong company
 // can be saved from the chat.
-function buildConfirmFlex(
+function buildConfirmBubble(
   documentId: string,
   f: SlipFields,
   check: TaxIdCheck,
   autoAdd: number | null,
-): unknown {
+  badge?: string,
+): { bubble: Record<string, unknown>; complete: boolean } {
   const miss = missingFields(f);
   const blocked = check.state === "mismatch" || check.state === "not_found";
   const complete = miss.length === 0 && !blocked;
@@ -616,30 +801,42 @@ function buildConfirmFlex(
     });
   }
 
+  const bubble = {
+    type: "bubble",
+    size: "mega",
+    header: complete
+      ? headerStrip({
+          title: badge ? `อ่านสลิปสำเร็จ · ${badge}` : "อ่านสลิปสำเร็จ",
+          subtitle: "ตรวจสอบก่อนบันทึกเป็นเครดิตภาษี",
+          bg: "#E8F0FF",
+          fg: "#2F3C6B",
+          art: { file: "slip-front.png", ratio: "1104:749", width: 96, offsetBottom: "-6px" },
+        })
+      : headerStrip({
+          title: badge ? `ยังบันทึกไม่ได้ · ${badge}` : "ยังบันทึกไม่ได้",
+          subtitle: blocked ? "เลขผู้เสียภาษีไม่ตรงกับผู้ออกหุ้นกู้" : "ข้อมูลบนสลิปยังไม่ครบ",
+          bg: "#FDE8E8",
+          fg: "#A33131",
+          art: { file: "taxid-error.png", ratio: "340:357", width: 76, offsetBottom: "-8px", offsetEnd: "6px" },
+        }),
+    body: { type: "box", layout: "vertical", paddingAll: "20px", spacing: "none", contents: body },
+    footer: { type: "box", layout: "vertical", paddingAll: "12px", spacing: "none", contents: footer },
+  };
+  return { bubble, complete };
+}
+
+// Single slip — one bubble, wrapped as a message.
+function buildConfirmFlex(
+  documentId: string,
+  f: SlipFields,
+  check: TaxIdCheck,
+  autoAdd: number | null,
+): unknown {
+  const { bubble, complete } = buildConfirmBubble(documentId, f, check, autoAdd);
   return {
     type: "flex",
     altText: complete ? "ตรวจสอบข้อมูล 50 ทวิ ก่อนบันทึก" : "ยังบันทึก 50 ทวิ ไม่ได้ — ต้องแก้ไขก่อน",
-    contents: {
-      type: "bubble",
-      size: "mega",
-      header: complete
-        ? headerStrip({
-            title: "อ่านสลิปสำเร็จ",
-            subtitle: "ตรวจสอบก่อนบันทึกเป็นเครดิตภาษี",
-            bg: "#E8F0FF",
-            fg: "#2F3C6B",
-            art: { file: "slip-front.png", ratio: "1104:749", width: 96, offsetBottom: "-6px" },
-          })
-        : headerStrip({
-            title: "ยังบันทึกไม่ได้",
-            subtitle: blocked ? "เลขผู้เสียภาษีไม่ตรงกับผู้ออกหุ้นกู้" : "ข้อมูลบนสลิปยังไม่ครบ",
-            bg: "#FDE8E8",
-            fg: "#A33131",
-            art: { file: "taxid-error.png", ratio: "340:357", width: 76, offsetBottom: "-8px", offsetEnd: "6px" },
-          }),
-      body: { type: "box", layout: "vertical", paddingAll: "20px", spacing: "none", contents: body },
-      footer: { type: "box", layout: "vertical", paddingAll: "12px", spacing: "none", contents: footer },
-    },
+    contents: bubble,
   };
 }
 
@@ -742,18 +939,44 @@ async function handleImage(event: LineEvent): Promise<void> {
     .from("tax-slips").upload(path, bytes, { contentType, upsert: false });
   if (upErr) throw new Error(`upload: ${upErr.message}`);
 
+  // LINE tags a multi-photo send with a shared imageSet id; remember it so the
+  // batch can be answered with a single carousel instead of N cards.
+  const set = event.message?.imageSet;
+  const setId = set?.id && (set.total ?? 0) > 1 ? set.id : null;
+  const setTotal = setId ? (set!.total as number) : null;
+
   const { data: doc, error: insErr } = await admin
     .from("tax_documents")
-    .insert({ user_id: userId, source: "line_ocr", status: "pending", image_path: path })
+    .insert({
+      user_id: userId,
+      source: "line_ocr",
+      status: "pending",
+      image_path: path,
+      image_set_id: setId,
+      image_set_index: setId ? (set!.index ?? null) : null,
+      image_set_total: setTotal,
+    })
     .select("id").single();
   if (insErr) throw new Error(`insert doc: ${insErr.message}`);
 
+  if (setId) {
+    // Ignore the conflict: every image in the batch tries to create this row.
+    await admin.from("line_image_sets")
+      .upsert({ set_id: setId, user_id: userId, total: setTotal }, { onConflict: "set_id", ignoreDuplicates: true });
+  }
+
   // Ack immediately via the reply token (instant), then run OCR. Ack failure
   // (e.g. an expired token on a redelivered event) must not skip OCR.
-  if (event.replyToken) {
+  // One ack per batch, not per photo — four "ได้รับเอกสารแล้ว" in a row is noise.
+  if (event.replyToken && (!setId || (set!.index ?? 1) <= 1)) {
     try {
       await lineReply(event.replyToken, [
-        { type: "text", text: "ได้รับเอกสารแล้ว ✅ กำลังอ่านข้อมูล เดี๋ยวสรุปให้นะครับ" },
+        {
+          type: "text",
+          text: setId
+            ? `ได้รับเอกสาร ${setTotal} ใบแล้ว ✅ กำลังอ่านข้อมูล เดี๋ยวสรุปให้นะครับ`
+            : "ได้รับเอกสารแล้ว ✅ กำลังอ่านข้อมูล เดี๋ยวสรุปให้นะครับ",
+        },
       ]);
     } catch (e) {
       console.error("ack reply failed (continuing):", (e as Error).message);
@@ -787,6 +1010,54 @@ async function handlePostback(event: LineEvent): Promise<void> {
   }
 
   if (!id) return;
+
+  // Save every saveable slip in a batch in one tap. Each row still goes through
+  // the same guards as a single confirm — a stale card must not double-add a
+  // coupon, and an incomplete or DBD-rejected slip must not slip through just
+  // because it arrived alongside good ones.
+  if (action === "confirm_set") {
+    const { data: rows } = await admin
+      .from("tax_documents")
+      .select("id, user_id, status, bond_id, pay_date, gross_amount, wht_amount, payer_tax_id_verified")
+      .eq("image_set_id", id)
+      .order("image_set_index");
+    const docs = (rows ?? []) as {
+      id: string; user_id: string; status: string; bond_id: string | null;
+      pay_date: string | null; gross_amount: number | null; wht_amount: number | null;
+    }[];
+    if (!docs.length) {
+      await lineReply(event.replyToken, [{ type: "text", text: "ไม่พบรายการชุดนี้แล้วครับ 🙏" }]);
+      return;
+    }
+
+    let saved = 0;
+    let skipped = 0;
+    const addedSymbols: string[] = [];
+    for (const d of docs) {
+      if (d.status !== "pending") { skipped++; continue; }
+      if (!d.bond_id || !d.pay_date || d.gross_amount === null || d.wht_amount === null) { skipped++; continue; }
+      if (await findDuplicateCoupon(d.user_id, d.bond_id, d.pay_date, d.id)) {
+        await admin.from("tax_documents").update({ status: "rejected" }).eq("id", d.id);
+        skipped++;
+        continue;
+      }
+      try {
+        const add = await autoAddHolding(admin, d.user_id, d.bond_id, d.id);
+        if (add) addedSymbols.push(add.facts.symbol);
+      } catch (e) {
+        console.error("autoAddHolding failed (continuing):", (e as Error).message);
+      }
+      await admin.from("tax_documents").update({ status: "confirmed" }).eq("id", d.id);
+      saved++;
+    }
+
+    const lines = [`บันทึกเครดิตภาษีแล้ว ${saved} ใบ ✅`];
+    if (addedSymbols.length) lines.push(`เพิ่มเข้าพอร์ตให้ด้วย: ${addedSymbols.join(", ")}`);
+    if (skipped) lines.push(`ข้าม ${skipped} ใบ (ข้อมูลไม่ครบ หรือบันทึกไปแล้ว)`);
+    lines.push("ดูสรุปทั้งหมดได้ในแอป beond");
+    await lineReply(event.replyToken, [{ type: "text", text: lines.join("\n") }]);
+    return;
+  }
 
   if (action === "confirm") {
     // Guard stale cards: an old bubble stays in the chat forever (LINE can't
@@ -1162,7 +1433,13 @@ interface LineEvent {
   type: string;
   replyToken?: string;
   source?: { userId?: string };
-  message?: { id?: string; type?: string; text?: string };
+  message?: {
+    id?: string;
+    type?: string;
+    text?: string;
+    // Present only when the user sent several photos in one go.
+    imageSet?: { id?: string; index?: number; total?: number };
+  };
   postback?: { data?: string };
 }
 
