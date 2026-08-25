@@ -30,6 +30,8 @@ html {
   --font-sukhumvit: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-nunito: "Nunito", "Noto Sans Thai", system-ui, sans-serif;
   --font-kanit: "Kanit", "Noto Sans Thai", system-ui, sans-serif;
+  /* Signature script, used only for the "Beyond" lockup. */
+  --font-momo: "Momo Signature", cursive;
 
   /* ── beond design tokens ──────────────────────────────────────────────
      Tailwind v4 turns each --color-* into utilities (bg-brand, text-ink,
