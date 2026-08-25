@@ -41,6 +41,7 @@ import lineIcon from "../../assets/line-logo.webp";
 import { useT, useLang, setLang } from "../../lib/i18n";
 import { useIsDesktop, isDesktopNow } from "../../lib/useIsDesktop";
 import AddBondModal from "../AddBondModal";
+import OnboardingFlow from "./OnboardingFlow";
 
 const fmtTHB = (n: number) => new Intl.NumberFormat("th-TH").format(Math.round(n));
 // Interest / tax / income figures show 2 decimals (principal stays whole).
@@ -90,6 +91,7 @@ const COLLECT_ACK_KEY = "beond:collectAck:v2"; // v2 drops the old seed-everythi
 // Once the user skips the cinematic intro, remember it so it never replays until
 // this cache is cleared.
 const INTRO_SKIP_KEY = "beond:introSkipped:v1";
+const ONBOARDING_KEY = "beond:onboarded:v1";
 
 const introAlreadySkipped = () => {
   try {
@@ -467,7 +469,38 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   }, []);
   // The user's actual annual income drives the refund figures (income-based, same
   // math as the tax-base page). Auto-syncs when the tax-base page saves.
-  const { income } = useUserIncome();
+  const { income, loading: incomeLoading } = useUserIncome();
+
+  // ── First run ────────────────────────────────────────────────────────────
+  // Shown ahead of the dashboard, because a brand-new account has an empty
+  // dashboard to show anyway. "New" is read from the account itself — no
+  // portfolio and no income on file — so the flow can't strand someone who
+  // already set themselves up elsewhere (adding a bond from LINE, say).
+  const [onboarded, setOnboarded] = useState(() => {
+    try {
+      return localStorage.getItem(ONBOARDING_KEY) === "1";
+    } catch {
+      return true; // no storage → don't replay the intro on every load
+    }
+  });
+  const finishOnboarding = () => {
+    try {
+      localStorage.setItem(ONBOARDING_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setOnboarded(true);
+  };
+  // Latched, not derived: adding the first bond *inside* the flow would
+  // otherwise satisfy the "new account" test and yank the remaining steps out
+  // from under the user. Once it starts, only finishing ends it.
+  const [flowActive, setFlowActive] = useState(false);
+  useEffect(() => {
+    if (onboarded || loading || incomeLoading) return;
+    if (holdings.length === 0 && income === null) setFlowActive(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onboarded, loading, incomeLoading]);
+  const showOnboarding = flowActive && !onboarded;
 
   const taxStory = useMemo<TaxStoryData>(() => ({
     rate: taxRate,
@@ -502,6 +535,18 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
 
   // Skip the whole cinematic (goal text + cube tour) → straight to the resting
   // slip view. Forces the chart to its settled state via `introSkip`.
+  // A first-run account has nothing for the cinematic to narrate — it would play
+  // a year of coupons over zeros while the walkthrough waits behind it. Jump to
+  // the resting view, without persisting the skip: once there's a portfolio, the
+  // intro is worth watching.
+  useEffect(() => {
+    if (!showOnboarding || chapter === "slip") return;
+    slipQueued.current = true;
+    setIntroSkip(true);
+    setChartSettled(true);
+    setChapter("slip");
+  }, [showOnboarding, chapter]);
+
   const skipIntro = () => {
     if (chapter === "slip") return;
     try {
@@ -516,6 +561,19 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
     setLayoutOpening(true);
     setTimeout(() => setLayoutOpening(false), 900);
   };
+
+  // Ahead of everything else: the dashboard's chrome (sidebar, tabs, cinematic)
+  // is noise to someone who hasn't told us anything yet.
+  if (showOnboarding) {
+    return (
+      <OnboardingFlow
+        profile={profile}
+        holdingCount={holdings.length}
+        potentialWht={yearProgress.potentialWht}
+        onDone={finishOnboarding}
+      />
+    );
+  }
 
   return (
     <div className="flex min-h-dvh flex-col overflow-x-hidden bg-[#EEF1F5] font-kanit lg:h-dvh lg:flex-row lg:overflow-hidden">

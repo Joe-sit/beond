@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { toast } from "@heroui/react";
-import LoginPage from "./components/LoginPage";
 import AdminDashboard from "./components/AdminDashboard";
 import DashboardSkeleton from "./components/DashboardSkeleton";
 import SidebarRail from "./components/home/SidebarRail";
@@ -14,6 +13,10 @@ import IntroPOC from "./components/home2/IntroPOC";
 import SlipCollectPOC from "./components/home2/SlipCollectPOC";
 import JarPOC from "./components/home2/JarPOC";
 import TaxIdSheetPOC from "./components/home2/TaxIdSheetPOC";
+import OnboardingPOC from "./components/home2/OnboardingPOC";
+import LandingPage from "./components/landing/LandingPage";
+import HeroScreen3DPOC from "./components/landing/HeroScreen3DPOC";
+import LoginPage from "./components/LoginPage";
 import ScanFlow from "./components/ScanFlow";
 import { notifyPortfolioChanged } from "./hooks/usePortfolio";
 import { initAuth, login, logout, liffEnabled, watchSession, type AuthProfile } from "./lib/auth";
@@ -32,6 +35,24 @@ function readReviewId(): string | null {
     return inner.get("review");
   }
   return null;
+}
+
+/**
+ * True when this browser already holds a Supabase session. supabase-js keeps it
+ * in localStorage under `sb-<project-ref>-auth-token`, so its presence tells us
+ * — before auth finishes resolving — whether this visitor is a returning user.
+ * Used only to pick the right placeholder while `initAuth()` runs.
+ */
+function hasStoredSession(): boolean {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith("sb-") && key.endsWith("-auth-token")) return true;
+    }
+  } catch {
+    // Private mode / storage blocked → treat as a fresh visitor.
+  }
+  return false;
 }
 
 function App() {
@@ -136,6 +157,12 @@ function App() {
     if (q.has("jar")) return <JarPOC />;
     // `?sheet` — tune the payer-tax-id mismatch bottom sheet without a scan.
     if (q.has("sheet")) return <TaxIdSheetPOC />;
+    // `?onboard` — step through the first-run walkthrough without an empty account.
+    if (q.has("onboard")) return <OnboardingPOC />;
+    // `?hero3d` — slider tuner for the landing hero's 3D window.
+    if (q.has("hero3d")) return <HeroScreen3DPOC />;
+    // `?old-landing` — the previous marketing page, kept for comparison.
+    if (q.has("old-landing")) return <LoginPage onLogin={handleLogin} />;
 
     // `?v2` — preview the reworked full-viewport home (works pre-auth with a
     // placeholder profile).
@@ -161,15 +188,20 @@ function App() {
     }
   }
 
-  // Auth still resolving — show the real home dashboard with a placeholder
-  // profile so its own loading skeletons fill in (no stale/old layout flash).
+  // Auth still resolving. A returning visitor (or one coming back from the LINE
+  // redirect) gets the dashboard so its own skeletons fill in; everyone else
+  // gets the landing page, which is where they are about to land anyway —
+  // otherwise a hard refresh flashes a dashboard at a logged-out visitor.
   if (!ready) {
-    return <HomeDashboard profile={{ displayName: "beond" }} onLogout={() => {}} />;
+    if (returningFromLine || hasStoredSession()) {
+      return <HomeDashboard profile={{ displayName: "beond" }} onLogout={() => {}} />;
+    }
+    return <LandingPage onLogin={handleLogin} />;
   }
 
   if (!profile) {
     return (
-      <LoginPage
+      <LandingPage
         onLogin={handleLogin}
         notice={sessionExpired ? "เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง" : undefined}
       />
