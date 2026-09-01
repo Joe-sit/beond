@@ -62,10 +62,13 @@ export default function AdSlot({
 }) {
   const consent = useAdConsent();
   const ins = useRef<HTMLModElement | null>(null);
-  const active = Boolean(CLIENT && slot) && consent === "granted";
+  // DRY_RUN means the library is not loaded, so there is nothing to show and
+  // nothing to reserve room for — an empty labelled box would read as a broken
+  // ad rather than an absent one.
+  const active = Boolean(CLIENT && slot) && consent === "granted" && !DRY_RUN;
 
   useEffect(() => {
-    if (!active || !CLIENT || DRY_RUN) return;
+    if (!active || !CLIENT) return;
     let cancelled = false;
     loadAdSense(CLIENT)
       .then(() => {
@@ -90,9 +93,7 @@ export default function AdSlot({
       className={`relative shrink-0 overflow-hidden rounded-3xl bg-white ${className}`}
       style={{ height }}
     >
-      <span className="absolute left-3 top-1 z-10 text-[10px] leading-none text-ink/40">
-        {DRY_RUN ? "โฆษณา (ปิดไว้ตอน dev)" : "โฆษณา"}
-      </span>
+      <span className="absolute left-3 top-1 z-10 text-[10px] leading-none text-ink/40">โฆษณา</span>
       <ins
         ref={ins}
         className="adsbygoogle"
