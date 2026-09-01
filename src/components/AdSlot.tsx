@@ -12,43 +12,19 @@ import { useAdConsent } from "../lib/consent";
  */
 
 const CLIENT = import.meta.env.VITE_ADSENSE_CLIENT as string | undefined;
-// Draw the box, but do not fetch Google's script — the default in development.
+// Draw the box, but do not fetch Google's script — the default everywhere.
 //
 // The adsbygoogle library edits the document it lands in: it inserts units of
 // its own between elements, docks an anchor bar to the screen, and writes
 // margins onto <html>/<body>. It also outlives a client-side route change, so
-// one placement rearranges every other screen. On localhost it cannot serve an
-// ad anyway (the domain is not the approved one), so the whole of that cost
-// buys nothing and it is left out of dev entirely.
+// one placement rearranges every other screen. That is what happened in
+// production on 2026-09-01, and the CSS guards in index.css did not hold.
 //
-// Set VITE_ADSENSE_DRYRUN=0 to load it locally anyway; expect the layout damage
-// described above until the site's Auto ads and Auto optimize are switched off.
-const DRY_RUN = import.meta.env.DEV
-  ? import.meta.env.VITE_ADSENSE_DRYRUN !== "0"
-  : import.meta.env.VITE_ADSENSE_DRYRUN === "1";
-
-declare global {
-  interface Window {
-    adsbygoogle?: unknown[];
-  }
-}
-
-let scriptLoading: Promise<void> | null = null;
-
-/** Fetch the AdSense library once per page, on the first consented render. */
-function loadAdSense(client: string): Promise<void> {
-  if (scriptLoading) return scriptLoading;
-  scriptLoading = new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.async = true;
-    s.crossOrigin = "anonymous";
-    s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(client)}`;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("adsense failed to load"));
-    document.head.appendChild(s);
-  });
-  return scriptLoading;
-}
+// So loading it is opt-in, not opt-out: set VITE_ADSENSE_DRYRUN=0 once the
+// site's Auto ads AND Auto optimize are both off in AdSense, which is what
+// gives the library licence to place things for itself. Until then the slot is
+// an empty box that costs the page nothing.
+const DRY_RUN = import.meta.env.VITE_ADSENSE_DRYRUN !== "0";
 
 export default function AdSlot({
   slot,
