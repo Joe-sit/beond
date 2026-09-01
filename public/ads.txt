@@ -1,0 +1,4 @@
+# Authorised sellers of this site's ad inventory (IAB ads.txt).
+# The certification id is Google's own and is the same for every AdSense
+# publisher; only the pub- account differs.
+google.com, pub-9996803394317025, DIRECT, f08c47fec0942fa0
