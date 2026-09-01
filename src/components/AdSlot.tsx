@@ -12,19 +12,10 @@ import { useAdConsent } from "../lib/consent";
  */
 
 const CLIENT = import.meta.env.VITE_ADSENSE_CLIENT as string | undefined;
-// Draw the box, but do not fetch Google's script — the default everywhere.
-//
-// The adsbygoogle library edits the document it lands in: it inserts units of
-// its own between elements, docks an anchor bar to the screen, and writes
-// margins onto <html>/<body>. It also outlives a client-side route change, so
-// one placement rearranges every other screen. That is what happened in
-// production on 2026-09-01, and the CSS guards in index.css did not hold.
-//
-// So loading it is opt-in, not opt-out: set VITE_ADSENSE_DRYRUN=0 once the
-// site's Auto ads AND Auto optimize are both off in AdSense, which is what
-// gives the library licence to place things for itself. Until then the slot is
-// an empty box that costs the page nothing.
-const DRY_RUN = import.meta.env.VITE_ADSENSE_DRYRUN !== "0";
+// Skip Google's script entirely — the default in development, where localhost
+// is not an approved domain and no ad can be served anyway. Set
+// VITE_ADSENSE_DRYRUN=1 to switch the slot off in production too.
+const DRY_RUN = import.meta.env.DEV || import.meta.env.VITE_ADSENSE_DRYRUN === "1";
 
 declare global {
   interface Window {
@@ -34,9 +25,31 @@ declare global {
 
 let scriptLoading: Promise<void> | null = null;
 
+/**
+ * Opt out of "ablation" before the library has a chance to do it.
+ *
+ * Left to itself, AdSense adds a page-level anchor unit and makes room for it by
+ * writing `height: auto !important` onto whichever element it decides holds the
+ * page content — in beond's case the app shell, whose height is the whole
+ * layout. The shell collapsed from 900px to the height of its contents, taking
+ * the sidebar and every other screen with it, and an inline `!important` cannot
+ * be overridden from a stylesheet. Declaring this empty unit is Google's own
+ * switch for that behaviour: with it present the anchor is not placed and the
+ * shell is left alone. Measured both ways against the real ad on the production
+ * domain before this was written.
+ */
+function declineAblation() {
+  if (document.querySelector("ins.adsbygoogle-noablate")) return;
+  const optOut = document.createElement("ins");
+  optOut.className = "adsbygoogle adsbygoogle-noablate";
+  optOut.style.display = "none";
+  document.body.appendChild(optOut);
+}
+
 /** Fetch the AdSense library once per page, on the first consented render. */
 function loadAdSense(client: string): Promise<void> {
   if (scriptLoading) return scriptLoading;
+  declineAblation(); // must be in the document before the library runs
   scriptLoading = new Promise((resolve, reject) => {
     const s = document.createElement("script");
     s.async = true;
