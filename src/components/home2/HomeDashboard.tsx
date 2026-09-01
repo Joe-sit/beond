@@ -6,6 +6,7 @@ import type { AuthProfile } from "../../lib/auth";
 import { useIsAdmin } from "../../lib/adminAccess";
 import { ensureCatalog } from "../../lib/secApi";
 import AdSlot from "../AdSlot";
+import { guardShellSizing } from "../../lib/adGuard";
 import {
   usePortfolioStats,
   useHoldings,
@@ -329,6 +330,11 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   const ackRef = useRef<Set<string> | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const jarRef = useRef<HTMLDivElement>(null); // coin-particle landing target (jar mouth)
+
+  // The ad library writes its own height onto the outermost element it can find
+  // and would flatten the whole layout with it; this takes it back off.
+  const shell = useRef<HTMLDivElement>(null);
+  useEffect(() => (shell.current ? guardShellSizing(shell.current) : undefined), []);
   // While a collect celebration runs, hold the bar at its PRE-confirm value; on
   // acknowledge `collecting` clears and the bar jumps to the new confirmed total
   // (the tokens themselves accumulate in the jar, not the bar).
@@ -577,7 +583,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   }
 
   return (
-    <div className="flex min-h-dvh flex-col overflow-x-hidden bg-[#EEF1F5] font-kanit lg:h-dvh lg:flex-row lg:overflow-hidden">
+    <div
+      ref={shell}
+      className="flex min-h-dvh flex-col overflow-x-hidden bg-[#EEF1F5] font-kanit lg:h-dvh lg:flex-row lg:overflow-hidden"
+    >
       {/* App sidebar — beond brand (top) + user profile (bottom). Desktop only;
           mobile uses a top bar + bottom tab nav (below). */}
       <aside className="z-40 hidden w-60 shrink-0 flex-col border-r border-black/6 bg-white px-5 py-6 lg:flex">
