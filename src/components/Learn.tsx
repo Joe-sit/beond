@@ -19,7 +19,7 @@ import { useEffect } from "react";
 import wordmark from "../assets/landing-logo.svg?raw";
 
 const SITE = "https://beond-dashboard.vercel.app";
-const UPDATED = "1 กันยายน 2569";
+export const UPDATED = "1 กันยายน 2569";
 
 /** Personal income tax brackets, tax year 2568. */
 const RATE_TABLE = {
@@ -36,7 +36,7 @@ const RATE_TABLE = {
   ],
 };
 
-type Block =
+export type Block =
   | { h: string }
   | { p: string }
   | { list: string[] }
@@ -44,7 +44,7 @@ type Block =
   | { table: { head: string[]; rows: string[][] } }
   | { note: string };
 
-type Article = {
+export type Article = {
   slug: string;
   title: string;
   /** Meta description and the summary on the index. One sentence. */
@@ -53,7 +53,7 @@ type Article = {
   blocks: Block[];
 };
 
-const ARTICLES: Article[] = [
+export const ARTICLES: Article[] = [
   {
     slug: "wht-15",
     title: "ภาษีหัก ณ ที่จ่าย 15% จากดอกเบี้ยหุ้นกู้ คืออะไร และใครขอคืนได้",
@@ -271,7 +271,7 @@ function Header() {
       </a>
       <a
         href="/learn"
-        className="rounded-full bg-white px-4 py-1.5 text-sm text-[#43507F] shadow-[0_1px_2px_rgba(0,0,0,0.06)] transition hover:bg-black/5"
+        className="rounded-full bg-white px-4 py-1.5 text-sm text-brand transition hover:bg-black/5"
       >
         ความรู้ภาษีหุ้นกู้
       </a>
@@ -279,19 +279,19 @@ function Header() {
   );
 }
 
-function Blocks({ blocks }: { blocks: Block[] }) {
+export function Blocks({ blocks }: { blocks: Block[] }) {
   return (
     <>
       {blocks.map((b, i) => {
         if ("h" in b)
           return (
-            <h2 key={i} className="mt-9 text-xl text-[#1B1C1D]">
+            <h2 key={i} className="mt-9 text-xl text-ink">
               {b.h}
             </h2>
           );
         if ("p" in b)
           return (
-            <p key={i} className="mt-4 text-[15px] leading-8 text-black/70">
+            <p key={i} className="mt-4 text-[15px] leading-8 text-ink/70">
               {b.p}
             </p>
           );
@@ -299,7 +299,7 @@ function Blocks({ blocks }: { blocks: Block[] }) {
           return (
             <ul key={i} className="mt-4 space-y-2">
               {b.list.map((item) => (
-                <li key={item} className="flex gap-3 text-[15px] leading-7 text-black/70">
+                <li key={item} className="flex gap-3 text-[15px] leading-7 text-ink/70">
                   <span className="mt-3 size-1.5 shrink-0 rounded-full bg-[#43507F]/40" />
                   <span>{item}</span>
                 </li>
@@ -310,7 +310,7 @@ function Blocks({ blocks }: { blocks: Block[] }) {
           return (
             <ol key={i} className="mt-4 space-y-3">
               {b.steps.map((item, n) => (
-                <li key={item} className="flex gap-3 text-[15px] leading-7 text-black/70">
+                <li key={item} className="flex gap-3 text-[15px] leading-7 text-ink/70">
                   <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-[#43507F]/10 text-xs font-medium text-[#43507F]">
                     {n + 1}
                   </span>
@@ -321,7 +321,7 @@ function Blocks({ blocks }: { blocks: Block[] }) {
           );
         if ("note" in b)
           return (
-            <p key={i} className="mt-5 rounded-2xl bg-[#F0F2F5] p-4 text-sm leading-7 text-black/60">
+            <p key={i} className="mt-5 rounded-2xl bg-[#EEF1F5] p-4 text-sm leading-7 text-ink/60">
               {b.note}
             </p>
           );
@@ -333,7 +333,7 @@ function Blocks({ blocks }: { blocks: Block[] }) {
                   {b.table.head.map((h) => (
                     <th
                       key={h}
-                      className="border-b border-black/10 px-3 py-2 text-left font-medium text-[#1B1C1D] first:pl-0"
+                      className="border-b border-black/10 px-3 py-2 text-left font-medium text-ink first:pl-0"
                     >
                       {h}
                     </th>
@@ -344,7 +344,7 @@ function Blocks({ blocks }: { blocks: Block[] }) {
                 {b.table.rows.map((row) => (
                   <tr key={row[0]}>
                     {row.map((cell) => (
-                      <td key={cell} className="border-b border-black/5 px-3 py-2 text-black/70 first:pl-0">
+                      <td key={cell} className="border-b border-black/5 px-3 py-2 text-ink/70 first:pl-0">
                         {cell}
                       </td>
                     ))}
@@ -367,32 +367,32 @@ function Index() {
   );
 
   return (
-    <main className="min-h-svh bg-[#F0F2F5] px-5 py-12 lg:px-12">
-      <div className="mx-auto w-full max-w-[46rem]">
+    <main className="min-h-svh bg-[#EEF1F5] px-3 py-6 font-kanit lg:px-6 lg:py-8">
+      <div className="mx-auto w-full max-w-[72rem]">
         <Header />
 
-        <h1 className="mt-10 text-3xl leading-snug text-[#1B1C1D]">ความรู้ภาษีสำหรับนักลงทุนหุ้นกู้</h1>
-        <p className="mt-3 text-[15px] leading-8 text-black/60">
+        <h1 className="mt-8 text-3xl leading-snug text-ink">ความรู้ภาษีสำหรับนักลงทุนหุ้นกู้</h1>
+        <p className="mt-3 max-w-[46rem] text-[15px] leading-8 text-ink/60">
           ดอกเบี้ยหุ้นกู้ถูกหักภาษี ณ ที่จ่าย 15% เท่ากันทุกคน ทั้งที่ภาษีจริงคิดแบบขั้นบันได
           คนที่ฐานภาษีต่ำกว่านั้นจึงจ่ายเกินทุกงวดโดยไม่รู้ตัว หน้านี้รวมสิ่งที่ต้องรู้เพื่อขอคืน
         </p>
 
-        <ul className="mt-8 space-y-4">
+        <ul className="mt-6 grid gap-4 lg:grid-cols-3">
           {ARTICLES.map((a) => (
             <li key={a.slug}>
               <a
                 href={`/learn/${a.slug}`}
-                className="block rounded-3xl bg-white p-6 transition hover:bg-black/[0.02] lg:p-7"
+                className="flex h-full flex-col rounded-3xl bg-white p-6 transition hover:bg-black/[0.02]"
               >
-                <h2 className="text-lg leading-snug text-[#1B1C1D]">{a.title}</h2>
-                <p className="mt-2 text-[15px] leading-7 text-black/60">{a.description}</p>
-                <p className="mt-3 text-sm text-[#2968A5]">อ่าน {a.minutes} นาที →</p>
+                <h2 className="text-lg leading-snug text-ink">{a.title}</h2>
+                <p className="mt-2 flex-1 text-sm leading-7 text-ink/60">{a.description}</p>
+                <p className="mt-4 text-sm text-brand-blue">อ่าน {a.minutes} นาที →</p>
               </a>
             </li>
           ))}
         </ul>
 
-        <p className="mt-10 text-center text-sm text-black/45">
+        <p className="mt-8 text-center text-sm text-ink/45">
           อัปเดตล่าสุด {UPDATED} ·{" "}
           <a href="/privacy" className="text-[#2968A5] hover:underline">
             นโยบายความเป็นส่วนตัว
@@ -408,41 +408,57 @@ function ArticlePage({ article }: { article: Article }) {
   const others = ARTICLES.filter((a) => a.slug !== article.slug);
 
   return (
-    <main className="min-h-svh bg-[#F0F2F5] px-5 py-12 lg:px-12">
-      <div className="mx-auto w-full max-w-[46rem]">
+    <main className="min-h-svh bg-[#EEF1F5] px-3 py-6 font-kanit lg:px-6 lg:py-8">
+      <div className="mx-auto w-full max-w-[72rem]">
         <Header />
 
-        <article className="mt-10 rounded-3xl bg-white p-7 lg:p-10">
-          <a href="/learn" className="text-sm text-[#2968A5] hover:underline">
-            ← ความรู้ภาษีหุ้นกู้
-          </a>
-          <h1 className="mt-4 text-3xl leading-snug text-[#1B1C1D]">{article.title}</h1>
-          <p className="mt-2 text-sm text-black/45">
-            อัปเดต {UPDATED} · อ่าน {article.minutes} นาที
-          </p>
-          <p className="mt-6 text-[15px] leading-8 text-black/70">{article.description}</p>
-          <Blocks blocks={article.blocks} />
-        </article>
+        {/* Two columns on desktop, the way every other screen in beond is laid
+            out: the reading column carries the article, the narrow one keeps
+            the rest of the guides in reach. */}
+        <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start lg:gap-6">
+          <article className="rounded-3xl bg-white p-6 lg:p-10">
+            <a href="/learn" className="text-sm text-brand-blue hover:underline">
+              ← ความรู้ภาษีหุ้นกู้
+            </a>
+            <h1 className="mt-4 text-3xl leading-snug text-ink">{article.title}</h1>
+            <p className="mt-2 text-sm text-ink/45">
+              อัปเดต {UPDATED} · อ่าน {article.minutes} นาที
+            </p>
+            <p className="mt-6 text-[15px] leading-8 text-ink/70">{article.description}</p>
+            <Blocks blocks={article.blocks} />
+          </article>
 
-        <section className="mt-8 rounded-3xl bg-white p-7 lg:p-10">
-          <h2 className="text-lg text-[#1B1C1D]">อ่านต่อ</h2>
-          <ul className="mt-4 space-y-3">
-            {others.map((a) => (
-              <li key={a.slug}>
-                <a href={`/learn/${a.slug}`} className="text-[15px] leading-7 text-[#2968A5] hover:underline">
-                  {a.title}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </section>
+          <aside className="flex flex-col gap-4 lg:sticky lg:top-8">
+            <section className="rounded-3xl bg-white p-6">
+              <h2 className="text-base text-ink">อ่านต่อ</h2>
+              <ul className="mt-3 space-y-3">
+                {others.map((a) => (
+                  <li key={a.slug}>
+                    <a href={`/learn/${a.slug}`} className="text-sm leading-7 text-brand-blue hover:underline">
+                      {a.title}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
 
-        <p className="mt-10 text-center text-sm text-black/45">
-          <a href="/" className="text-[#2968A5] hover:underline">
-            รู้จัก beond
-          </a>{" "}
-          ·{" "}
-          <a href="/privacy" className="text-[#2968A5] hover:underline">
+            <section className="rounded-3xl bg-gradient-to-b from-[#779BC6] to-white p-6">
+              <h2 className="text-base text-ink">ขอคืนภาษีของคุณเอง</h2>
+              <p className="mt-2 text-sm leading-7 text-ink/70">
+                beond รวมใบ 50 ทวิ ของคุณทั้งปี คำนวณว่าขอคืนได้เท่าไร แล้วกรอกลง e-Filing ให้ในคลิกเดียว
+              </p>
+              <a
+                href="/"
+                className="mt-4 flex h-11 items-center justify-center rounded-full bg-brand px-4 text-sm font-medium text-white transition hover:bg-[#525F92]"
+              >
+                รู้จัก beond
+              </a>
+            </section>
+          </aside>
+        </div>
+
+        <p className="mt-8 text-center text-sm text-ink/45">
+          <a href="/privacy" className="text-brand-blue hover:underline">
             นโยบายความเป็นส่วนตัว
           </a>
         </p>

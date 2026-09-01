@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useAnimationControls } from "motion/react";
-import { IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconInfoCircle, IconCheck, IconCircleDotted, IconRestore, IconLogout, IconSettings, IconUser, IconPlus, IconHome, IconReportAnalytics, IconPuzzle, IconReceiptTax, IconShieldLock } from "@tabler/icons-react";
+import { IconChevronLeft, IconChevronRight, IconEye, IconEyeOff, IconInfoCircle, IconCheck, IconCircleDotted, IconRestore, IconLogout, IconSettings, IconUser, IconPlus, IconHome, IconReportAnalytics, IconPuzzle, IconReceiptTax, IconShieldLock, IconBook } from "@tabler/icons-react";
 import { toast, Toast } from "@heroui/react";
 import type { AuthProfile } from "../../lib/auth";
 import { useIsAdmin } from "../../lib/adminAccess";
 import { ensureCatalog } from "../../lib/secApi";
 import AdSlot from "../AdSlot";
+import LearnView from "./LearnView";
 import { guardShellSizing } from "../../lib/adGuard";
 import {
   usePortfolioStats,
@@ -187,7 +188,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   }, [payoutMonths]);
 
   const [monthIdx, setMonthIdx] = useState<number | null>(null);
-  const [view, setView] = useState<"home" | "annual" | "tax_base" | "settings">("home"); // sidebar page
+  const [view, setView] = useState<"home" | "annual" | "tax_base" | "learn" | "settings">("home"); // sidebar page
   const [addHover, setAddHover] = useState(false); // show add-bond art on button hover
   const [holdingHover, setHoldingHover] = useState<string | null>(null); // list row → show invested value
   const [hideValue, setHideValue] = useState(false); // mask the portfolio total
@@ -196,7 +197,7 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   const [editHolding, setEditHolding] = useState<HoldingDetail | null>(null);
 
   // Sidebar nav: leave any nested add/edit page before switching the view.
-  const navTo = (v: "home" | "annual" | "tax_base" | "settings") => {
+  const navTo = (v: "home" | "annual" | "tax_base" | "learn" | "settings") => {
     setAddBondOpen(false);
     setEditHolding(null);
     setView(v);
@@ -634,6 +635,18 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
             <IconReportAnalytics size={20} stroke={1.75} />
             {t("nav_annual")}
           </button>
+          {/* Tax guides — the same pages served publicly at /learn, read here
+              without leaving the session. */}
+          <button
+            onClick={() => navTo("learn")}
+            aria-current={view === "learn" && !addBondOpen && !editHolding ? "page" : undefined}
+            className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium transition ${
+              view === "learn" ? "bg-[#43507F]/10 text-[#43507F]" : "text-ink/60 hover:bg-black/5 hover:text-ink"
+            }`}
+          >
+            <IconBook size={20} stroke={1.75} />
+            {t("nav_learn")}
+          </button>
           {/* Admin — only shown to allow-listed admins; the /admin page + its
               endpoints re-check server-side. */}
           {isAdmin && (
@@ -737,6 +750,10 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
            mobile, where the column is sized by min-h-dvh rather than h-dvh. */
         <main className="flex min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
           <TaxBaseView rate={taxRate} wht={yearProgress.potentialWht} loading={loading} onSaved={(r) => setTaxRate(r)} />
+        </main>
+      ) : view === "learn" ? (
+        <main className="flex min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
+          <LearnView />
         </main>
       ) : view === "settings" ? (
         <main className="min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
