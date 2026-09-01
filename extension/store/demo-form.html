@@ -1,0 +1,107 @@
+<!doctype html>
+<!--
+  A stand-in tax form, used only to photograph the panel for the store listing.
+
+  The real panel runs on efiling.rd.go.th, which cannot be scripted here and
+  must never be imitated in a screenshot — so this page is deliberately plain
+  and labels itself a demo. The panel drawn over it is the real content script,
+  loaded unchanged.
+-->
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <title>แบบฟอร์มสาธิต — beond</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        padding: 40px 48px;
+        font-family: "Noto Sans Thai", system-ui, -apple-system, sans-serif;
+        background: #f4f5f7;
+        color: #1b1c1d;
+      }
+      .demo-tag {
+        display: inline-block;
+        margin-bottom: 18px;
+        border-radius: 999px;
+        background: #e6e8ee;
+        padding: 5px 12px;
+        font-size: 12px;
+        color: #5b6172;
+      }
+      h1 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
+      p.sub { margin: 0 0 24px; font-size: 13px; color: #6b7280; }
+      fieldset {
+        max-width: 720px;
+        margin: 0 0 16px;
+        border: 1px solid #dfe1e6;
+        border-radius: 10px;
+        padding: 16px 18px 20px;
+        background: #fff;
+      }
+      legend { padding: 0 6px; font-size: 13px; color: #6b7280; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+      label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 5px; }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #cfd3da;
+        border-radius: 7px;
+        padding: 9px 11px;
+        font: inherit;
+        font-size: 14px;
+        background: #fff;
+      }
+      input.num { text-align: right; }
+    </style>
+  </head>
+  <body>
+    <span class="demo-tag">ตัวอย่างสำหรับสาธิตส่วนขยาย · ไม่ใช่หน้าเว็บของกรมสรรพากร</span>
+    <h1>เงินได้มาตรา 40(4)(ก) — ดอกเบี้ย</h1>
+    <p class="sub">ระบุผู้จ่ายเงินได้แต่ละราย พร้อมภาษีที่ถูกหัก ณ ที่จ่าย</p>
+
+    <fieldset>
+      <legend>ผู้จ่ายเงินได้รายที่ 1</legend>
+      <div class="grid">
+        <div>
+          <label for="payer-name">ชื่อผู้จ่ายเงินได้</label>
+          <input id="payer-name" name="payer-name" />
+        </div>
+        <div>
+          <label for="payer-tax-id">เลขประจำตัวผู้เสียภาษีผู้จ่าย</label>
+          <input id="payer-tax-id" name="payer-tax-id" class="num" />
+        </div>
+        <div>
+          <label for="gross">จำนวนเงินได้</label>
+          <input id="gross" name="gross" class="num" />
+        </div>
+        <div>
+          <label for="wht">ภาษีหัก ณ ที่จ่าย</label>
+          <input id="wht" name="wht" class="num" />
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>ผู้จ่ายเงินได้รายที่ 2</legend>
+      <div class="grid">
+        <div>
+          <label for="payer-name-2">ชื่อผู้จ่ายเงินได้</label>
+          <input id="payer-name-2" name="payer-name-2" />
+        </div>
+        <div>
+          <label for="payer-tax-id-2">เลขประจำตัวผู้เสียภาษีผู้จ่าย</label>
+          <input id="payer-tax-id-2" name="payer-tax-id-2" class="num" />
+        </div>
+        <div>
+          <label for="gross-2">จำนวนเงินได้</label>
+          <input id="gross-2" name="gross-2" class="num" />
+        </div>
+        <div>
+          <label for="wht-2">ภาษีหัก ณ ที่จ่าย</label>
+          <input id="wht-2" name="wht-2" class="num" />
+        </div>
+      </div>
+    </fieldset>
+  </body>
+</html>

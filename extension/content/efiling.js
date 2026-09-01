@@ -1,15 +1,18 @@
 // e-Filing helper panel (efiling.rd.go.th).
 //
 // Shows the 40(4) rows synced from the beond app beside the real form and fills
-// them in. The RD form is not a public, stable DOM — it changes between tax
-// years and between the หน้ารายการ / หน้าแก้ไข layouts — so instead of shipping
-// brittle selectors, the user teaches the panel once ("จับคู่ช่อง"): click the
-// four fields in order and the mapping is stored per page path. Autofill then
-// writes into the mapped fields, and every value stays copyable by hand as a
-// fallback that can never break.
+// them in — in one click ("กรอกทั้งหมด"), which is the whole point of the thing.
+//
+// The form is an Angular app with generated ids, so the boxes are found by
+// their Thai captions instead of by selectors (content/autodetect.js). Two
+// fallbacks sit behind that, because a filing is not a place to be clever and
+// wrong: the user can teach the panel the four boxes by clicking them
+// ("จับคู่ช่อง", stored per page path), and every value keeps a copy button that
+// cannot break at all.
 
 const STORAGE_KEY = "beond_bond_data";
 const MAP_KEY = "beond_field_map";
+const POS_KEY = "beond_panel_pos";
 const FIELDS = [
   { key: "issuer_name", label: "ชื่อผู้จ่ายเงินได้" },
   { key: "issuer_tax_id", label: "เลขประจำตัวผู้เสียภาษีผู้จ่าย" },
@@ -23,10 +26,18 @@ const fmtTaxId = (d) => `${d[0]}-${d.slice(1, 5)}-${d.slice(5, 10)}-${d.slice(10
 let rows = [];
 let fieldMap = {}; // { [pathname]: { issuer_name: selector, … } }
 let picking = null; // index into FIELDS while in "จับคู่ช่อง" mode
+let toolsOpen = false; // the fallback tools are folded away until asked for
+let blocks = []; // auto-detected payer blocks, refreshed as the app renders
+// Which payers this visit has written into the form. Kept per row index rather
+// than per row object so a re-render of the panel cannot lose it, and cleared
+// whenever the app syncs a different set of rows.
+const filled = new Set();
+let busy = false; // a fill is running; the panel says so instead of re-entering
 
-chrome.storage.local.get([STORAGE_KEY, MAP_KEY], (data) => {
+chrome.storage.local.get([STORAGE_KEY, MAP_KEY, POS_KEY], (data) => {
   rows = data[STORAGE_KEY] ?? [];
   fieldMap = data[MAP_KEY] ?? {};
+  if (data[POS_KEY]) applyPos(data[POS_KEY]);
   render();
 });
 
@@ -35,46 +46,122 @@ const host = document.createElement("div");
 host.id = "beond-efiling-panel";
 document.documentElement.appendChild(host);
 
+// ── where the panel sits ───────────────────────────────────────────────────
+// The form has its own buttons down the right-hand side and along the bottom,
+// and which ones depends on the page, so no fixed corner is safe. The panel
+// starts against the right edge at mid-height — clear of both a site header and
+// a bottom action bar — and can be dragged anywhere by its title bar, which is
+// remembered for next time.
+
+/** Pin the panel to a saved {x, y} in viewport pixels. */
+function applyPos(pos) {
+  const w = host.firstElementChild?.getBoundingClientRect().width || 300;
+  const h = host.firstElementChild?.getBoundingClientRect().height || 200;
+  const x = Math.min(Math.max(pos.x, 4), Math.max(4, innerWidth - w - 4));
+  const y = Math.min(Math.max(pos.y, 4), Math.max(4, innerHeight - Math.min(h, 120) - 4));
+  host.style.left = `${x}px`;
+  host.style.top = `${y}px`;
+  host.style.right = "auto";
+  host.style.bottom = "auto";
+  host.style.transform = "none";
+}
+
+/** Back to the default perch, and forget the saved spot. */
+function resetPos() {
+  host.style.cssText = "";
+  chrome.storage.local.set({ [POS_KEY]: null });
+}
+
+/** Drag by the title bar. Buttons inside it keep working. */
+function makeDraggable(handle) {
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button")) return;
+    const box = host.firstElementChild.getBoundingClientRect();
+    const dx = e.clientX - box.left;
+    const dy = e.clientY - box.top;
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("beond-dragging");
+
+    const move = (ev) => applyPos({ x: ev.clientX - dx, y: ev.clientY - dy });
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.classList.remove("beond-dragging");
+      const now = host.firstElementChild.getBoundingClientRect();
+      chrome.storage.local.set({ [POS_KEY]: { x: now.left, y: now.top } });
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    e.preventDefault();
+  });
+  // A double-click on the bar puts it back where it started.
+  handle.addEventListener("dblclick", (e) => {
+    if (e.target.closest("button")) return;
+    resetPos();
+  });
+}
+
 function render() {
   const mapped = fieldMap[location.pathname] ?? {};
   const mappedCount = FIELDS.filter((f) => mapped[f.key]).length;
+  // Same bar as auto-detection: an identity plus an amount. Requiring all four
+  // would lock out the real form, which has no payer-name box to map.
+  const mappedUsable =
+    (mapped.issuer_name || mapped.issuer_tax_id) && (mapped.gross_interest || mapped.wht_amount);
+  const canFill = blocks.length > 0 || Boolean(mappedUsable);
 
   host.innerHTML = "";
   const panel = el("div", "beond-panel");
 
   const head = el("div", "beond-head");
-  head.append(el("span", "beond-title", "beond · 40(4)"));
+  head.title = "ลากเพื่อย้าย · ดับเบิลคลิกเพื่อคืนตำแหน่งเดิม";
+  head.append(el("span", "beond-mark"));
+  head.append(el("span", "beond-title", "beond"));
+  head.append(el("span", "beond-title-sub", "เงินได้ 40(4)"));
   const collapse = el("button", "beond-icon-btn", "–");
   collapse.title = "ย่อ/ขยาย";
   collapse.onclick = () => panel.classList.toggle("beond-collapsed");
   head.append(collapse);
   panel.append(head);
+  makeDraggable(head);
 
   const body = el("div", "beond-body");
 
   if (rows.length === 0) {
     body.append(el("p", "beond-empty", "ยังไม่มีข้อมูล — เปิดแอป beond หน้า “สรุปประจำปี” แล้วกด “ส่งเข้า e-Filing”"));
   } else {
-    const status = el(
-      "p",
-      "beond-status",
-      mappedCount === FIELDS.length
-        ? `จับคู่ช่องแล้ว · ${rows.length} ผู้จ่ายเงินได้`
-        : `${rows.length} ผู้จ่ายเงินได้ · ยังไม่ได้จับคู่ช่อง (${mappedCount}/${FIELDS.length})`,
-    );
-    body.append(status);
+    const where = blocks.length
+      ? `พบช่องกรอกในหน้านี้ ${blocks.length} ชุด`
+      : mappedUsable
+        ? `ใช้ช่องที่จับคู่ไว้ ${mappedCount} ช่อง`
+        : "ยังหาช่องกรอกในหน้านี้ไม่เจอ";
+    body.append(el("p", "beond-status", `${rows.length} ผู้จ่ายเงินได้ · ${where}`));
+
+    // The one click this whole extension exists for.
+    const all = el("button", "beond-fill-all", busy ? "กำลังกรอก…" : `กรอกทั้งหมด (${rows.length})`);
+    all.disabled = busy || !canFill;
+    all.title = canFill ? "กรอกทุกผู้จ่ายลงในแบบฟอร์ม" : "หาช่องกรอกไม่เจอ — กด “จับคู่ช่อง” ด้านล่าง";
+    all.onclick = () => fillAll(all);
+    body.append(all);
 
     rows.forEach((r, i) => {
-      const card = el("div", "beond-row");
-      card.append(el("div", "beond-row-name", r.issuer_name || "—"));
+      const isDone = filled.has(i);
+      const card = el("div", `beond-row${isDone ? " beond-row-done" : ""}`);
+      const name = el("div", "beond-row-name");
+      // The tick is the answer to "did this one go in?", which the user is
+      // otherwise left to verify by reading the form field by field.
+      if (isDone) name.append(el("span", "beond-tick", "✓"));
+      name.append(el("span", null, r.issuer_name || "—"));
+      card.append(name);
       card.append(kv("เลขผู้เสียภาษี", fmtTaxId(r.issuer_tax_id), r.issuer_tax_id));
       card.append(kv("เงินได้", `฿${fmt(r.gross_interest)}`, String(r.gross_interest)));
       card.append(kv("ภาษีหัก ณ ที่จ่าย", `฿${fmt(r.wht_amount)}`, String(r.wht_amount)));
 
-      const fill = el("button", "beond-fill", "กรอกแถวนี้");
-      fill.disabled = mappedCount !== FIELDS.length;
-      fill.title = fill.disabled ? "จับคู่ช่องก่อน" : "เขียนค่าลงช่องที่จับคู่ไว้";
-      fill.onclick = () => fillRow(r, fill);
+      const fill = el("button", "beond-fill", isDone ? "กรอกซ้ำ" : "กรอกแถวนี้");
+      fill.type = "button";
+      fill.disabled = busy || !canFill;
+      fill.title = fill.disabled ? "หาช่องกรอกไม่เจอ" : "เขียนค่าของผู้จ่ายรายนี้ลงในฟอร์ม";
+      fill.onclick = () => fillRow(r, fill, i);
       card.append(fill);
       body.append(card);
     });
@@ -83,16 +170,58 @@ function render() {
     body.append(el("p", "beond-total", `รวมภาษีหัก ณ ที่จ่าย ฿${fmt(total)}`));
   }
 
-  const mapBtn = el("button", "beond-map", picking === null ? "จับคู่ช่อง" : "ยกเลิกการจับคู่");
-  mapBtn.onclick = () => (picking === null ? startPicking() : stopPicking());
-  body.append(mapBtn);
+  // The fallbacks live behind one line of text. They matter on the day
+  // detection misses, and a panel that leads with its own failure modes is a
+  // panel nobody trusts.
+  const more = el("button", "beond-more", toolsOpen ? "ซ่อนตัวช่วย" : "ตัวช่วยเพิ่มเติม");
+  more.onclick = () => {
+    toolsOpen = !toolsOpen;
+    render();
+  };
+  body.append(more);
 
-  if (picking !== null) {
-    body.append(el("p", "beond-hint", `คลิกช่อง “${FIELDS[picking].label}” ในฟอร์ม (${picking + 1}/${FIELDS.length})`));
+  if (toolsOpen || picking !== null) {
+    const tools = el("div", "beond-tools");
+
+    const mapBtn = el("button", "beond-map", picking === null ? "จับคู่ช่องเอง" : "ยกเลิกการจับคู่");
+    mapBtn.title = "ใช้เมื่อกรอกอัตโนมัติไม่ติด: คลิกช่องในฟอร์มทีละช่อง";
+    mapBtn.onclick = () => (picking === null ? startPicking() : stopPicking());
+    tools.append(mapBtn);
+
+    if (picking !== null) {
+      tools.append(
+        el(
+          "p",
+          "beond-hint",
+          `คลิกช่อง “${FIELDS[picking].label}” ในฟอร์ม (${picking + 1}/${FIELDS.length}) · กด Esc ถ้าหน้านี้ไม่มีช่องนี้`,
+        ),
+      );
+    }
+
+    // What the page renders, and what the last fill did to it. Two halves of
+    // the same question, and the only way to fix a miss from here.
+    const dump = el("button", "beond-debug", "คัดลอกโครงสร้างฟอร์ม");
+    dump.title = "ส่งให้ผู้พัฒนาเพื่อปรับการตรวจหาช่อง";
+    dump.onclick = () => copyInto(dump, describeForm(), "คัดลอกโครงสร้างฟอร์ม");
+    tools.append(dump);
+
+    const log = el("button", "beond-debug", "คัดลอกบันทึกการกรอก");
+    log.title = "ขั้นตอนล่าสุดของการกรอก — ส่งให้ผู้พัฒนาเมื่อกรอกไม่ครบ";
+    log.onclick = () => copyInto(log, getTrace(), "คัดลอกบันทึกการกรอก");
+    tools.append(log);
+
+    body.append(tools);
   }
 
   panel.append(body);
   host.append(panel);
+}
+
+/** Copy `text`, and say so on the button that asked for it. */
+async function copyInto(btn, text, restore) {
+  await navigator.clipboard.writeText(text);
+  btn.textContent = "คัดลอกแล้ว";
+  setTimeout(() => (btn.textContent = restore), 1600);
 }
 
 function kv(label, shown, copyValue) {
@@ -120,13 +249,31 @@ function el(tag, cls, text) {
 function startPicking() {
   picking = 0;
   document.addEventListener("click", onPick, true);
+  document.addEventListener("keydown", onPickKey, true);
   render();
 }
 
 function stopPicking() {
   picking = null;
   document.removeEventListener("click", onPick, true);
+  document.removeEventListener("keydown", onPickKey, true);
   render();
+}
+
+// Not every page has every box — the real 40(4) form has no payer-name field at
+// all — so a field can be skipped instead of forcing a wrong click.
+function onPickKey(e) {
+  if (picking === null) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    advancePicking();
+  }
+}
+
+function advancePicking() {
+  picking += 1;
+  if (picking >= FIELDS.length) stopPicking();
+  else render();
 }
 
 function onPick(e) {
@@ -141,9 +288,7 @@ function onPick(e) {
   fieldMap[location.pathname] = map;
   chrome.storage.local.set({ [MAP_KEY]: fieldMap });
 
-  picking += 1;
-  if (picking >= FIELDS.length) stopPicking();
-  else render();
+  advancePicking();
 }
 
 // A selector stable enough to survive a reload: prefer id, then name, then a
@@ -168,19 +313,144 @@ function selectorFor(node) {
 }
 
 // ── filling ────────────────────────────────────────────────────────────────
-function fillRow(row, btn) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Write one payer into one detected block of inputs. */
+function writeBlock(block, row) {
+  let written = 0;
+  for (const f of FIELDS) {
+    const node = block[f.key];
+    if (!node) continue;
+    setValue(node, String(row[f.key]));
+    written += 1;
+  }
+  return written;
+}
+
+/** Write one payer into the boxes the user mapped by hand. */
+function writeMapped(row) {
   const map = fieldMap[location.pathname] ?? {};
-  let missing = 0;
+  let written = 0;
   for (const f of FIELDS) {
     const node = map[f.key] ? document.querySelector(map[f.key]) : null;
-    if (!node) {
-      missing += 1;
-      continue;
-    }
+    if (!node) continue;
     setValue(node, String(row[f.key]));
+    written += 1;
   }
-  btn.textContent = missing ? `หาไม่เจอ ${missing} ช่อง` : "กรอกแล้ว";
-  setTimeout(() => (btn.textContent = "กรอกแถวนี้"), 1600);
+  return written;
+}
+
+/** Re-read the page until it has `want` blocks, or the wait runs out. */
+async function waitForBlocks(want, ms = 1800) {
+  const until = Date.now() + ms;
+  for (;;) {
+    const found = detectBlocks();
+    if (found.length >= want || Date.now() > until) return found;
+    await sleep(150);
+  }
+}
+
+/**
+ * Fill every payer in one click.
+ *
+ * One payer at a time: set that row's income type, write its figures, press the
+ * card's own "เพิ่มรายการอื่น", repeat. Filling before adding
+ * is deliberate — the form can refuse to grow while the row on screen is still
+ * empty, and pressing a button that does nothing, repeatedly, is how a helper
+ * turns into a mess.
+ *
+ * If the form will not grow, whatever fitted is left filled and the button says
+ * how far it got — a partial fill the user can see beats a silent one they
+ * cannot.
+ */
+async function fillAll(btn) {
+  if (busy) return;
+  busy = true;
+  render();
+
+  resetTrace();
+  filled.clear();
+  blocks = detectBlocks();
+  trace({ step: "start", rows: rows.length, blocks: blocks.length });
+
+  let done = 0;
+  let stuck = false;
+  for (let i = 0; i < rows.length; i += 1) {
+    if (!blocks[i]) {
+      // Ask the card this row belongs to, not the first card on the page.
+      const add = findAddRowButton(blocks[i - 1]?.__row ?? blocks[0]?.__row ?? document);
+      trace({ step: "add-row", row: i, button: add ? tidy(add.textContent).slice(0, 40) : null });
+      if (!add) {
+        stuck = true;
+        break;
+      }
+      pressLikeAMouse(add);
+      blocks = await waitForBlocks(i + 1);
+      trace({ step: "after-add", row: i, blocks: blocks.length });
+      if (!blocks[i]) {
+        stuck = true;
+        break;
+      }
+    }
+    // Every payer carries its own income-type picker, including the rows just
+    // added, and setting one re-renders the fields under it — so it is set per
+    // row and the page re-read before anything is written into it.
+    await chooseIncomeType(blocks[i].__row);
+    blocks = detectBlocks();
+    if (!blocks[i]) {
+      trace({ step: "row-vanished", row: i, blocks: blocks.length });
+      stuck = true;
+      break;
+    }
+    const wrote = writeBlock(blocks[i], rows[i]);
+    trace({ step: "write", row: i, fields: wrote });
+    if (wrote > 0) {
+      done += 1;
+      filled.add(i);
+    }
+    await sleep(120); // let the row's change handlers settle before the next
+  }
+
+  // Nothing auto-detected: fall back to the hand-taught boxes, which can only
+  // ever hold one payer at a time.
+  if (done === 0 && rows.length) {
+    await chooseIncomeType(document);
+    done = writeMapped(rows[0]) > 0 ? 1 : 0;
+  }
+
+  busy = false;
+  render();
+
+  // Every payer went in — worth marking. Thrown from the panel so it reads as
+  // the panel's doing, and only on a complete fill: a partial one is a job half
+  // done, and celebrating it would be a lie.
+  if (done === rows.length && done > 0) {
+    const box = host.firstElementChild?.getBoundingClientRect();
+    celebrate(box ? { x: box.left + box.width / 2, y: box.top + 40 } : null);
+  }
+
+  const label =
+    done === rows.length
+      ? `กรอกแล้ว ${done} รายการ`
+      : stuck
+        ? `กรอกได้ ${done}/${rows.length} · เพิ่มแถวไม่ได้`
+        : `กรอกได้ ${done}/${rows.length}`;
+  const node = host.querySelector(".beond-fill-all");
+  if (node) {
+    node.textContent = label;
+    setTimeout(render, 2600);
+  }
+  void btn;
+}
+
+/** Fill a single payer — into its own detected block, or the mapped boxes. */
+async function fillRow(row, btn, index) {
+  const block = blocks[index];
+  await chooseIncomeType(block?.__row ?? document);
+  const written = block ? writeBlock(block, row) : writeMapped(row);
+  if (written) filled.add(index);
+  btn.textContent = written ? "กรอกแล้ว" : "หาช่องไม่เจอ";
+  setTimeout(render, 1600);
 }
 
 // Write through the native setter, then fire input+change: the form is a
@@ -197,10 +467,37 @@ function setValue(node, value) {
   node.blur();
 }
 
+// ── keeping up with the app ────────────────────────────────────────────────
+// The form is a single-page app: the boxes appear, disappear and move as the
+// user navigates it. Re-scan when the DOM settles, and only redraw when the
+// count actually changed, so the panel is never the thing causing a re-render
+// storm.
+let rescanTimer = null;
+function scheduleRescan() {
+  clearTimeout(rescanTimer);
+  rescanTimer = setTimeout(() => {
+    if (busy || picking !== null) return;
+    const next = detectBlocks();
+    const changed = next.length !== blocks.length;
+    blocks = next;
+    if (changed) render();
+  }, 400);
+}
+
+new MutationObserver((records) => {
+  // Ignore our own panel's mutations.
+  for (const r of records) if (!host.contains(r.target)) return scheduleRescan();
+}).observe(document.documentElement, { childList: true, subtree: true });
+
+scheduleRescan();
+
 // Keep the panel in step with a re-sync from the app while the tab stays open.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes[STORAGE_KEY]) rows = changes[STORAGE_KEY].newValue ?? [];
+  if (changes[STORAGE_KEY]) {
+    rows = changes[STORAGE_KEY].newValue ?? [];
+    filled.clear(); // a fresh sync is a fresh set of payers; old ticks would lie
+  }
   if (changes[MAP_KEY]) fieldMap = changes[MAP_KEY].newValue ?? {};
   render();
 });

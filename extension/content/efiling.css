@@ -1,49 +1,120 @@
-/* Panel styling. Every rule is scoped under #beond-efiling-panel so nothing
-   leaks into the RD form, and the panel is fixed to the viewport corner so it
-   never reflows the page it sits on. */
+/* Panel styling.
+ *
+ * Every rule is scoped under #beond-efiling-panel so nothing leaks into the RD
+ * form, and the panel is fixed to the viewport so it never reflows the page it
+ * sits on.
+ *
+ * The look follows the beond app's design system (DESIGN.md) rather than
+ * inventing a second one: navy #43507F for anything primary, cream #F6F4F1 for
+ * quiet surfaces, hairline #E7E7E7, ink #222 over #8A8A8A, success #12BC59 kept
+ * for confirmation only. Cards are generously rounded and flat; the panel
+ * itself is the one floating layer, so it is the one thing with a shadow.
+ *
+ * Web fonts are deliberately not loaded — a content script pulling a font onto
+ * a government site is both a CSP risk and a privacy one — so the stack is the
+ * app's, resolved locally where the user has it. */
 #beond-efiling-panel {
   position: fixed;
+  /* Right edge, mid-height: the form keeps its buttons along the bottom and in
+     the corners, so parking there covered them. Draggable from the title bar
+     (content/efiling.js) — this is only where it starts. */
   right: 16px;
-  bottom: 16px;
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 2147483647;
-  font-family: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --beond-brand: #43507f;
+  --beond-brand-soft: #eef0f6;
+  --beond-surface: #f6f4f1;
+  --beond-line: #e7e7e7;
+  --beond-ink: #222;
+  --beond-ink-soft: #8a8a8a;
+  --beond-success: #12bc59;
+
+  font-family: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--beond-ink);
 }
 
 #beond-efiling-panel .beond-panel {
-  width: 300px;
-  max-height: 70vh;
+  width: 316px;
+  max-height: 78vh;
   overflow: auto;
-  border-radius: 16px;
+  scrollbar-width: none;
+  border: 1px solid var(--beond-line);
+  border-radius: 24px;
   background: #fff;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.22);
-  color: #222;
+  box-shadow: 0 18px 48px rgba(34, 34, 34, 0.16);
 }
 
+#beond-efiling-panel .beond-panel::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── title bar ─────────────────────────────────────────────────────────────
+   White, not a navy slab: the panel sits on someone else's page and a quiet
+   header keeps it reading as a helper rather than a second site. */
 #beond-efiling-panel .beond-head {
   position: sticky;
   top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  background: #43507f;
-  color: #fff;
+  gap: 8px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--beond-line);
+  border-radius: 24px 24px 0 0;
+  background: #fff;
+  cursor: grab;
+  user-select: none;
+}
+
+#beond-efiling-panel .beond-head.beond-dragging {
+  cursor: grabbing;
+}
+
+#beond-efiling-panel .beond-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--beond-brand);
 }
 
 #beond-efiling-panel .beond-title {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--beond-brand);
+}
+
+#beond-efiling-panel .beond-title-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--beond-ink-soft);
 }
 
 #beond-efiling-panel .beond-icon-btn {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
   border: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.18);
-  color: #fff;
-  cursor: pointer;
+  background: var(--beond-surface);
+  font-size: 13px;
   line-height: 1;
+  color: var(--beond-ink-soft);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+#beond-efiling-panel .beond-icon-btn:hover {
+  background: var(--beond-brand-soft);
+}
+
+#beond-efiling-panel .beond-collapsed .beond-head {
+  border-bottom: 0;
+  border-radius: 24px;
 }
 
 #beond-efiling-panel .beond-collapsed .beond-body {
@@ -51,90 +122,235 @@
 }
 
 #beond-efiling-panel .beond-body {
-  padding: 12px 14px 14px;
+  padding: 14px 16px 16px;
 }
 
+/* ── copy ──────────────────────────────────────────────────────────────── */
 #beond-efiling-panel .beond-status,
 #beond-efiling-panel .beond-empty,
 #beond-efiling-panel .beond-hint {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   font-size: 12px;
-  line-height: 1.5;
-  color: #6b6b6b;
+  color: var(--beond-ink-soft);
 }
 
 #beond-efiling-panel .beond-hint {
-  color: #43507f;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--beond-brand-soft);
+  color: var(--beond-brand);
   font-weight: 500;
 }
 
+/* ── the one-click action ──────────────────────────────────────────────── */
+#beond-efiling-panel .beond-fill-all {
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 11px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--beond-brand);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+#beond-efiling-panel .beond-fill-all:hover:not(:disabled) {
+  background: #525f92;
+}
+
+/* ── payer cards ───────────────────────────────────────────────────────── */
 #beond-efiling-panel .beond-row {
   margin-bottom: 10px;
-  padding: 10px;
-  border: 0.5px solid #e0e0e0;
-  border-radius: 12px;
+  padding: 12px 13px;
+  border: 1px solid var(--beond-line);
+  border-radius: 18px;
+  background: #fff;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
 }
 
 #beond-efiling-panel .beond-row-name {
-  margin-bottom: 6px;
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  font-size: 12.5px;
   font-weight: 600;
+  line-height: 1.35;
 }
 
 #beond-efiling-panel .beond-kv {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 0;
-  font-size: 12px;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 11.5px;
 }
 
 #beond-efiling-panel .beond-k {
-  color: #8a8a8a;
+  color: var(--beond-ink-soft);
 }
 
 #beond-efiling-panel .beond-v {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
 }
 
 #beond-efiling-panel .beond-copy {
+  flex: none;
   border: 0;
   border-radius: 999px;
-  background: #f0f2f7;
-  padding: 2px 8px;
-  font-size: 11px;
-  color: #43507f;
+  background: transparent;
+  padding: 2px 7px;
+  font: inherit;
+  font-size: 10.5px;
+  color: var(--beond-ink-soft);
   cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
-#beond-efiling-panel .beond-fill,
-#beond-efiling-panel .beond-map {
-  width: 100%;
-  margin-top: 8px;
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 10px;
-  background: #43507f;
-  font-size: 12px;
-  font-weight: 500;
+#beond-efiling-panel .beond-copy:hover {
+  background: var(--beond-brand-soft);
+  color: var(--beond-brand);
+}
+
+/* Filled this visit. Quiet, not celebratory: the tick answers "did this one go
+   in?" while the user scans the list, and green is reserved for exactly that. */
+#beond-efiling-panel .beond-row-done {
+  border-color: #cfe9da;
+  background: #f5fbf7;
+}
+
+#beond-efiling-panel .beond-tick {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--beond-success);
+  font-size: 9px;
+  line-height: 1;
   color: #fff;
+}
+
+#beond-efiling-panel .beond-fill {
+  width: 100%;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--beond-line);
+  border-radius: 999px;
+  background: #fff;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--beond-brand);
   cursor: pointer;
+  transition: background 0.15s ease;
 }
 
-#beond-efiling-panel .beond-map {
-  background: #f0f2f7;
-  color: #43507f;
-}
-
-#beond-efiling-panel .beond-fill:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+#beond-efiling-panel .beond-fill:hover:not(:disabled) {
+  background: var(--beond-surface);
 }
 
 #beond-efiling-panel .beond-total {
-  margin: 4px 0 0;
+  margin: 12px 0 0;
+  padding-top: 11px;
+  border-top: 1px solid var(--beond-line);
   font-size: 12px;
   font-weight: 600;
   text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── secondary tools ───────────────────────────────────────────────────────
+   Folded away by default. They exist for the days detection misses, and a
+   panel that leads with its own failure modes is a panel nobody trusts. */
+#beond-efiling-panel .beond-more {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  border: 0;
+  background: none;
+  padding: 4px 0;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--beond-ink-soft);
+  text-align: center;
+  cursor: pointer;
+}
+
+#beond-efiling-panel .beond-more:hover {
+  color: var(--beond-brand);
+}
+
+#beond-efiling-panel .beond-tools {
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--beond-line);
+}
+
+#beond-efiling-panel .beond-map,
+#beond-efiling-panel .beond-debug {
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--beond-line);
+  border-radius: 999px;
+  background: #fff;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--beond-ink-soft);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+#beond-efiling-panel .beond-map {
+  color: var(--beond-brand);
+  font-weight: 500;
+}
+
+#beond-efiling-panel .beond-map:hover,
+#beond-efiling-panel .beond-debug:hover {
+  background: var(--beond-surface);
+}
+
+#beond-efiling-panel .beond-fill:disabled,
+#beond-efiling-panel .beond-fill-all:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The tick lands with the confetti rather than simply appearing. */
+@keyframes beond-tick-in {
+  0% {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+#beond-efiling-panel .beond-tick {
+  animation: beond-tick-in 0.34s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #beond-efiling-panel .beond-tick {
+    animation: none;
+  }
 }

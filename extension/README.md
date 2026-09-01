@@ -28,17 +28,25 @@ beond app  ──window.postMessage──▶  content/bridge.js  ──chrome.st
   changing both files together.
 - `content/efiling.js` renders the panel on the RD site.
 
-## Why the panel asks you to map fields
+## How the boxes are found
 
-The RD form is not a stable public DOM — ids are generated, and the layout
-differs between tax years and between the list and edit views. Hard-coded
-selectors would silently fill the wrong box, which on a tax filing is worse than
-filling nothing. So the panel is taught once:
+**กรอกทั้งหมด** fills every payer in one click, with nothing taught to the panel
+first. The RD form is an Angular app with generated ids, so `content/autodetect.js`
+finds the boxes the way a person does — by reading the Thai caption beside each
+one (`label[for]`, `aria-label`, `mat-form-field`, a table's header cell…) and
+grouping them into one block per payer. If the form shows fewer rows than there
+are payers, its own "เพิ่มรายการ" button is pressed and the page re-scanned.
 
-**จับคู่ช่อง** → click the four fields in order (ชื่อผู้จ่าย, เลขผู้เสียภาษี,
-เงินได้, ภาษีหัก ณ ที่จ่าย). The selectors are stored per page path, and
-**กรอกแถวนี้** then writes each row into them. Every value also has a คัดลอก
-button, so manual entry always works even if the mapping drifts.
+Two fallbacks sit behind that, because a filing is not a place to be clever and
+wrong:
+
+1. **จับคู่ช่องเอง** — click the four fields in order (ชื่อผู้จ่าย, เลขผู้เสียภาษี,
+   เงินได้, ภาษีหัก ณ ที่จ่าย). Stored per page path.
+2. **คัดลอก** on every value, so manual entry always works.
+
+When detection finds nothing the panel offers **คัดลอกโครงสร้างฟอร์ม**, which
+copies the page's input captions (no typed values) to the clipboard — paste that
+into an issue and the patterns in `autodetect.js` can be widened.
 
 Values are written through the native `value` setter plus `input`/`change`
 events — assigning `.value` alone leaves a framework-controlled form submitting
@@ -46,9 +54,24 @@ its old state.
 
 ## Before publishing
 
-- [ ] Confirm the prod origin in `manifest.json` matches the deployed domain
-      (currently `https://beond-dashboard.vercel.app`).
+- [x] Prod origin in `manifest.json` matches the deployed domain
+      (`https://beond-dashboard.vercel.app`).
+- [x] Privacy policy — the store's required URL is
+      `https://beond-dashboard.vercel.app/privacy`
+      (`src/components/PrivacyPolicy.tsx`; §9 is about this extension and says
+      the rows never leave the machine).
+- [x] Listing copy, permission justifications and data-safety answers:
+      `store/LISTING.md` (Thai + English, ready to paste).
+- [x] Screenshots: `npm run shots:ext` writes 1280x800 shots of the real popup
+      and the real panel into `store/screenshots/`. The panel is photographed
+      over `store/demo-form.html` — a plain form that labels itself a demo,
+      because a store screenshot must never pass itself off as the Revenue
+      Department's site.
+- [ ] A reviewer test account. The app signs in with LINE, so a reviewer cannot
+      make one; without it they can only see the panel's empty state.
 - [ ] Walk one real filing end to end and note the mapped selectors; if they
       turn out to be stable, ship them as defaults so most users never map.
-- [ ] Fill in `CHROME_STORE_URL` in `src/components/home2/YearlySummaryView.tsx`
-      once the listing exists.
+- [ ] Fill in `CHROME_STORE_URL` once the listing exists — three places:
+      `src/components/home2/YearlySummaryView.tsx`,
+      `src/components/landing/BentoFeatures.tsx`,
+      `src/components/landing/LandingPage.tsx`.
