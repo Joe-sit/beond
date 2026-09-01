@@ -1,0 +1,5 @@
+# The app itself is behind a login and has nothing to index; the public pages do.
+User-agent: *
+Allow: /
+
+Sitemap: https://beond-dashboard.vercel.app/sitemap.xml

@@ -16,6 +16,7 @@ import TaxIdSheetPOC from "./components/home2/TaxIdSheetPOC";
 import OnboardingPOC from "./components/home2/OnboardingPOC";
 import LandingPage from "./components/landing/LandingPage";
 import PrivacyPolicy from "./components/PrivacyPolicy";
+import Learn from "./components/Learn";
 import CookieConsent from "./components/CookieConsent";
 import HeroScreen3DPOC from "./components/landing/HeroScreen3DPOC";
 import LineChatPOC from "./components/landing/line/LineChatPOC";
@@ -143,6 +144,12 @@ function App() {
   // and anyone deciding whether to sign up must be able to read it logged out.
   if (window.location.pathname.startsWith("/privacy")) {
     return <PrivacyPolicy />;
+  }
+
+  // Public tax guides. Also the only substantial thing a crawler can read, the
+  // rest of the app being behind a LINE login.
+  if (window.location.pathname.startsWith("/learn")) {
+    return <Learn />;
   }
 
   // Prototype / tuner routes — DEV builds only, so production can't reach the

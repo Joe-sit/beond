@@ -463,6 +463,11 @@ export default function LandingPage({ onLogin, notice }: Props) {
                   ส่วนเสริม e-Filing
                 </FooterLink>
               </FooterColumn>
+              <FooterColumn title="ความรู้">
+                <FooterLink href="/learn">ความรู้ภาษีหุ้นกู้</FooterLink>
+                <FooterLink href="/learn/wht-15">ภาษีหัก ณ ที่จ่าย 15% คืออะไร</FooterLink>
+                <FooterLink href="/learn/file-pnd90">วิธียื่น ภ.ง.ด.90</FooterLink>
+              </FooterColumn>
               <FooterColumn title="ช่วยเหลือ">
                 <FooterLink
                   href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("แจ้งปัญหาการใช้งาน beond")}`}
