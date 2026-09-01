@@ -18,6 +18,7 @@ import dashboardWide from "../../assets/landing/story/dashboard-wide.png";
 import dashboardPhone from "../../assets/landing/story/dashboard-phone.png";
 import refundArt from "../../assets/landing/story/refund.png";
 import BentoFeatures from "./BentoFeatures";
+import EfilingAct from "./EfilingAct";
 
 // The 3D hero pulls in three + r3f — code-split so the first paint (headline,
 // clouds, the flat screenshot fallback) never waits on the renderer.
@@ -105,6 +106,10 @@ export default function LandingPage({ onLogin, notice }: Props) {
     [0, 0.3],
     ["blur(0px)", "blur(10px)"],
   );
+  // Clouds sit furthest back, so they answer the scroll least: they sink and
+  // spread while the device and the copy travel the full distance over them.
+  const cloudY = useTransform(heroEase, [0, 1], ["0%", "26%"]);
+  const cloudScale = useTransform(heroEase, [0, 1], [1, 1.18]);
   // Nav hides on the way down and comes back the moment the page moves up.
   // `hidden` only flips on a direction change, so this is a handful of state
   // updates per gesture, not one per scroll event.
@@ -139,6 +144,16 @@ export default function LandingPage({ onLogin, notice }: Props) {
   // The outline headline follows the solid copy, but has to be gone by the time
   // the story starts — it sits in the shared stage, which outlives the hero.
   const strokeFade = useTransform(heroEase, [0, 0.55, 0.8], [1, 0.4, 0]);
+
+  // The chat on the device's screen. It opens during the hero's second act as
+  // the slips fly in, then walks the conversation across the story — one
+  // scroll, one thread. The story half is stretched so each beat lands on the
+  // card that proves it: "ตรวจสอบให้ทุกใบ" while the DBD refusal is on screen,
+  // and the rest of the thread over the scenes the device has already left.
+  const chat = useTransform([heroP, storyP] as const, ([h, s]: number[]) => {
+    if (s <= 0) return h * 0.1;
+    return s < 0.5 ? 0.1 + (s / 0.5) * 0.3 : 0.4 + ((s - 0.5) / 0.5) * 0.6;
+  });
 
   return (
     // `overflow-x-clip`, never `hidden`: hidden makes this a scroll container,
@@ -212,6 +227,7 @@ export default function LandingPage({ onLogin, notice }: Props) {
                   collect={heroP}
                   story={storyP}
                   exit={stageExit}
+                  chat={chat}
                   reduce={!!reduce}
                 />
               </Suspense>
@@ -321,12 +337,13 @@ export default function LandingPage({ onLogin, notice }: Props) {
               </motion.div>
             </motion.div>
 
-            {/* Cloud band behind everything. */}
-            <img
+            {/* Cloud band behind everything, parallaxing against the scroll. */}
+            <motion.img
               src={clouds}
               alt=""
               aria-hidden
-              className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 w-full select-none"
+              style={reduce ? undefined : { y: cloudY, scale: cloudScale }}
+              className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 w-full origin-bottom select-none"
             />
           </div>
         </section>
@@ -379,6 +396,9 @@ export default function LandingPage({ onLogin, notice }: Props) {
           </div>
         </div>
       </div>
+
+      {/* ── e-Filing autofill ────────────────────────────────────────────── */}
+      <EfilingAct />
 
       {/* ── Feature bento ────────────────────────────────────────────────── */}
       <BentoFeatures />

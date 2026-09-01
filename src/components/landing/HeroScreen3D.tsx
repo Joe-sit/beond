@@ -4,9 +4,7 @@ import { ContactShadows, Environment, Lightformer, RoundedBox, useTexture } from
 import * as THREE from "three";
 import type { MotionValue } from "motion/react";
 import fileCard from "../../assets/landing/slip-file-card.png";
-import chatShot from "../../assets/landing/line-chat-shot.png";
-import chatHeader from "../../assets/landing/line-chat-header-63e7ba.png";
-import chatFooter from "../../assets/landing/line-chat-keyboard-f50c2e.png";
+import LineChat, { SCREEN_H, SCREEN_W } from "./line/LineChat";
 
 /**
  * The frame, in world units. A hollow rounded rectangle — border only, open
@@ -25,7 +23,6 @@ const BORDER = 0.018;
  *  border and its bevel curve away behind the glass and read as a recess. */
 const SCREEN_INSET = 0.004;
 const W = DEV_W - SCREEN_INSET * 2;
-const H = DEV_H - SCREEN_INSET * 2;
 /** Corner radius of the screen layers, following the frame's outer corner. */
 const SCREEN_R = RADIUS - SCREEN_INSET;
 /** The chat capture sits flush with the frame's front face — set it any
@@ -55,7 +52,7 @@ const SLIPS = [
 const SLIP_SPAN = 0.45;
 const SLIP_STEP = (1 - SLIP_SPAN) / (SLIPS.length - 1);
 /** Collect progress at which slip `i` is fully swallowed. */
-const slipLanded = (i: number) => i * SLIP_STEP + SLIP_SPAN * 0.82;
+const slipLanded = (i: number) => i * SLIP_STEP + SLIP_SPAN * 0.9;
 
 /** Pose the device starts in, turning to face the camera as the hero scrolls. */
 const START = { pitch: -0.175, yaw: -0.52, roll: 0 };
@@ -88,6 +85,9 @@ interface Props {
   /** 0 → 1 across the stage's last viewport of scroll, after the story has
    *  finished. The device sinks out of frame over it. */
   exit?: MotionValue<number>;
+  /** 0 → 1 through the chat on the device's screen, so the page's scroll walks
+   *  the conversation from the first slip to the interest calendar. */
+  chat?: MotionValue<number>;
   /** When set, the pose comes from here and the scroll is ignored. */
   override?: PoseOverride;
 }
@@ -108,38 +108,6 @@ function roundedRect(path: THREE.Shape | THREE.Path, w: number, h: number, r: nu
   return path;
 }
 
-/**
- * A flat rounded-rect panel for the screen layers. The opening has almost no
- * bezel left to hide behind, so a square-cornered plane would poke past the
- * frame's inner arc; these follow it instead. UVs are remapped over the
- * bounding box so a texture maps exactly as it would on a plane.
- */
-function roundedPlane(w: number, h: number, r: number, top = true, bottom = true) {
-  const shape = new THREE.Shape();
-  const x = -w / 2;
-  const y = -h / 2;
-  const cap = Math.min(r, w / 2, h / 2);
-  const rb = bottom ? cap : 0;
-  const rt = top ? cap : 0;
-  shape.moveTo(x + rb, y);
-  shape.lineTo(x + w - rb, y);
-  if (rb) shape.quadraticCurveTo(x + w, y, x + w, y + rb);
-  shape.lineTo(x + w, y + h - rt);
-  if (rt) shape.quadraticCurveTo(x + w, y + h, x + w - rt, y + h);
-  shape.lineTo(x + rt, y + h);
-  if (rt) shape.quadraticCurveTo(x, y + h, x, y + h - rt);
-  shape.lineTo(x, y + rb);
-  if (rb) shape.quadraticCurveTo(x, y, x + rb, y);
-
-  const geo = new THREE.ShapeGeometry(shape, 12);
-  const pos = geo.attributes.position;
-  const uv = geo.attributes.uv;
-  for (let i = 0; i < pos.count; i++) {
-    uv.setXY(i, (pos.getX(i) + w / 2) / w, (pos.getY(i) + h / 2) / h);
-  }
-  uv.needsUpdate = true;
-  return geo;
-}
 
 /**
  * The frame itself: one extruded, bevelled band with the middle cut out, so it
@@ -182,79 +150,132 @@ function DeviceFrame() {
   );
 }
 
-/** Natural height of the chat capture. Its width matches the opening exactly,
- *  so only the vertical band has to be chosen. */
-const SHOT_H = 2622;
-
-/** The chat header strip, pinned over the top of the screen. The capture's top
- *  126px are safe-area padding plus the phone's own iOS status bar (clock,
- *  signal, battery) — crop exactly those off, so the header keeps its full
- *  height and sits flush with the screen's top edge. */
-const HEAD_W = 1206;
-const HEAD_PAD = 126;
-const HEAD_H = 317 - HEAD_PAD;
-
-/** The rich menu, open over the bottom of the chat. */
-const FOOT_W = 1206;
-const FOOT_H = 1068;
-
 /**
  * The screen behind the frame's opening: the real LINE chat, as a capture
  * mapped onto a panel. The capture is narrower than the opening, so it is
  * cover-fitted — full width, cropped top and bottom — the way a phone screen
  * shows a scrolling chat.
  */
+/**
+ * The screen: the real beond chat, rendered as DOM and mapped onto the front
+ * of the device by drei's <Html transform>.
+ *
+ * It used to be a screenshot. A screenshot can only ever say one thing, and
+ * the page has a whole product to walk through — so the phone runs the actual
+ * LINE conversation instead, and `chat` scrolls it as the page scrolls.
+ *
+ * The DOM sits over the canvas rather than in it: the slips fly in *behind*
+ * the device, which is what we want the screen to hide anyway, and nothing
+ * ever passes in front of it.
+ */
+/** The chat is laid out at `W` — the frame's outer width — but it has to land
+ *  inside the frame's opening, not on top of its border, or the black header
+ *  paints over the corners. This shrinks it onto the opening; the opening is a
+ *  touch taller than the chat's 390:812, so a hair of the backing slab shows
+ *  above and below and reads as bezel. */
+const SCREEN_FIT = (DEV_W - BORDER * 2) / W;
+/** The screen's size in world units. */
+const SCREEN_WORLD_W = W * SCREEN_FIT;
+const SCREEN_WORLD_H = (SCREEN_WORLD_W * SCREEN_H) / SCREEN_W;
+
+/**
+ * The chat's four corners in the device's own space, in the order the
+ * projection below wants them: (0,0), (1,0), (1,1), (0,1) of the DOM box.
+ */
+const SCREEN_CORNERS = [
+  new THREE.Vector3(-SCREEN_WORLD_W / 2, SCREEN_WORLD_H / 2, SCREEN_Z),
+  new THREE.Vector3(SCREEN_WORLD_W / 2, SCREEN_WORLD_H / 2, SCREEN_Z),
+  new THREE.Vector3(SCREEN_WORLD_W / 2, -SCREEN_WORLD_H / 2, SCREEN_Z),
+  new THREE.Vector3(-SCREEN_WORLD_W / 2, -SCREEN_WORLD_H / 2, SCREEN_Z),
+] as const;
+
+const corner = new THREE.Vector3();
+
+/**
+ * Lay a DOM element over four projected points.
+ *
+ * drei's `<Html transform>` does this with a CSS 3D scene of its own — a
+ * `perspective` on the wrapper and the camera's matrix on a parent layer. That
+ * mirrors the WebGL camera rather than deriving from it, and the two drift
+ * apart: on short viewports the chat painted ~46px below the frame it is
+ * supposed to be inside, at every pose and every scroll position.
+ *
+ * So the screen is projected instead of mirrored. The device's four screen
+ * corners go through the same camera the frame is rendered with, and the DOM
+ * box is mapped onto them with a plane projective transform — the CSS cannot
+ * disagree with the render, because it is derived from it.
+ *
+ * `q` are the destination points in canvas pixels, clockwise from the top-left.
+ * Solves the unit square → quad map (Heckbert, *Fundamentals of Texture
+ * Mapping and Image Warping*, §2.2), then pre-scales it by the box's own size.
+ */
+function quadTransform(q: number[][], w: number, h: number): string | null {
+  const [p0, p1, p2, p3] = q;
+  const dx1 = p1[0] - p2[0];
+  const dx2 = p3[0] - p2[0];
+  const dy1 = p1[1] - p2[1];
+  const dy2 = p3[1] - p2[1];
+  const det = dx1 * dy2 - dx2 * dy1;
+  if (!det) return null;
+  const sx = p0[0] - p1[0] + p2[0] - p3[0];
+  const sy = p0[1] - p1[1] + p2[1] - p3[1];
+  const g = (sx * dy2 - dx2 * sy) / det;
+  const i = (dx1 * sy - sx * dy1) / det;
+  const a = p1[0] - p0[0] + g * p1[0];
+  const b = p3[0] - p0[0] + i * p3[0];
+  const c = p0[0];
+  const d = p1[1] - p0[1] + g * p1[1];
+  const e = p3[1] - p0[1] + i * p3[1];
+  const f = p0[1];
+  // Columns are the transform's basis vectors, so dividing the first by the
+  // box width and the second by its height folds in the box → unit square step.
+  return `matrix3d(${a / w},${d / w},0,${g / w},${b / h},${e / h},0,${i / h},0,0,1,0,${c},${f},0,1)`;
+}
+
+/**
+ * The chat is DOM, so it is rendered beside the canvas (see `HeroScreen3D`)
+ * rather than inside it, and `Stage` poses it every frame. In here only the
+ * backing slab is left: the mesh that keeps the opening from being
+ * see-through when the device turns.
+ */
 function Screen() {
-  const [texture, header, footer] = useTexture([chatShot, chatHeader, chatFooter]);
-  for (const t of [texture, header, footer]) {
-    t.colorSpace = THREE.SRGBColorSpace;
-    t.anisotropy = 8;
-  }
-  // Keep the lower band of the header capture — v runs bottom-up, so a repeat
-  // shorter than 1 with no offset drops the padding and status bar off the top.
-  header.repeat.set(1, HEAD_H / (HEAD_H + HEAD_PAD));
-  header.offset.set(0, 0);
-
-  const visible = useMemo(() => {
-    // Full width, never trimmed at the sides — the chat's avatars sit right on
-    // the edge. Only the capture's own status bar comes off the top; its header
-    // row stays, hidden under the strip drawn over it.
-    const bodyH = SHOT_H - HEAD_PAD;
-    return { repeat: [1, bodyH / SHOT_H] as const, offset: [0, 0] as const };
-  }, []);
-  texture.repeat.set(visible.repeat[0], visible.repeat[1]);
-  texture.offset.set(visible.offset[0], visible.offset[1]);
-
-  const headH = (W * HEAD_H) / HEAD_W;
-  const footH = (W * FOOT_H) / FOOT_W;
-  const geo = useMemo(() => {
-    const r = SCREEN_R;
-    return {
-      body: roundedPlane(W, H, r),
-      head: roundedPlane(W, headH, r, true, false),
-      foot: roundedPlane(W, footH, r, false, true),
-    };
-  }, [headH, footH]);
-
   return (
-    <group>
-      <mesh geometry={geo.body} position={[0, 0, SCREEN_Z]}>
-        <meshBasicMaterial map={texture} toneMapped={false} />
-      </mesh>
-      {/* Header strip sits over the chat, the way it stays put while the
-          conversation scrolls under it. */}
-      <mesh geometry={geo.head} position={[0, H / 2 - headH / 2, SCREEN_Z + 0.0015]}>
-        <meshBasicMaterial map={header} toneMapped={false} />
-      </mesh>
-      {/* Rich menu, pinned to the bottom the same way. */}
-      <mesh geometry={geo.foot} position={[0, -H / 2 + footH / 2, SCREEN_Z + 0.0015]}>
-        <meshBasicMaterial map={footer} toneMapped={false} />
-      </mesh>
-      {/* Backing slab, so the opening is never see-through from an angle. */}
-      <RoundedBox args={[DEV_W - BORDER, DEV_H - BORDER, 0.045]} radius={SCREEN_R - BORDER} smoothness={5} position={[0, 0, -0.012]}>
-        <meshStandardMaterial color="#111315" roughness={0.5} />
-      </RoundedBox>
-    </group>
+    <RoundedBox args={[DEV_W - BORDER, DEV_H - BORDER, 0.045]} radius={SCREEN_R - BORDER} smoothness={5} position={[0, 0, -0.012]}>
+      <meshStandardMaterial color="#111315" roughness={0.5} />
+    </RoundedBox>
+  );
+}
+
+/** The DOM screen, laid over the canvas and posed by `Stage`. */
+function ScreenLayer({ screen, chat }: { screen: React.Ref<HTMLDivElement>; chat?: MotionValue<number> }) {
+  return (
+    <div
+      ref={screen}
+      aria-hidden
+      style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: SCREEN_W,
+        height: SCREEN_H,
+        transformOrigin: "0 0",
+        // The matrix below is rewritten every frame, and this subtree is a
+        // whole chat: cards, images, shadows, Thai type. Without these it is
+        // repainted on the main thread each frame — the scroll keeps moving
+        // (it is composited) while the device visibly stops updating. These
+        // give it its own layer and stop its paint from being re-evaluated
+        // against the rest of the page.
+        willChange: "transform",
+        backfaceVisibility: "hidden",
+        contain: "layout paint style",
+        visibility: "hidden",
+        overflow: "hidden",
+        pointerEvents: "none",
+        borderRadius: (SCREEN_R / W) * SCREEN_W,
+      }}
+    >
+      <LineChat progress={chat} />
+    </div>
   );
 }
 
@@ -318,32 +339,35 @@ const INTRO_S = 1.3;
 const STORY_POSE = [
   // Scenes one and two: the device holds the right half beside the headline,
   // turned onto its edge exactly as it enters in the hero (START).
-  { x: 1.75, pitch: START.pitch, yaw: START.yaw, lift: 0.06 },
-  { x: 1.55, pitch: START.pitch, yaw: START.yaw, lift: 0.06 },
+  { x: 1.35, pitch: START.pitch, yaw: START.yaw, lift: 0.06 },
+  { x: 1.2, pitch: START.pitch, yaw: START.yaw, lift: 0.06 },
   // Scenes three and four are carried by flat art, so the device drops away.
-  { x: 1.7, pitch: START.pitch, yaw: START.yaw, lift: -4.6 },
-  { x: 1.7, pitch: START.pitch, yaw: START.yaw, lift: -6.5 },
+  { x: 1.3, pitch: START.pitch, yaw: START.yaw, lift: -4.6 },
+  { x: 1.3, pitch: START.pitch, yaw: START.yaw, lift: -6.5 },
 ] as const;
 
-/** How long the swallow bump takes to play out, in seconds, and how far it
- *  throws the device at the peak. */
-const PULSE_S = 0.62;
-const PULSE_AMP = 0.11;
+/** How much smaller the device reads once the story takes over: it shares the
+ *  scene with a headline now, where in the hero it had the stage to itself. */
+const STORY_SCALE = 0.74;
 
-function Stage({ progress, collect: collectP, story, exit: exitP, reduce, override }: Props) {
+/** The swallow bump is driven by the scroll, not by a clock: `PULSE_SPAN` is
+ *  how much of the collect phase one recoil plays over, `PULSE_AMP` how far it
+ *  throws the device at the peak. Tying it to the scroll keeps it locked to the
+ *  card that caused it — a slow scroll swells slowly, a scroll back up rewinds
+ *  the recoil with the card. */
+const PULSE_SPAN = 0.085;
+const PULSE_AMP = 0.13;
+
+function Stage({ progress, collect: collectP, story, exit: exitP, screen, reduce, override }: Props & { screen: React.RefObject<HTMLDivElement | null> }) {
   const group = useRef<THREE.Group>(null);
+  // Last matrix written to the screen. Rewriting an identical transform still
+  // dirties the layer, so a settled device costs nothing.
+  const posed = useRef("");
   // Entrance: 0 → 1 over INTRO_S, driving the rise from below the viewport.
   const intro = useRef(0);
   // Second act's progress, written once per frame and read by every slip — a
   // ref, so the slips never re-render.
   const collect = useRef(0);
-  // Swallowing a slip bumps the device. `since` is seconds since the last one
-  // arrived — it drives a damped spring, so the bump reads as a real recoil
-  // rather than a fade. `landed` remembers the count so each slip fires once.
-  const since = useRef(PULSE_S);
-  const landed = useRef(0);
-  // How hard the last bump hit — a fast scroll can land several at once.
-  const strength = useRef(1);
   // The bump multiplies the eased scale, so it has to be divided back out
   // before easing again — otherwise each frame compounds it.
   const bumpApplied = useRef(1);
@@ -381,7 +405,7 @@ function Stage({ progress, collect: collectP, story, exit: exitP, reduce, overri
       : mix(START.roll, REST.roll) - (reduce ? 0 : state.pointer.y * 0.03);
     // Starts big and cropped by the viewport, then pulls back as it turns to
     // face the camera so the whole device is in frame.
-    const targetScale = override ? override.scale : 0.58 - p * 0.13;
+    let targetScale = override ? override.scale : 0.58 - p * 0.13;
 
     // Story drift: walk the pose list continuously rather than snapping at
     // scene boundaries, so the device is always on its way somewhere.
@@ -389,6 +413,7 @@ function Stage({ progress, collect: collectP, story, exit: exitP, reduce, overri
     let driftPitch = 0;
     let driftYaw = 0;
     let driftLift = 0;
+    let storyMix = 0;
     if (story && !override) {
       const s01 = THREE.MathUtils.clamp(story.get(), 0, 1);
       const f = s01 * (STORY_POSE.length - 1);
@@ -419,30 +444,40 @@ function Stage({ progress, collect: collectP, story, exit: exitP, reduce, overri
       driftPitch *= rampE;
       driftYaw *= rampE;
       driftLift *= rampE;
-
+      storyMix = rampE;
+    }
+    if (!override) {
+      targetScale *= 1 + (STORY_SCALE - 1) * storyMix;
+      // Keep the device inside its canvas whatever shape the window is. The
+      // stage is capped at 900px wide but its height follows the viewport, so
+      // a tall window leaves very little horizontal room in world units and
+      // the drift would otherwise run the device off the right edge.
+      const halfStage = state.viewport.width / 2;
+      const halfDevice = (DEV_W * Math.cos(START.yaw) + DEV_D) * 0.5 * targetScale;
+      const limit = Math.max(0, halfStage - halfDevice - 0.1);
+      driftX = THREE.MathUtils.clamp(driftX, -limit, limit);
     }
     // The canvas box overhangs the viewport top and bottom, so the device
     // rides up its own box to sit centred on screen. The box is deliberately
     // taller than the device's travel — clip it any tighter and the top of the
     // frame is cropped by the canvas edge as it lifts.
-    const lift = override ? override.lift : -0.25 + p * 1.02;
+    const lift = override ? override.lift : -0.25 + p * 0.6;
 
     // Rise from below the frame, straightening its extra lean as it arrives.
     const introLift = (1 - enter) * -5.2;
     const introTilt = (1 - enter) * 0.22;
 
-    // Count what has arrived and fire one bump per new slip.
-    let arrived = 0;
-    for (let i = 0; i < SLIPS.length; i++) if (collect.current >= slipLanded(i)) arrived++;
-    if (arrived > landed.current) {
-      since.current = 0;
-      strength.current = Math.min(2, arrived - landed.current);
+    // One damped recoil per slip, each read straight off the collect progress
+    // at the point its card vanishes behind the screen. They sum, so a fast
+    // scroll that lands several at once hits harder.
+    let bump = 1;
+    if (!reduce) {
+      for (let i = 0; i < SLIPS.length; i++) {
+        const u = (collect.current - slipLanded(i)) / PULSE_SPAN;
+        if (u <= 0 || u >= 1) continue;
+        bump += PULSE_AMP * Math.sin(u * Math.PI * 2.6) * Math.exp(-4.5 * u);
+      }
     }
-    landed.current = arrived;
-    since.current = Math.min(PULSE_S, since.current + delta);
-    // Damped spring: a fast swell, one small settle back, then nothing.
-    const u = since.current / PULSE_S;
-    const bump = reduce ? 1 : 1 + PULSE_AMP * strength.current * Math.sin(u * Math.PI * 2.6) * Math.exp(-4.5 * u);
 
     // The sticky layer stays pinned while the section below scrolls up under
     // it, so sink the device out of frame over that last stretch instead of
@@ -461,7 +496,40 @@ function Stage({ progress, collect: collectP, story, exit: exitP, reduce, overri
     const next = eased + (targetScale - eased) * k;
     bumpApplied.current = bump;
     g.scale.setScalar(next * bump);
-  });
+
+    // Lay the DOM screen over the frame it belongs to. The pose was written a
+    // few lines up, so refresh this group's world matrix rather than waiting
+    // for the renderer's own pass — otherwise the chat trails the frame by a
+    // frame while the device moves.
+    const el = screen.current;
+    if (el) {
+      g.updateWorldMatrix(true, false);
+      const q: number[][] = [];
+      let ok = true;
+      for (const c of SCREEN_CORNERS) {
+        corner.copy(c).applyMatrix4(g.matrixWorld);
+        // Behind the camera: the projection folds over, so drop the frame.
+        if (corner.z > state.camera.position.z - state.camera.near) ok = false;
+        corner.project(state.camera);
+        q.push([
+          (corner.x * 0.5 + 0.5) * state.size.width,
+          (-corner.y * 0.5 + 0.5) * state.size.height,
+        ]);
+      }
+      const m = ok ? quadTransform(q, SCREEN_W, SCREEN_H) : null;
+      if (m) {
+        if (m !== posed.current) {
+          posed.current = m;
+          el.style.transform = m;
+        }
+        el.style.visibility = "visible";
+      } else {
+        el.style.visibility = "hidden";
+      }
+    }
+    // Priority -1 keeps this ahead of any other per-frame work in the scene,
+    // so the pose and the screen laid over it are always the same frame's.
+  }, -1);
 
   return (
     <group ref={group} scale={0.58} position={[0, -5.67, 0]}>
@@ -470,7 +538,9 @@ function Stage({ progress, collect: collectP, story, exit: exitP, reduce, overri
       {SLIPS.map((_, i) => (
         <Slip key={i} index={i} collect={collect} />
       ))}
-      <ContactShadows position={[0, -DEV_H / 2 - 0.14, 0]} opacity={0.3} scale={7} blur={2.8} far={2.6} resolution={512} />
+      {/* The shadow re-renders its own depth pass every frame. At 512 that is a
+          second full pass for something the page reads as a soft smudge. */}
+      <ContactShadows position={[0, -DEV_H / 2 - 0.14, 0]} opacity={0.3} scale={7} blur={2.8} far={2.6} resolution={256} />
     </group>
   );
 }
@@ -483,11 +553,18 @@ function Stage({ progress, collect: collectP, story, exit: exitP, reduce, overri
  * sets React state per frame. Under `prefers-reduced-motion` the frame settles
  * square-on and stops tracking the pointer.
  */
-export default function HeroScreen3D({ progress, collect, story, exit, reduce, override }: Props) {
+export default function HeroScreen3D({ progress, collect, story, exit, chat, reduce, override }: Props) {
+  // The chat is a DOM layer over the canvas, not a texture inside it, so that
+  // every Flex card stays real type. `Stage` projects the device's screen
+  // corners through the camera each frame and maps this element onto them.
+  const screen = useRef<HTMLDivElement>(null);
   return (
+    <div className="relative h-full w-full">
     <Canvas
-      // Cap DPR at 2 — past that the fill cost buys nothing visible.
-      dpr={[1, 2]}
+      // Cap DPR at 1.5. The device is a soft-edged render behind a DOM screen
+      // that carries all the detail, so the extra fill of a full 2x buys
+      // almost nothing and costs a lot on a retina laptop.
+      dpr={[1, 1.5]}
       gl={{ antialias: true, alpha: true }}
       camera={{ fov: 32, position: [0, 0, 7.6] }}
       // A pure decoration: never let it swallow scrolls or clicks.
@@ -520,8 +597,20 @@ export default function HeroScreen3D({ progress, collect, story, exit, reduce, o
           Canvas: a Suspense above it would unmount the renderer on every
           suspension and throw the WebGL context away with it. */}
       <Suspense fallback={null}>
-        <Stage progress={progress} collect={collect} story={story} exit={exit} reduce={reduce} override={override} />
+        <Stage
+          progress={progress}
+          collect={collect}
+          story={story}
+          exit={exit}
+          screen={screen}
+          reduce={reduce}
+          override={override}
+        />
       </Suspense>
     </Canvas>
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      <ScreenLayer screen={screen} chat={chat} />
+    </div>
+    </div>
   );
 }
