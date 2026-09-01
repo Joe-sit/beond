@@ -15,7 +15,10 @@ import JarPOC from "./components/home2/JarPOC";
 import TaxIdSheetPOC from "./components/home2/TaxIdSheetPOC";
 import OnboardingPOC from "./components/home2/OnboardingPOC";
 import LandingPage from "./components/landing/LandingPage";
+import PrivacyPolicy from "./components/PrivacyPolicy";
+import CookieConsent from "./components/CookieConsent";
 import HeroScreen3DPOC from "./components/landing/HeroScreen3DPOC";
+import LineChatPOC from "./components/landing/line/LineChatPOC";
 import LoginPage from "./components/LoginPage";
 import ScanFlow from "./components/ScanFlow";
 import { notifyPortfolioChanged } from "./hooks/usePortfolio";
@@ -136,6 +139,12 @@ function App() {
     }
   };
 
+  // Public policy page. Ahead of every auth gate: the Chrome Web Store reviewer
+  // and anyone deciding whether to sign up must be able to read it logged out.
+  if (window.location.pathname.startsWith("/privacy")) {
+    return <PrivacyPolicy />;
+  }
+
   // Prototype / tuner routes — DEV builds only, so production can't reach the
   // POC screens or the ack-reset debug tools by guessing a query string.
   if (import.meta.env.DEV) {
@@ -161,6 +170,8 @@ function App() {
     if (q.has("onboard")) return <OnboardingPOC />;
     // `?hero3d` — slider tuner for the landing hero's 3D window.
     if (q.has("hero3d")) return <HeroScreen3DPOC />;
+    // `?line` — the LINE chat screen shown inside the landing hero's device.
+    if (q.has("line")) return <LineChatPOC />;
     // `?old-landing` — the previous marketing page, kept for comparison.
     if (q.has("old-landing")) return <LoginPage onLogin={handleLogin} />;
 
@@ -217,6 +228,8 @@ function App() {
   return (
     <>
       <HomeDashboard profile={profile} onLogout={handleLogout} />
+      {/* PDPA: asked once, and only when an ad network is configured. */}
+      <CookieConsent />
       {reviewId && (
         <ScanFlow
           open
