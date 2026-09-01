@@ -18,9 +18,12 @@ import { getIssuerLogoUrl, issuerName } from "../../lib/issuerLogo";
 const fmtTHB = (n: number) =>
   new Intl.NumberFormat("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 
-// The RD e-Filing site the extension autofills, and the beond extension's
-// Chrome Web Store listing (TODO: real id once published — see backlog item 3).
-const EFILING_URL = "https://efiling.rd.go.th/rd-cms/";
+// The RD e-Filing page the extension autofills: ภ.ง.ด.90/91 for one tax year.
+// The year is the last path segment in พ.ศ., so it follows the year the user is
+// summarising rather than being pinned to whatever was current when this was
+// written. RD keeps older years reachable, so a back-year filing lands right.
+const efilingUrl = (yearBE: number) =>
+  `https://efiling.rd.go.th/rd-efiling-web/tax/pit/pnd9091/${yearBE}`;
 
 // Centre-stage box the jar flies to during the seal celebration, and the camera
 // zoom that fills it (the panel docks at 38).
@@ -414,7 +417,7 @@ export default function YearlySummaryView({ docs }: { docs: TaxDoc[] }) {
             Shown only after a successful sync (manual, per user's choice). */}
         {synced && (
           <a
-            href={EFILING_URL}
+            href={year == null ? "https://efiling.rd.go.th/" : efilingUrl(year)}
             target="_blank"
             rel="noopener noreferrer"
             className="flex h-[54px] w-full items-center justify-center gap-2 rounded-2xl border border-[#2E8B57] px-4 text-base font-medium text-[#2E8B57] transition hover:bg-[#2E8B57]/5"

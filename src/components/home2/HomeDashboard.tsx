@@ -5,6 +5,7 @@ import { toast, Toast } from "@heroui/react";
 import type { AuthProfile } from "../../lib/auth";
 import { useIsAdmin } from "../../lib/adminAccess";
 import { ensureCatalog } from "../../lib/secApi";
+import AdSlot from "../AdSlot";
 import {
   usePortfolioStats,
   useHoldings,
@@ -787,6 +788,8 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
           </section>
 
           <ProfileLevelModal open={levelModalOpen} onClose={() => setLevelModalOpen(false)} />
+
+          <AdSlot slot={import.meta.env.VITE_ADSENSE_SLOT_DASHBOARD} />
 
           {/* Holdings card — header (count + monthly) then a bordered list card.
               Figma node 962:2937. */}

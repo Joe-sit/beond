@@ -437,3 +437,30 @@ button[data-disabled="true"],
     display: table-header-group;
   }
 }
+
+/* ── Keep AdSense inside the box we gave it ──────────────────────────────────
+   The adsbygoogle library does not only fill the <ins> we place. With auto
+   formats enabled it also inserts units of its own between elements
+   (.google-auto-placed), sticks an anchor bar to the edge of the screen, and
+   pushes the document down by writing margins onto <html>/<body> — and the
+   script outlives a client-side route change, so a placement on one screen
+   rearranges every other one.
+
+   The account setting is the real fix (Auto ads and Auto optimize off), but the
+   layout must not depend on a checkbox in someone else's dashboard, so anything
+   the library places for itself is refused here. Our own slot is a plain
+   <ins class="adsbygoogle"> with no auto marker, and is untouched. */
+.google-auto-placed,
+ins.adsbygoogle[data-anchor-status],
+ins.adsbygoogle[data-vignette-loaded],
+ins.adsbygoogle[data-anchor-shown],
+#google-anno-sa,
+.googlepublisherpluginad {
+  display: none !important;
+}
+
+html,
+body {
+  /* Undo the offsets an anchor unit writes inline while docking itself. */
+  margin: 0 !important;
+}
