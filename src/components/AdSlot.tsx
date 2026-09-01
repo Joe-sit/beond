@@ -26,6 +26,29 @@ const CLIENT = import.meta.env.VITE_ADSENSE_CLIENT as string | undefined;
 // an empty box that costs the page nothing.
 const DRY_RUN = import.meta.env.VITE_ADSENSE_DRYRUN !== "0";
 
+declare global {
+  interface Window {
+    adsbygoogle?: unknown[];
+  }
+}
+
+let scriptLoading: Promise<void> | null = null;
+
+/** Fetch the AdSense library once per page, on the first consented render. */
+function loadAdSense(client: string): Promise<void> {
+  if (scriptLoading) return scriptLoading;
+  scriptLoading = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.async = true;
+    s.crossOrigin = "anonymous";
+    s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(client)}`;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("adsense failed to load"));
+    document.head.appendChild(s);
+  });
+  return scriptLoading;
+}
+
 export default function AdSlot({
   slot,
   height = 90,
