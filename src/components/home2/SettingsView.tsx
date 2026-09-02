@@ -11,6 +11,7 @@ import {
   IconTrash,
 } from "@tabler/icons-react";
 import { useT, useLang, setLang } from "../../lib/i18n";
+import { useScanQuota } from "../../lib/scanQuota";
 import { getSlipReminderEnabled, saveSlipReminderEnabled, getLineFriend } from "../../lib/userSettings";
 import { getFriendFlag, deleteAccount, LINE_OA_ADD_URL, type AuthProfile } from "../../lib/auth";
 
@@ -34,6 +35,7 @@ export default function SettingsView({
   const [delOpen, setDelOpen] = useState(false); // delete-account confirm modal
   const [delText, setDelText] = useState(""); // must match displayName to enable
   const [deleting, setDeleting] = useState(false);
+  const { quota } = useScanQuota();
 
   useEffect(() => {
     let alive = true;
@@ -129,6 +131,33 @@ export default function SettingsView({
             )}
           </div>
         </div>
+
+        {/* ── OCR allowance ───────────────────────────────────────
+            Reading a slip costs money and beond is free, so there is a ceiling.
+            Shown as a bar rather than a warning: it is a budget, not a telling
+            off, and running out is an invitation to ask for more. */}
+        {quota && !quota.unlimited && (
+          <div className="flex flex-col gap-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-ink/40">{t("set_scan_quota")}</p>
+            <div className="rounded-2xl border border-black/6 p-4">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-sm text-ink/70">{t("set_scan_left")}</span>
+                <span className="font-nunito text-lg font-medium text-ink">
+                  {quota.remaining} <span className="text-sm text-ink/40">/ {quota.limit}</span>
+                </span>
+              </div>
+              <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-black/8">
+                <div
+                  className="h-full rounded-full bg-[#43507F] transition-[width] duration-500"
+                  style={{ width: `${Math.round((quota.remaining / quota.limit) * 100)}%` }}
+                />
+              </div>
+              <p className="mt-2 text-xs leading-6 text-ink/50">
+                {t("set_scan_note").replace("{days}", String(quota.windowDays))}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* ── Notifications ───────────────────────────────────────── */}
         <div className="flex flex-col gap-3">

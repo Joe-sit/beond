@@ -22,6 +22,15 @@ import { buildSavedFlex } from "../_shared/savedSlip.ts";
 import { autoAddHolding, previewAutoAdd } from "../_shared/autoHolding.ts";
 import type { BondFacts } from "../_shared/autoHolding.ts";
 import { buildAddedBondFlex } from "../_shared/addedBond.ts";
+import {
+  SCAN_LIMIT,
+  SCAN_WINDOW_DAYS,
+  bumpScanQuota,
+  cachedScan,
+  imageHash,
+  rememberScan,
+  scanQuotaExceeded,
+} from "../_shared/scanQuota.ts";
 
 const LINE_TOKEN = Deno.env.get("LINE_MESSAGING_ACCESS_TOKEN")!;
 const LINE_SECRET = Deno.env.get("LINE_MESSAGING_CHANNEL_SECRET")!;
@@ -237,12 +246,24 @@ async function processSlip(documentId: string, lineUserId: string): Promise<void
     const slow = setTimeout(() => {
       linePush(lineUserId, [{ type: "text", text: "ยังอ่านข้อมูลอยู่นะครับ ⏳ อีกสักครู่" }]).catch(() => {});
     }, 12_000);
-    // Gemini vision reads the slip directly (accurate on Thai + skew).
+    // A slip already read is returned from memory — re-sending the same photo
+    // through the chat is common, and each repeat used to be a fresh charge.
+    // Only a real vision call is charged for, and it is charged for whether or
+    // not the answer turns out to be usable: an unreadable slip costs the same.
+    const hash = await imageHash(bytes);
+    const cached = await cachedScan<SlipFields>(admin, doc.user_id, hash);
     let f: SlipFields;
-    try {
-      f = await geminiExtract(bytes, contentType);
-    } finally {
+    if (cached) {
       clearTimeout(slow);
+      f = cached;
+    } else {
+      try {
+        f = await geminiExtract(bytes, contentType);
+      } finally {
+        clearTimeout(slow);
+        await bumpScanQuota(admin, doc.user_id);
+      }
+      await rememberScan(admin, doc.user_id, hash, f);
     }
 
     // Cross-check amounts: the slip's own arithmetic (net + tax = gross) is more
@@ -867,36 +888,6 @@ async function setFriend(lineUserId: string, isFriend: boolean): Promise<void> {
   }
 }
 
-const SCAN_DAILY_LIMIT = 5;
-const today = () => new Date().toISOString().slice(0, 10);
-
-// True when the user has hit the daily scan cap (exempt accounts never do).
-// Fail-open: any error (e.g. quota tables not yet migrated) must NOT block OCR.
-async function scanQuotaExceeded(userId: string): Promise<boolean> {
-  try {
-    const { data: u } = await admin.from("users").select("scan_unlimited").eq("id", userId).maybeSingle();
-    if (u?.scan_unlimited) return false;
-    const { data: row } = await admin
-      .from("scan_usage").select("count").eq("user_id", userId).eq("day", today()).maybeSingle();
-    return (row?.count ?? 0) >= SCAN_DAILY_LIMIT;
-  } catch (e) {
-    console.error("scanQuotaExceeded (fail-open):", (e as Error).message);
-    return false;
-  }
-}
-
-// Count one scan against today's quota. Best-effort — never throws.
-async function bumpScanQuota(userId: string): Promise<void> {
-  try {
-    const day = today();
-    const { data: row } = await admin
-      .from("scan_usage").select("count").eq("user_id", userId).eq("day", day).maybeSingle();
-    await admin.from("scan_usage").upsert({ user_id: userId, day, count: (row?.count ?? 0) + 1 });
-  } catch (e) {
-    console.error("bumpScanQuota (skip):", (e as Error).message);
-  }
-}
-
 // ── Event handlers ──────────────────────────────────────────────────────────
 async function handleFollow(event: LineEvent): Promise<void> {
   if (event.source?.userId) {
@@ -921,11 +912,17 @@ async function handleImage(event: LineEvent): Promise<void> {
 
   const userId = await ensureUser(lineUserId);
 
-  // Daily scan cap (Gemini cost) — exempt accounts (scan_unlimited) skip it.
-  if (await scanQuotaExceeded(userId)) {
+  // OCR spend cap (Gemini costs money and beond is free) — exempt accounts
+  // (scan_unlimited) skip it.
+  if (await scanQuotaExceeded(admin, userId)) {
     if (event.replyToken) {
       await lineReply(event.replyToken, [
-        { type: "text", text: `วันนี้สแกนครบ ${SCAN_DAILY_LIMIT} ครั้งแล้วครับ 🙏 พรุ่งนี้ลองใหม่ได้เลย` },
+        {
+          type: "text",
+          text:
+            `สแกนครบ ${SCAN_LIMIT} ใบใน ${SCAN_WINDOW_DAYS} วันแล้วครับ 🙏 ` +
+            "ถ้ายังต้องใช้อีก ทักบอกได้เลย เดี๋ยวเพิ่มให้",
+        },
       ]);
     }
     return;
@@ -982,7 +979,6 @@ async function handleImage(event: LineEvent): Promise<void> {
       console.error("ack reply failed (continuing):", (e as Error).message);
     }
   }
-  await bumpScanQuota(userId);
   // Await OCR to completion — a fire-and-forget EdgeRuntime.waitUntil task was
   // getting evicted mid-run when Gemini was slow (row left pending, image kept,
   // no error logged). Awaiting keeps the isolate alive until the flex is pushed.

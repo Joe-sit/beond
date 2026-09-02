@@ -25,6 +25,7 @@ import { supabase } from "../lib/supabase";
 import { extractSlip, saveTaxDocument, getReviewSlip, confirmReviewedSlip } from "../lib/taxDocuments";
 import { lookupTaxIdName, companyNamesMatch, verifyTaxId } from "../lib/verifyTaxId";
 import { useHoldings, notifyPortfolioChanged } from "../hooks/usePortfolio";
+import { useScanQuota } from "../lib/scanQuota";
 import { issuerName, issuerTickerFromTaxId } from "../lib/issuerLogo";
 import AddBondModal from "./AddBondModal";
 import IssuerLogo from "./IssuerLogo";
@@ -65,6 +66,9 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const { holdings } = useHoldings();
+  // What is left of the OCR allowance. Reading a slip costs money and beond is
+  // free, so the ceiling is real — showing it means nobody runs into it blind.
+  const { quota, refresh: refreshQuota } = useScanQuota();
   const bondOptions: BondOption[] = holdings.map((h) => ({ symbol: h.symbol, issuer: h.issuer }));
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -185,6 +189,7 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
       // Typhoon OCR (server) — reads Thai reliably. When OCR completes we jump
       // straight to the edit/review form.
       const slip = await extractSlip(image);
+      refreshQuota(); // a read just spent one — unless the image was already known
       // Prefer the matched bond's issuer for the payer name; else fall back to the
       // tax-id → issuer map when the name didn't come through.
       const m = bondOptions.find(
@@ -251,7 +256,16 @@ export default function ScanFlow({ open, onClose, onSubmit, reviewDocId }: ScanF
               <IconX size={24} />
             </button>
             <p className="text-sm font-semibold">สแกนใบ 50 ทวิ</p>
-            <span className="w-6" />
+            {quota && !quota.unlimited ? (
+              <span
+                className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] text-white/70"
+                title={`สแกนได้ ${quota.limit} ใบ ต่อ ${quota.windowDays} วัน`}
+              >
+                เหลือ {quota.remaining} ใบ
+              </span>
+            ) : (
+              <span className="w-6" />
+            )}
           </header>
         )}
 

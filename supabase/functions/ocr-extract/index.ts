@@ -13,6 +13,15 @@
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { encodeBase64 } from "jsr:@std/encoding/base64";
+import {
+  QUOTA_MESSAGE,
+  bumpScanQuota,
+  cachedScan,
+  imageHash,
+  rememberScan,
+  scanQuota,
+  scanQuotaExceeded,
+} from "../_shared/scanQuota.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -28,7 +37,7 @@ const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey, x-client-info",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
 interface SlipFields {
@@ -145,37 +154,18 @@ async function authUserId(req: Request): Promise<string | null> {
   return (data.user.app_metadata?.public_user_id as string | undefined) ?? null;
 }
 
-const SCAN_DAILY_LIMIT = 5;
-const today = () => new Date().toISOString().slice(0, 10);
-
-// True when the user has hit the daily scan cap (exempt accounts never do).
-async function scanQuotaExceeded(userId: string): Promise<boolean> {
-  const { data: u } = await admin.from("users").select("scan_unlimited").eq("id", userId).maybeSingle();
-  if (u?.scan_unlimited) return false;
-  const { data: row } = await admin
-    .from("scan_usage").select("count").eq("user_id", userId).eq("day", today()).maybeSingle();
-  return (row?.count ?? 0) >= SCAN_DAILY_LIMIT;
-}
-
-// Count one successful scan against today's quota.
-async function bumpScanQuota(userId: string): Promise<void> {
-  const day = today();
-  const { data: row } = await admin
-    .from("scan_usage").select("count").eq("user_id", userId).eq("day", day).maybeSingle();
-  await admin.from("scan_usage").upsert({ user_id: userId, day, count: (row?.count ?? 0) + 1 });
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   const json = (b: unknown, status = 200) =>
     new Response(JSON.stringify(b), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 
-  if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const userId = await authUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
-  if (await scanQuotaExceeded(userId)) {
-    return json({ error: `สแกนได้สูงสุด ${SCAN_DAILY_LIMIT} ครั้งต่อวัน — ลองใหม่พรุ่งนี้`, code: "quota_exceeded" }, 429);
-  }
+
+  // GET → how much of the window is left. The app shows this beside the upload
+  // button, so hitting the ceiling is something the user sees coming.
+  if (req.method === "GET") return json({ ok: true, quota: await scanQuota(admin, userId) });
+  if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
 
   try {
     const { image, contentType } = (await req.json()) as { image: string; contentType?: string };
@@ -183,10 +173,28 @@ Deno.serve(async (req) => {
     const bytes = Uint8Array.from(atob(image), (c) => c.charCodeAt(0));
     const ct = contentType ?? "image/jpeg";
 
-    // Gemini vision → structured JSON (one call, reads Thai reliably).
-    const fields = reconcile(await geminiExtract(bytes, ct));
-    await bumpScanQuota(userId);
-    return json({ ok: true, fields });
+    // A slip already read is returned from memory: free, instant, and it does
+    // not touch the quota. Re-sending the same photo is common enough that this
+    // saves more than the ceiling does.
+    const hash = await imageHash(bytes);
+    const cached = await cachedScan<SlipFields>(admin, userId, hash);
+    if (cached) return json({ ok: true, fields: cached, cached: true, quota: await scanQuota(admin, userId) });
+
+    if (await scanQuotaExceeded(admin, userId)) {
+      return json({ error: QUOTA_MESSAGE, code: "quota_exceeded" }, 429);
+    }
+
+    // Gemini vision → structured JSON (one call, reads Thai reliably). The
+    // charge lands whether or not the answer is usable, so the quota is spent
+    // on the attempt.
+    let fields: SlipFields;
+    try {
+      fields = reconcile(await geminiExtract(bytes, ct));
+    } finally {
+      await bumpScanQuota(admin, userId);
+    }
+    await rememberScan(admin, userId, hash, fields);
+    return json({ ok: true, fields, quota: await scanQuota(admin, userId) });
   } catch (e) {
     return json({ error: String((e as Error).message) }, 500);
   }
