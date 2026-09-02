@@ -7,11 +7,8 @@ import OnboardingFlow from "./OnboardingFlow";
  */
 export default function OnboardingPOC() {
   return (
-    <OnboardingFlow
-      profile={{ displayName: "joeomlet_xd" }}
-      holdingCount={0}
-      potentialWht={18000}
-      onDone={() => window.location.assign("/?v2")}
-    />
+    <div className="h-dvh bg-[#EEF1F5] p-3 font-kanit lg:p-6">
+      <OnboardingFlow holdingCount={0} />
+    </div>
   );
 }

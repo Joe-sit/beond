@@ -34,15 +34,40 @@ window.addEventListener("message", (event) => {
       ack(false);
       return;
     }
-    chrome.storage.local.set(
-      { [STORAGE_KEY]: rows, beond_synced_at: Date.now(), beond_origin: window.location.origin },
-      () => ack(!chrome.runtime.lastError),
-    );
+    // Reloading the extension orphans the copy of this script already running
+    // in open tabs: every chrome.* call then throws "Extension context
+    // invalidated". Nothing here can recover from that — the page has to be
+    // reloaded — so it is reported as a failed sync instead of an uncaught
+    // error the user has to interpret.
+    try {
+      chrome.storage.local.set(
+        { [STORAGE_KEY]: rows, beond_synced_at: Date.now(), beond_origin: window.location.origin },
+        () => ack(!chrome.runtime.lastError),
+      );
+    } catch {
+      ack(false);
+    }
     return;
   }
 
   ack(false);
 });
+
+// The only host a payer logo may come from. The URL is loaded by the panel on
+// efiling.rd.go.th, so an arbitrary one would be a beacon telling its owner who
+// is on the filing page and when — accepting any https URL here would hand that
+// to whatever posted the message.
+const LOGO_HOST = "img.logo.dev";
+
+function sanitizeLogo(value) {
+  if (typeof value !== "string" || value.length > 500) return null;
+  try {
+    const u = new URL(value);
+    return u.protocol === "https:" && u.hostname === LOGO_HOST ? u.href : null;
+  } catch {
+    return null;
+  }
+}
 
 // Accept only well-formed 40(4) rows: a 13-digit payer id and finite,
 // non-negative amounts. Anything else is dropped whole rather than partially
@@ -62,6 +87,9 @@ function sanitizeRows(payload) {
       issuer_tax_id: taxId,
       gross_interest: Math.round(gross * 100) / 100,
       wht_amount: Math.round(wht * 100) / 100,
+      // Optional and never fatal: a bad logo drops to a monogram rather than
+      // rejecting a row whose figures are fine.
+      logo_url: sanitizeLogo(r.logo_url),
     });
   }
   return out;

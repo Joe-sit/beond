@@ -27,6 +27,8 @@ let rows = [];
 let fieldMap = {}; // { [pathname]: { issuer_name: selector, … } }
 let picking = null; // index into FIELDS while in "จับคู่ช่อง" mode
 let toolsOpen = false; // the fallback tools are folded away until asked for
+let detailsOpen = false; // the payer list sits behind "รายละเอียด"
+let collapsed = false; // card shrunk to the avatar stack alone
 let blocks = []; // auto-detected payer blocks, refreshed as the app renders
 // Which payers this visit has written into the form. Kept per row index rather
 // than per row object so a re-render of the panel cannot lose it, and cleared
@@ -101,6 +103,40 @@ function makeDraggable(handle) {
   });
 }
 
+/** Colour a payer's initial from its name, so the stack reads as distinct faces. */
+const FACE_COLORS = ["#43507f", "#2968a5", "#779bc6", "#5f8bb0", "#3f6f9e"];
+// Nearly every Thai issuer name opens with its company form, so the raw first
+// letter would draw the same "บ" on every face. Drop the form first.
+const COMPANY_PREFIX = /^(บมจ\.?|บจก\.?|บจ\.?|หจก\.?|บริษัท|ธนาคาร)\s*/;
+function initialOf(name) {
+  const bare = (name || "").trim().replace(COMPANY_PREFIX, "").trim();
+  return (bare || name || "?").charAt(0).toUpperCase();
+}
+function faceFor(row, i) {
+  const name = typeof row === "string" ? row : row?.issuer_name;
+  const dot = el("span", "beond-face", initialOf(name));
+  dot.style.background = FACE_COLORS[i % FACE_COLORS.length];
+  dot.title = name || "";
+
+  // The real logo when the app resolved one. It is loaded over the monogram,
+  // never in place of it: this runs on someone else's page, whose CSP may block
+  // the request outright, and a blank circle would be worse than a letter.
+  const src = typeof row === "object" ? row?.logo_url : null;
+  if (src) {
+    const img = document.createElement("img");
+    img.className = "beond-face-logo";
+    img.alt = "";
+    img.referrerPolicy = "no-referrer";
+    img.onload = () => {
+      dot.textContent = "";
+      dot.style.background = "#fff";
+      dot.append(img);
+    };
+    img.src = src;
+  }
+  return dot;
+}
+
 function render() {
   const mapped = fieldMap[location.pathname] ?? {};
   const mappedCount = FIELDS.filter((f) => mapped[f.key]).length;
@@ -109,111 +145,164 @@ function render() {
   const mappedUsable =
     (mapped.issuer_name || mapped.issuer_tax_id) && (mapped.gross_interest || mapped.wht_amount);
   const canFill = blocks.length > 0 || Boolean(mappedUsable);
+  const allDone = rows.length > 0 && filled.size >= rows.length;
 
   host.innerHTML = "";
+  host.classList.toggle("beond-collapsed", collapsed);
   const panel = el("div", "beond-panel");
 
-  const head = el("div", "beond-head");
-  head.title = "ลากเพื่อย้าย · ดับเบิลคลิกเพื่อคืนตำแหน่งเดิม";
-  head.append(el("span", "beond-mark"));
-  head.append(el("span", "beond-title", "beond"));
-  head.append(el("span", "beond-title-sub", "เงินได้ 40(4)"));
-  const collapse = el("button", "beond-icon-btn", "–");
-  collapse.title = "ย่อ/ขยาย";
-  collapse.onclick = () => panel.classList.toggle("beond-collapsed");
-  head.append(collapse);
-  panel.append(head);
-  makeDraggable(head);
+  // ── the card ────────────────────────────────────────────────────────────
+  const card = el("div", "beond-card");
+  card.title = "ลากเพื่อย้าย · ดับเบิลคลิกเพื่อคืนตำแหน่งเดิม";
 
-  const body = el("div", "beond-body");
+  // Left: the payers themselves, up to four, then a count. Faces rather than an
+  // icon because the question the user actually has is "whose figures?".
+  const art = el("div", "beond-art");
+  const stack = el("div", "beond-stack");
+  const shown = rows.slice(0, 4);
+  shown.forEach((r, i) => stack.append(faceFor(r, i)));
+  if (rows.length > shown.length) {
+    stack.append(el("span", "beond-face beond-face-more", `+${rows.length - shown.length}`));
+  }
+  if (rows.length === 0) stack.append(faceFor("b", 0));
+  art.append(stack);
+  card.append(art);
 
+  const main = el("div", "beond-main");
   if (rows.length === 0) {
-    body.append(el("p", "beond-empty", "ยังไม่มีข้อมูล — เปิดแอป beond หน้า “สรุปประจำปี” แล้วกด “ส่งเข้า e-Filing”"));
+    main.append(el("h1", "beond-headline", "ยังไม่มีข้อมูลจาก beond"));
+    main.append(el("p", "beond-sub", "เปิดแอป beond หน้า “สรุปประจำปี” แล้วกด “ส่งเข้า e-Filing”"));
   } else {
-    const where = blocks.length
-      ? `พบช่องกรอกในหน้านี้ ${blocks.length} ชุด`
-      : mappedUsable
-        ? `ใช้ช่องที่จับคู่ไว้ ${mappedCount} ช่อง`
-        : "ยังหาช่องกรอกในหน้านี้ไม่เจอ";
-    body.append(el("p", "beond-status", `${rows.length} ผู้จ่ายเงินได้ · ${where}`));
-
-    // The one click this whole extension exists for.
-    const all = el("button", "beond-fill-all", busy ? "กำลังกรอก…" : `กรอกทั้งหมด (${rows.length})`);
-    all.disabled = busy || !canFill;
-    all.title = canFill ? "กรอกทุกผู้จ่ายลงในแบบฟอร์ม" : "หาช่องกรอกไม่เจอ — กด “จับคู่ช่อง” ด้านล่าง";
-    all.onclick = () => fillAll(all);
-    body.append(all);
-
-    rows.forEach((r, i) => {
-      const isDone = filled.has(i);
-      const card = el("div", `beond-row${isDone ? " beond-row-done" : ""}`);
-      const name = el("div", "beond-row-name");
-      // The tick is the answer to "did this one go in?", which the user is
-      // otherwise left to verify by reading the form field by field.
-      if (isDone) name.append(el("span", "beond-tick", "✓"));
-      name.append(el("span", null, r.issuer_name || "—"));
-      card.append(name);
-      card.append(kv("เลขผู้เสียภาษี", fmtTaxId(r.issuer_tax_id), r.issuer_tax_id));
-      card.append(kv("เงินได้", `฿${fmt(r.gross_interest)}`, String(r.gross_interest)));
-      card.append(kv("ภาษีหัก ณ ที่จ่าย", `฿${fmt(r.wht_amount)}`, String(r.wht_amount)));
-
-      const fill = el("button", "beond-fill", isDone ? "กรอกซ้ำ" : "กรอกแถวนี้");
-      fill.type = "button";
-      fill.disabled = busy || !canFill;
-      fill.title = fill.disabled ? "หาช่องกรอกไม่เจอ" : "เขียนค่าของผู้จ่ายรายนี้ลงในฟอร์ม";
-      fill.onclick = () => fillRow(r, fill, i);
-      card.append(fill);
-      body.append(card);
-    });
-
-    const total = rows.reduce((s, r) => s + r.wht_amount, 0);
-    body.append(el("p", "beond-total", `รวมภาษีหัก ณ ที่จ่าย ฿${fmt(total)}`));
+    main.append(
+      el(
+        "h1",
+        "beond-headline",
+        allDone ? `กรอกครบ ${rows.length} รายการแล้ว` : `พร้อมกรอกข้อมูล ${rows.length} รายการ`,
+      ),
+    );
+    // The one line under the headline carries the problem when there is one:
+    // an encouraging subtitle over a dead button is worse than no subtitle.
+    main.append(
+      el(
+        "p",
+        "beond-sub",
+        canFill ? "ข้อมูลรายได้หุ้นกู้จากเว็ปไซต์ beond" : "ยังหาช่องกรอกในหน้านี้ไม่เจอ — เปิดรายละเอียดเพื่อจับคู่ช่องเอง",
+      ),
+    );
   }
 
-  // The fallbacks live behind one line of text. They matter on the day
-  // detection misses, and a panel that leads with its own failure modes is a
-  // panel nobody trusts.
-  const more = el("button", "beond-more", toolsOpen ? "ซ่อนตัวช่วย" : "ตัวช่วยเพิ่มเติม");
-  more.onclick = () => {
-    toolsOpen = !toolsOpen;
+  const actions = el("div", "beond-actions");
+  if (rows.length > 0) {
+    const all = el("button", "beond-primary", busy ? "กำลังกรอก…" : allDone ? "กรอกซ้ำ" : "กรอกเลย");
+    all.disabled = busy || !canFill;
+    all.title = canFill ? "กรอกทุกผู้จ่ายลงในแบบฟอร์ม" : "หาช่องกรอกไม่เจอ — เปิด “รายละเอียด” แล้วกด “จับคู่ช่องเอง”";
+    all.onclick = () => fillAll(all);
+    actions.append(all);
+  }
+  const detail = el("button", "beond-ghost", detailsOpen ? "ซ่อนรายละเอียด" : "รายละเอียด");
+  detail.onclick = () => {
+    detailsOpen = !detailsOpen;
     render();
   };
-  body.append(more);
+  actions.append(detail);
+  main.append(actions);
+  card.append(main);
 
-  if (toolsOpen || picking !== null) {
-    const tools = el("div", "beond-tools");
+  const collapse = el("button", "beond-icon-btn", collapsed ? "+" : "–");
+  collapse.title = "ย่อ/ขยาย";
+  collapse.onclick = () => {
+    collapsed = !collapsed;
+    render();
+  };
+  card.append(collapse);
 
-    const mapBtn = el("button", "beond-map", picking === null ? "จับคู่ช่องเอง" : "ยกเลิกการจับคู่");
-    mapBtn.title = "ใช้เมื่อกรอกอัตโนมัติไม่ติด: คลิกช่องในฟอร์มทีละช่อง";
-    mapBtn.onclick = () => (picking === null ? startPicking() : stopPicking());
-    tools.append(mapBtn);
+  panel.append(card);
+  makeDraggable(card);
 
-    if (picking !== null) {
-      tools.append(
-        el(
-          "p",
-          "beond-hint",
-          `คลิกช่อง “${FIELDS[picking].label}” ในฟอร์ม (${picking + 1}/${FIELDS.length}) · กด Esc ถ้าหน้านี้ไม่มีช่องนี้`,
-        ),
-      );
+  // ── details ─────────────────────────────────────────────────────────────
+  if (detailsOpen) {
+    const body = el("div", "beond-details");
+
+    if (rows.length > 0) {
+      const where = blocks.length
+        ? `พบช่องกรอกในหน้านี้ ${blocks.length} ชุด`
+        : mappedUsable
+          ? `ใช้ช่องที่จับคู่ไว้ ${mappedCount} ช่อง`
+          : "ยังหาช่องกรอกในหน้านี้ไม่เจอ";
+      body.append(el("p", "beond-status", `${rows.length} ผู้จ่ายเงินได้ · ${where}`));
+
+      rows.forEach((r, i) => {
+        const isDone = filled.has(i);
+        const row = el("div", `beond-row${isDone ? " beond-row-done" : ""}`);
+        const name = el("div", "beond-row-name");
+        // The tick is the answer to "did this one go in?", which the user is
+        // otherwise left to verify by reading the form field by field.
+        if (isDone) name.append(el("span", "beond-tick", "✓"));
+        name.append(el("span", null, r.issuer_name || "—"));
+        row.append(name);
+        row.append(kv("เลขผู้เสียภาษี", fmtTaxId(r.issuer_tax_id), r.issuer_tax_id));
+        row.append(kv("เงินได้", `฿${fmt(r.gross_interest)}`, String(r.gross_interest)));
+        row.append(kv("ภาษีหัก ณ ที่จ่าย", `฿${fmt(r.wht_amount)}`, String(r.wht_amount)));
+
+        const fill = el("button", "beond-fill", isDone ? "กรอกซ้ำ" : "กรอกแถวนี้");
+        fill.type = "button";
+        fill.disabled = busy || !canFill;
+        fill.title = fill.disabled ? "หาช่องกรอกไม่เจอ" : "เขียนค่าของผู้จ่ายรายนี้ลงในฟอร์ม";
+        fill.onclick = () => fillRow(r, fill, i);
+        row.append(fill);
+        body.append(row);
+      });
+
+      const total = rows.reduce((s, r) => s + r.wht_amount, 0);
+      body.append(el("p", "beond-total", `รวมภาษีหัก ณ ที่จ่าย ฿${fmt(total)}`));
     }
 
-    // What the page renders, and what the last fill did to it. Two halves of
-    // the same question, and the only way to fix a miss from here.
-    const dump = el("button", "beond-debug", "คัดลอกโครงสร้างฟอร์ม");
-    dump.title = "ส่งให้ผู้พัฒนาเพื่อปรับการตรวจหาช่อง";
-    dump.onclick = () => copyInto(dump, describeForm(), "คัดลอกโครงสร้างฟอร์ม");
-    tools.append(dump);
+    // The fallbacks live one fold deeper again. They matter on the day
+    // detection misses, and a panel that leads with its own failure modes is a
+    // panel nobody trusts.
+    const more = el("button", "beond-more", toolsOpen ? "ซ่อนตัวช่วย" : "ตัวช่วยเพิ่มเติม");
+    more.onclick = () => {
+      toolsOpen = !toolsOpen;
+      render();
+    };
+    body.append(more);
 
-    const log = el("button", "beond-debug", "คัดลอกบันทึกการกรอก");
-    log.title = "ขั้นตอนล่าสุดของการกรอก — ส่งให้ผู้พัฒนาเมื่อกรอกไม่ครบ";
-    log.onclick = () => copyInto(log, getTrace(), "คัดลอกบันทึกการกรอก");
-    tools.append(log);
+    if (toolsOpen || picking !== null) {
+      const tools = el("div", "beond-tools");
 
-    body.append(tools);
+      const mapBtn = el("button", "beond-map", picking === null ? "จับคู่ช่องเอง" : "ยกเลิกการจับคู่");
+      mapBtn.title = "ใช้เมื่อกรอกอัตโนมัติไม่ติด: คลิกช่องในฟอร์มทีละช่อง";
+      mapBtn.onclick = () => (picking === null ? startPicking() : stopPicking());
+      tools.append(mapBtn);
+
+      if (picking !== null) {
+        tools.append(
+          el(
+            "p",
+            "beond-hint",
+            `คลิกช่อง “${FIELDS[picking].label}” ในฟอร์ม (${picking + 1}/${FIELDS.length}) · กด Esc ถ้าหน้านี้ไม่มีช่องนี้`,
+          ),
+        );
+      }
+
+      // What the page renders, and what the last fill did to it. Two halves of
+      // the same question, and the only way to fix a miss from here.
+      const dump = el("button", "beond-debug", "คัดลอกโครงสร้างฟอร์ม");
+      dump.title = "ส่งให้ผู้พัฒนาเพื่อปรับการตรวจหาช่อง";
+      dump.onclick = () => copyInto(dump, describeForm(), "คัดลอกโครงสร้างฟอร์ม");
+      tools.append(dump);
+
+      const log = el("button", "beond-debug", "คัดลอกบันทึกการกรอก");
+      log.title = "ขั้นตอนล่าสุดของการกรอก — ส่งให้ผู้พัฒนาเมื่อกรอกไม่ครบ";
+      log.onclick = () => copyInto(log, getTrace(), "คัดลอกบันทึกการกรอก");
+      tools.append(log);
+
+      body.append(tools);
+    }
+
+    panel.append(body);
   }
 
-  panel.append(body);
   host.append(panel);
 }
 
@@ -429,13 +518,15 @@ async function fillAll(btn) {
     celebrate(box ? { x: box.left + box.width / 2, y: box.top + 40 } : null);
   }
 
+  // Short on purpose: it replaces the button's own label for a moment, and a
+  // longer sentence pushes the quiet button off the card.
   const label =
     done === rows.length
-      ? `กรอกแล้ว ${done} รายการ`
+      ? `กรอกแล้ว ${done}`
       : stuck
-        ? `กรอกได้ ${done}/${rows.length} · เพิ่มแถวไม่ได้`
+        ? `กรอกได้ ${done}/${rows.length} · ติดขัด`
         : `กรอกได้ ${done}/${rows.length}`;
-  const node = host.querySelector(".beond-fill-all");
+  const node = host.querySelector(".beond-primary");
   if (node) {
     node.textContent = label;
     setTimeout(render, 2600);

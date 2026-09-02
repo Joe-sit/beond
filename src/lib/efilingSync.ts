@@ -1,4 +1,5 @@
 import type { TaxDoc } from "../hooks/usePortfolio";
+import { getIssuerLogoUrl } from "./issuerLogo";
 
 // One 40(4) income row as the beond browser extension expects it (matches the
 // extension's `beond_bond_data` schema — see extension/README.md). The
@@ -8,6 +9,13 @@ export interface EfilingRow {
   issuer_tax_id: string;
   gross_interest: number;
   wht_amount: number;
+  /**
+   * The payer's logo, resolved here rather than in the extension: the domain
+   * map and the logo.dev token both live in the app, and a content script has
+   * no business carrying either onto a government site. Null when the issuer
+   * isn't known — the panel then draws a monogram.
+   */
+  logo_url?: string | null;
 }
 
 // Envelope for the window→extension bridge (content script `bridge.js`). The
@@ -36,6 +44,7 @@ export function buildEfilingRows(docs: TaxDoc[], taxYear: number): EfilingRow[] 
       byPayer.set(taxId, {
         issuer_name: d.payerName ?? d.symbol ?? "",
         issuer_tax_id: taxId,
+        logo_url: d.symbol ? getIssuerLogoUrl(d.symbol) : null,
         gross_interest: d.grossAmount ?? 0,
         wht_amount: d.whtAmount ?? 0,
       });

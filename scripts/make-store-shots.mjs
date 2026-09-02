@@ -20,9 +20,9 @@ mkdirSync(OUT, { recursive: true });
 
 /** The worked example shown in every shot. Real shape, invented numbers. */
 const ROWS = [
-  { issuer_name: "บมจ. บีทีเอส กรุ๊ป โฮลดิ้งส์", issuer_tax_id: "0107536000421", gross_interest: 47830.14, wht_amount: 7174.52 },
-  { issuer_name: "บมจ. แสนสิริ", issuer_tax_id: "0107537002460", gross_interest: 38460.0, wht_amount: 5769.0 },
-  { issuer_name: "บมจ. บริทาเนีย", issuer_tax_id: "0107563000371", gross_interest: 24120.55, wht_amount: 3618.08 },
+  { issuer_name: "บมจ. บีทีเอส กรุ๊ป โฮลดิ้งส์", issuer_tax_id: "0107536000421", gross_interest: 47830.14, wht_amount: 7174.52, logo_url: null },
+  { issuer_name: "บมจ. แสนสิริ", issuer_tax_id: "0107537002460", gross_interest: 38460.0, wht_amount: 5769.0, logo_url: null },
+  { issuer_name: "บมจ. บริทาเนีย", issuer_tax_id: "0107563000371", gross_interest: 24120.55, wht_amount: 3618.08, logo_url: null },
 ];
 
 /** chrome.storage.local, enough of it for the popup and the content script. */
@@ -64,17 +64,21 @@ async function panelShots() {
   await page.addScriptTag({ content: auto });
   await page.addScriptTag({ content: conf });
   await page.addScriptTag({ content: js });
-  await page.waitForSelector("#beond-efiling-panel .beond-fill-all:not([disabled])");
+  await page.waitForSelector("#beond-efiling-panel .beond-primary:not([disabled])");
 
   // Shot 1: every payer filled in one click, with nothing taught to the panel
   // first — the boxes are found by their Thai captions.
-  await page.click("#beond-efiling-panel .beond-fill-all");
+  await page.click("#beond-efiling-panel .beond-primary");
   // Mid-burst: the confetti is part of what a completed fill looks like.
   await page.waitForTimeout(620);
   await page.screenshot({ path: `${OUT}/01-autofill.png` });
 
   // Shot 2: teaching the panel which box is which. The fallback tools are
   // folded away by default, so they are opened the way a user would.
+  // The payer list and the fallback tools each sit behind a fold, so they are
+  // opened the way a user would: "รายละเอียด", then "ตัวช่วยเพิ่มเติม".
+  await page.click("#beond-efiling-panel .beond-ghost");
+  await page.waitForSelector("#beond-efiling-panel .beond-more");
   await page.click("#beond-efiling-panel .beond-more");
   await page.waitForSelector("#beond-efiling-panel .beond-map");
   await page.click("#beond-efiling-panel .beond-map");

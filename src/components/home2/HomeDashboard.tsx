@@ -45,6 +45,7 @@ import { useT, useLang, setLang } from "../../lib/i18n";
 import { useIsDesktop, isDesktopNow } from "../../lib/useIsDesktop";
 import AddBondModal from "../AddBondModal";
 import OnboardingFlow from "./OnboardingFlow";
+import { useScanQuota } from "../../lib/scanQuota";
 
 const fmtTHB = (n: number) => new Intl.NumberFormat("th-TH").format(Math.round(n));
 // Interest / tax / income figures show 2 decimals (principal stays whole).
@@ -94,7 +95,6 @@ const COLLECT_ACK_KEY = "beond:collectAck:v2"; // v2 drops the old seed-everythi
 // Once the user skips the cinematic intro, remember it so it never replays until
 // this cache is cleared.
 const INTRO_SKIP_KEY = "beond:introSkipped:v1";
-const ONBOARDING_KEY = "beond:onboarded:v1";
 
 const introAlreadySkipped = () => {
   try {
@@ -478,37 +478,22 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
   // The user's actual annual income drives the refund figures (income-based, same
   // math as the tax-base page). Auto-syncs when the tax-base page saves.
   const { income, loading: incomeLoading } = useUserIncome();
+  const { quota } = useScanQuota();
 
   // ── First run ────────────────────────────────────────────────────────────
-  // Shown ahead of the dashboard, because a brand-new account has an empty
-  // dashboard to show anyway. "New" is read from the account itself — no
-  // portfolio and no income on file — so the flow can't strand someone who
-  // already set themselves up elsewhere (adding a bond from LINE, say).
-  const [onboarded, setOnboarded] = useState(() => {
-    try {
-      return localStorage.getItem(ONBOARDING_KEY) === "1";
-    } catch {
-      return true; // no storage → don't replay the intro on every load
-    }
-  });
-  const finishOnboarding = () => {
-    try {
-      localStorage.setItem(ONBOARDING_KEY, "1");
-    } catch {
-      /* ignore */
-    }
-    setOnboarded(true);
-  };
-  // Latched, not derived: adding the first bond *inside* the flow would
-  // otherwise satisfy the "new account" test and yank the remaining steps out
-  // from under the user. Once it starts, only finishing ends it.
-  const [flowActive, setFlowActive] = useState(false);
-  useEffect(() => {
-    if (onboarded || loading || incomeLoading) return;
-    if (holdings.length === 0 && income === null) setFlowActive(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onboarded, loading, incomeLoading]);
-  const showOnboarding = flowActive && !onboarded;
+  // The setup screen stands in front of the dashboard until the account has the
+  // two things the dashboard is made of: at least one bond, and an income to
+  // price the refund against. Without either, every card behind it reads zero —
+  // a dashboard of zeros teaches nothing and looks broken. This is derived from
+  // the account, not latched or dismissible: setting up elsewhere (adding a bond
+  // from LINE, entering income on the tax-base page) lifts it on its own, and
+  // both sources re-read on notifyPortfolioChanged(), so finishing a task inside
+  // the flow lifts it without a reload.
+  const setupDone = holdings.length > 0 && income !== null;
+  // `?setup` — see the setup screen in its real frame (sidebar, tabs and all)
+  // from an account that is already past it. DEV only, like the other tuners.
+  const forceSetup = import.meta.env.DEV && new URLSearchParams(window.location.search).has("setup");
+  const showOnboarding = forceSetup || (!loading && !incomeLoading && !setupDone);
 
   const taxStory = useMemo<TaxStoryData>(() => ({
     rate: taxRate,
@@ -569,19 +554,6 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
     setLayoutOpening(true);
     setTimeout(() => setLayoutOpening(false), 900);
   };
-
-  // Ahead of everything else: the dashboard's chrome (sidebar, tabs, cinematic)
-  // is noise to someone who hasn't told us anything yet.
-  if (showOnboarding) {
-    return (
-      <OnboardingFlow
-        profile={profile}
-        holdingCount={holdings.length}
-        potentialWht={yearProgress.potentialWht}
-        onDone={finishOnboarding}
-      />
-    );
-  }
 
   return (
     <div
@@ -660,8 +632,41 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
           )}
         </nav>
 
-        {/* Bottom group — language switch + download extension + settings. */}
+        {/* Bottom group — scan allowance + language switch + extension + settings. */}
         <div className="mt-auto flex flex-col gap-1">
+          {/* What is left of the OCR allowance. It sits by the settings link
+              because that is where the full explanation is, and it opens it —
+              a number with no way to ask about it only raises questions. */}
+          {quota && (
+            <button
+              onClick={() => navTo("settings")}
+              className="mb-1 flex flex-col gap-2 rounded-2xl px-3 py-2.5 text-left transition hover:bg-black/5"
+            >
+              <span className="flex items-baseline justify-between gap-2">
+                <span className="text-xs font-medium text-ink/45">{t("set_scan_left")}</span>
+                <span className="font-nunito text-sm font-medium text-ink/70">
+                  {quota.unlimited ? (
+                    t("set_scan_unlimited")
+                  ) : (
+                    <>
+                      {quota.remaining}
+                      <span className="text-ink/35"> / {quota.limit}</span>
+                    </>
+                  )}
+                </span>
+              </span>
+              {/* No bar for an exempt account — a full one would imply a ceiling
+                  it does not have. */}
+              {!quota.unlimited && (
+                <span className="block h-1 w-full overflow-hidden rounded-full bg-black/8">
+                  <span
+                    className="block h-full rounded-full bg-[#43507F] transition-[width] duration-500"
+                    style={{ width: `${Math.round((quota.remaining / quota.limit) * 100)}%` }}
+                  />
+                </span>
+              )}
+            </button>
+          )}
           {/* Language switch — segmented TH / EN. */}
           <div className="mb-1 flex rounded-2xl bg-black/5 p-1 text-sm font-medium">
             {(["th", "en"] as const).map((l) => (
@@ -758,6 +763,13 @@ export default function HomeDashboard({ profile, onLogout }: { profile: AuthProf
       ) : view === "settings" ? (
         <main className="min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
           <SettingsView profile={profile} onLogout={onLogout} onReplayIntro={replayIntro} />
+        </main>
+      ) : showOnboarding ? (
+        // The dashboard itself, and only it, waits behind setup: the other pages
+        // stand on their own and the sidebar keeps working, so this reads as one
+        // page with something left to do rather than a wall in front of the app.
+        <main className="flex min-h-0 w-full flex-1 overflow-hidden p-3 pb-20 lg:p-6 lg:pb-6">
+          <OnboardingFlow holdingCount={holdings.length} />
         </main>
       ) : (
       <main className="grid w-full grid-cols-1 gap-4 p-3 pb-24 lg:min-h-0 lg:flex-1 lg:gap-6 lg:overflow-hidden lg:p-6 lg:pb-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
