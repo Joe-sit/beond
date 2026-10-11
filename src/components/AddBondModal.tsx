@@ -16,6 +16,7 @@ import IssuerLogo from "./IssuerLogo";
 import BondDetailModal from "./BondDetailModal";
 import AddBondConfirm, { DetailPanel, AnimatedBaht, CompanyCombo, IssueDatePicker as ConfirmDatePicker } from "./AddBondConfirm";
 import { issuerName } from "../lib/issuerLogo";
+import { useIsDesktop } from "../lib/useIsDesktop";
 import { IconCheck, IconTrash, IconAlertTriangle, IconPlus, IconMinus, IconChevronRight, IconChevronLeft, IconChevronDown, IconLoader2, IconSparkles, IconInfoCircle } from "@tabler/icons-react";
 import emptyBonds from "../assets/empty-bonds.svg";
 import addBondMain from "../assets/add-bond-main.png";
@@ -266,6 +267,10 @@ function useScrollFade<T extends HTMLElement>(dep: unknown) {
 export default function AddBondModal({ open, onClose, onAdded, initialTerm, inline = false, editHolding = null, slipCount = 0, slips = [], onDelete }: AddBondModalProps) {
   const t = useT();
   const editing = !!editHolding;
+  // IssuerLogo takes a pixel size, so this one measurement can't be a media
+  // query in a class name.
+  const isDesktop = useIsDesktop();
+  const logoSize = isDesktop ? 64 : 44;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false); // delete in flight (edge fn can be slow)
   const [manualReview, setManualReview] = useState(false); // summary step before saving a manual entry
@@ -997,7 +1002,10 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
         )}
 
         <div className={`min-h-0 flex-1 gap-6 ${manual && !manualReview ? "grid lg:grid-cols-2" : "flex"}`}>
-        <div className="flex min-h-0 flex-1 flex-col">
+        {/* min-w-0: a flex item defaults to its content's minimum width, and a
+            long issuer name in a result card was widening the whole page past
+            the phone's viewport. */}
+        <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col">
         {!selected && manual && manualReview ? (
           <div className="relative z-10 mt-4 flex min-h-0 flex-1 flex-col rounded-3xl border-[0.5px] border-[#d9d9d9] bg-white p-4">
             {/* Save = folder-head tab above the card, like every other page. */}
@@ -1339,10 +1347,10 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
             />
           </div>
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col gap-6">
+          <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-6">
             {/* Hero — blue banner with back, title, search pill (Figma 1148:3732).
                 Right-side illustrations are assets, added later. */}
-            <div className="relative shrink-0 overflow-hidden rounded-3xl bg-[#2968a5] px-10 py-9">
+            <div className="relative shrink-0 overflow-hidden rounded-3xl bg-[#2968a5] px-4 py-5 lg:px-10 lg:py-9">
               {/* Right-side illustration cluster (Figma 1148:3762). */}
               <div className="pointer-events-none absolute inset-y-0 right-6 hidden w-96 xl:block" aria-hidden>
                 <img src={addBondMain} alt="" className="absolute right-4 top-1/2 h-44 w-auto -translate-y-1/2" />
@@ -1350,37 +1358,44 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                 <img src={bondEx2} alt="" className="absolute right-72 top-10 h-10 w-auto blur-[0.5px]" />
                 <img src={bondDec1} alt="" className="absolute -right-6 -top-2 h-24 w-auto -scale-x-100 blur-[0.5px]" />
               </div>
-              <div className="relative flex max-w-2xl flex-col gap-4">
+              <div className="relative flex w-full max-w-2xl flex-col gap-3 lg:gap-4">
+                {/* On a phone the label is the one thing here that has to give:
+                    the title needs the width, and a lone chevron in a circle is
+                    already the universal way back. */}
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex w-fit items-center gap-1.5 rounded-full border-[0.5px] border-black/10 bg-[#f5f5f5] px-3 py-2 text-sm font-medium text-[#222] transition hover:bg-white"
+                  aria-label={t("back")}
+                  className="flex size-9 w-fit items-center justify-center gap-1.5 rounded-full border-[0.5px] border-black/10 bg-[#f5f5f5] text-sm font-medium text-[#222] transition hover:bg-white lg:size-auto lg:px-3 lg:py-2"
                 >
-                  <IconChevronLeft size={18} /> {t("back")}
+                  <IconChevronLeft size={18} /> <span className="hidden lg:inline">{t("back")}</span>
                 </button>
-                <h2 className="text-3xl font-medium text-white">{t("add_bond_hero_title")}</h2>
-                <p className="text-base leading-normal text-white/80">
+                <h2 className="text-xl font-medium text-white lg:text-3xl">{t("add_bond_hero_title")}</h2>
+                {/* The forced break belongs to the two-column desktop hero; on a
+                    phone it splits the sentence at the wrong place. */}
+                <p className="text-xs leading-relaxed text-white/80 lg:text-base">
                   {t("add_bond_hero_sub1")}
-                  <br />
+                  <br className="hidden lg:inline" />{" "}
                   {t("add_bond_hero_sub2")}
                 </p>
                 <SearchField value={term} onChange={setTerm} aria-label={t("search_bond")} className="w-full max-w-[542px]">
-                  <SearchField.Group className="h-14 rounded-full border border-black/10 bg-white px-4">
+                  <SearchField.Group className="h-11 rounded-full border border-black/10 bg-white px-4 lg:h-14">
                     <SearchField.SearchIcon className="text-brand-blue" />
                     <SearchField.Input autoFocus placeholder={t("search_hint")} className="font-normal! text-brand-blue placeholder:text-brand-blue/70" />
                     <SearchField.ClearButton />
                   </SearchField.Group>
                 </SearchField>
-                <p className="text-sm text-white/80">{t("sec_source_dated", { date: catalogDate })}</p>
+                <p className="text-[0.7rem] leading-snug text-white/80 lg:text-sm">{t("sec_source_dated", { date: catalogDate })}</p>
               </div>
             </div>
 
             {/* Results (left) + cart (right) — shown once a query is typed, and
                 kept visible while the cart has items even after clearing search. */}
             {(term.trim().length >= 2 || cart.length > 0) && (
-            <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,492px)]">
-              {/* LEFT — one card per result */}
-              <div className="flex min-h-0 flex-col gap-3">
+            <div className="grid min-h-0 w-full min-w-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,492px)]">
+              {/* LEFT — one card per result. min-w-0 for the same reason as the
+                  column above: a grid item's default minimum is its content. */}
+              <div className="flex min-h-0 w-full min-w-0 flex-col gap-3">
                 <div className="flex shrink-0 items-center justify-between gap-2">
                   <p className="text-base font-medium text-black">
                     {t("found_n_items", { n: String(results.length) })}
@@ -1407,7 +1422,7 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   ref={resultsFade.ref}
                   onScroll={resultsFade.onScroll}
                   style={{ WebkitMaskImage: resultsFade.mask, maskImage: resultsFade.mask }}
-                  className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1"
+                  className={`flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1 ${cart.length > 0 ? "pb-20 lg:pb-0" : ""}`}
                 >
                   {term.trim().length < 2 && (
                     <div className="flex flex-col items-center gap-3 rounded-3xl bg-white p-8 text-center">
@@ -1475,15 +1490,15 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                     return (
                       <div
                         key={b.symbol}
-                        className={`flex shrink-0 flex-col gap-4 rounded-3xl bg-white p-6 transition ${owned ? "opacity-50" : ""}`}
+                        className={`flex shrink-0 flex-col gap-3 rounded-3xl bg-white p-4 transition lg:gap-4 lg:p-6 ${owned ? "opacity-50" : ""}`}
                       >
                         {/* Top row: logo + symbol/issuer, bookmark far right */}
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex min-w-0 items-center gap-4">
-                            <IssuerLogo symbol={b.symbol} name={issuerName(b.symbol, b.issuer || b.nameEn)} size={64} className="rounded-full!" />
+                        <div className="flex min-w-0 items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-3 lg:gap-4">
+                            <IssuerLogo symbol={b.symbol} name={issuerName(b.symbol, b.issuer || b.nameEn)} size={logoSize} className="rounded-full!" />
                             <div className="min-w-0">
                               <p className="text-base font-medium text-black">{b.symbol}</p>
-                              <p className="truncate text-sm text-black/60">{issuerName(b.symbol, b.issuer || b.nameEn)}</p>
+                              <p className="truncate text-xs text-black/60 lg:text-sm">{issuerName(b.symbol, b.issuer || b.nameEn)}</p>
                             </div>
                           </div>
                           {owned ? (
@@ -1530,10 +1545,13 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                               {t("age")} {termStr}
                             </Badge>
                           )}
+                          {/* Desktop only: on a phone the row is already three
+                              chips wide, and a fourth control pushes them onto a
+                              second line for something the card mostly says. */}
                           <button
                             type="button"
                             onClick={() => setDetailBond(b)}
-                            className="ml-auto flex h-9 items-center rounded-lg border-[0.5px] border-black/10 px-3 text-sm font-medium text-black/60 transition hover:bg-black/5"
+                            className="ml-auto hidden h-9 items-center rounded-lg border-[0.5px] border-black/10 px-3 text-sm font-medium text-black/60 transition hover:bg-black/5 lg:flex"
                           >
                             {t("bond_details")}
                           </button>
@@ -1545,8 +1563,11 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
               </div>
 
               {/* RIGHT — cart panel (Figma 1153:4202). Queued bonds +
-                  "ดำเนินการต่อ" → the amount-entry step (full page). */}
-              <div className="flex min-h-0 flex-col rounded-3xl bg-brand-blue/10 p-6">
+                  "ดำเนินการต่อ" → the amount-entry step (full page). Desktop
+                  only: on a phone it would sit under the results, off the end
+                  of a list the user is still scrolling, so the queue moves to a
+                  bar pinned above the tab nav instead (Figma 1428:3904). */}
+              <div className="hidden min-h-0 flex-col rounded-3xl bg-brand-blue/10 p-6 lg:flex">
                 {cart.length === 0 ? (
                   <div className="flex h-full min-h-60 flex-col items-center justify-center p-8 text-center">
                     <img src={emptyBonds} alt="" aria-hidden className="h-24 w-auto opacity-70" />
@@ -1611,6 +1632,29 @@ export default function AddBondModal({ open, onClose, onAdded, initialTerm, inli
                   </>
                 )}
               </div>
+
+              {/* Mobile queue bar — the whole cart in one line: how many are
+                  waiting, and the way on. Fixed above the tab nav so it stays
+                  put while the results scroll under it. */}
+              {cart.length > 0 && (
+                <div className="pointer-events-none fixed inset-x-0 bottom-16 z-40 px-3 pb-2 lg:hidden">
+                  <div className="pointer-events-auto flex items-center gap-3 rounded-full bg-white p-2 pl-4 shadow-[0_6px_24px_rgba(0,0,0,0.14)]">
+                    <img src={emptyBonds} alt="" aria-hidden className="h-9 w-auto shrink-0" />
+                    <p className="min-w-0 flex-1 truncate text-sm font-medium text-black">
+                      {t("bonds_to_add")} · {cart.length}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleContinue}
+                      disabled={continuing}
+                      className="flex shrink-0 items-center gap-1 rounded-full bg-brand-blue py-2.5 pr-3 pl-4 text-sm font-medium text-white transition hover:bg-[#215688] disabled:opacity-60"
+                    >
+                      {continuing ? t("thaibma_fetching") : t("continue")}
+                      {continuing ? <IconLoader2 size={18} className="animate-spin" /> : <IconChevronRight size={18} />}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             )}
           </div>
