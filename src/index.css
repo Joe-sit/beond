@@ -26,10 +26,14 @@ html {
   }
 }
 
+/* Google Sans, from Google Fonts — it ships a Thai subset of its own, so one
+   family carries both scripts. Noto Sans Thai stays behind it in every stack
+   for any glyph it lacks. The utility names (font-kanit, font-nunito) predate
+   the switch and are kept so no component has to change. */
 @theme {
-  --font-sukhumvit: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-nunito: "Nunito", "Noto Sans Thai", system-ui, sans-serif;
-  --font-kanit: "Kanit", "Noto Sans Thai", system-ui, sans-serif;
+  --font-sukhumvit: "Google Sans", "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-nunito: "Google Sans", "Nunito", "Noto Sans Thai", system-ui, sans-serif;
+  --font-kanit: "Google Sans", "Noto Sans Thai", system-ui, sans-serif;
   /* Signature script, used only for the "Beyond" lockup. */
   --font-momo: "Momo Signature", cursive;
 
@@ -370,7 +374,7 @@ body {
   margin: 0;
   overscroll-behavior: none;
   background: #f6f4f1;
-  font-family: "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: "Google Sans", "Noto Sans Thai", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 /* Every interactive element gets a pointer cursor (native buttons don't by
