@@ -13,16 +13,18 @@ import { IconArrowUp, IconChevronDown } from "@tabler/icons-react";
 import wordmark from "../../assets/landing-logo.svg?raw";
 import lineIcon from "../../assets/landing-line-icon.png";
 import clouds from "../../assets/landing/hero-clouds.svg";
-import lineWindow from "../../assets/landing/line-window-flat.png";
 import dashboardWide from "../../assets/landing/story/dashboard-wide.png";
 import dashboardPhone from "../../assets/landing/story/dashboard-phone.png";
-import refundArt from "../../assets/landing/story/refund.png";
+import SlipsIntoFolder from "./SlipsIntoFolder";
 import BentoFeatures from "./BentoFeatures";
 import EfilingAct from "./EfilingAct";
 
-// The 3D hero pulls in three + r3f — code-split so the first paint (headline,
-// clouds, the flat screenshot fallback) never waits on the renderer.
+// The 3D hero pulls in three + r3f — code-split so the first paint (headline
+// and clouds) never waits on the renderer.
 const HeroScreen3D = lazy(() => import("./HeroScreen3D"));
+// The jar carries its own renderer, so it is split out too and mounted only for
+// the scene that shows it.
+const RefundJar = lazy(() => import("./RefundJar"));
 
 interface Props {
   onLogin: () => void;
@@ -75,6 +77,24 @@ const SCENES = [
     art: "refund",
   },
 ] as const;
+
+/**
+ * How many viewports of scroll each scene gets.
+ *
+ * Equal spans meant one flick of the wheel crossed a whole beat, and the
+ * closing scene — which plays two animations in sequence — was gone before
+ * either finished. Scroll is the story's clock, so the scenes that have more to
+ * show are given more of it.
+ */
+const SCENE_SCROLL = [1.4, 1.4, 1.6, 3.2] as const;
+const STORY_VH = SCENE_SCROLL.reduce((sum, n) => sum + n, 0);
+
+/** Where a scene starts and ends, as a fraction of the story's own scroll. */
+function sceneBounds(index: number): [number, number] {
+  let start = 0;
+  for (let i = 0; i < index; i++) start += SCENE_SCROLL[i];
+  return [start / STORY_VH, (start + SCENE_SCROLL[index]) / STORY_VH];
+}
 
 /**
  * Public landing page (Figma 1446:5601 + storyboard 1652:4779).
@@ -213,15 +233,12 @@ export default function LandingPage({ onLogin, notice }: Props) {
               opacity keeps it on the render loop the rest of the scene uses. */}
           <div className="relative h-svh">
             <div className="absolute inset-x-0 top-[8svh] -bottom-[22svh] mx-auto max-w-[900px]">
-              <Suspense
-                fallback={
-                  <img
-                    src={lineWindow}
-                    alt="หน้าจอ beond"
-                    className="absolute inset-0 m-auto max-h-[72%] w-auto select-none object-contain"
-                  />
-                }
-              >
+              {/* No fallback image: the old flat screenshot it used to show is a
+                  different, earlier design, so it flashed one product and then
+                  swapped it for another. Nothing is better — the sky behind it
+                  is already the finished background, and the device arrives
+                  into it. */}
+              <Suspense fallback={null}>
                 <HeroScreen3D
                   progress={heroEase}
                   collect={heroP}
@@ -356,7 +373,7 @@ export default function LandingPage({ onLogin, notice }: Props) {
         <div
           ref={storyRef}
           className="relative z-0"
-          style={{ height: `${SCENES.length * 100}vh` }}
+          style={{ height: `${STORY_VH * 100}vh` }}
         >
           {/* The sky itself: a capsule that grows into the section's
               background, rather than a colour that simply starts. */}
@@ -507,8 +524,8 @@ export default function LandingPage({ onLogin, notice }: Props) {
  * outside that range.
  */
 function slice(index: number, total: number): [number, number, number, number] {
-  const span = 1 / total;
-  const start = index * span;
+  const [start, end] = sceneBounds(index);
+  const span = end - start;
   const clamp = (n: number) => Math.min(1, Math.max(0, n));
   // The last scene never fades: progress hits 1 while the sticky stage is
   // still pinned, and the block's final viewport then scrolls that frame away
@@ -573,9 +590,9 @@ function SceneText({
 }
 
 /**
- * Flat art for the scenes the 3D device has handed over to: the dashboard
- * composite and the refund illustration, both anchored to the bottom of the
- * stage the way the storyboard frames them.
+ * Art for the scenes the 3D device has handed over to: the dashboard composite,
+ * and the closing pair of animations, both anchored to the bottom of the stage
+ * the way the storyboard frames them.
  */
 function SceneArt({
   scene,
@@ -594,6 +611,16 @@ function SceneArt({
   const last = index === total - 1;
   const opacity = useTransform(p, [a, b, c, d], [0, 1, 1, last ? 1 : 0]);
   const y = useTransform(p, [a, b, c, d], [60, 0, 0, last ? 0 : -30]);
+  // The closing scene plays in two beats, handed over on the scroll that holds
+  // it: the folder fills, then the jar takes the stage.
+  const beat = useTransform(p, [b, c], [0, 1]);
+  const folderFade = useTransform(beat, [0, 0.42, 0.56], [1, 1, 0]);
+  const jarFade = useTransform(beat, [0.46, 0.62], [0, 1]);
+  // The jar holds a WebGL context and a physics world, and the landing already
+  // runs a renderer for the 3D device — so it exists only around its own beat,
+  // mounted early enough to have dropped a coin or two by the time it fades in.
+  const [jarLive, setJarLive] = useState(false);
+  useMotionValueEvent(beat, "change", (v) => setJarLive(v > 0.28 && v < 1.3));
   if (!scene.art) return null;
   return (
     <motion.div
@@ -615,7 +642,23 @@ function SceneArt({
           />
         </div>
       ) : (
-        <img src={refundArt} alt="" className="w-[62%] max-w-[520px] select-none pb-[10svh]" />
+        // The last beat, played rather than illustrated: the year's slips file
+        // themselves and what was withheld lands in the jar. Both are the
+        // dashboard's own animations, the same ones a user meets after a slip
+        // is confirmed over LINE.
+        // Two beats, one stage. The slips are filed first; only once the year
+        // is in the folder does what it was withheld for arrive in the jar.
+        // Side by side they were one picture and read as neither.
+        <div className="relative h-[46svh] w-full max-w-[560px] pb-[6svh] lg:h-[52svh]">
+          <motion.div className="absolute inset-0" style={reduce ? { opacity: 0 } : { opacity: folderFade }}>
+            <SlipsIntoFolder scale={0.62} />
+          </motion.div>
+          <motion.div className="absolute inset-0" style={reduce ? undefined : { opacity: jarFade }}>
+            {/* Nothing to fall back to: an empty box for a moment reads as the
+                jar arriving, which is what it is. */}
+            <Suspense fallback={null}>{jarLive && <RefundJar />}</Suspense>
+          </motion.div>
+        </div>
       )}
     </motion.div>
   );

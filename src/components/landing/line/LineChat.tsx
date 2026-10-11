@@ -55,7 +55,7 @@ function FromBeond({ time, children }: { time: string; children: React.ReactNode
     <div className={`flex items-end gap-2 ${SKIP_OFFSCREEN}`}>
       <img src={mascot} alt="" className="size-8 shrink-0 rounded-full bg-white/90 p-[3px]" />
       <div className="min-w-0">{children}</div>
-      <span className="mb-1 shrink-0 text-[10px] text-black/35">{time}</span>
+      <span className="mb-1 shrink-0 text-[10px] text-white/40">{time}</span>
     </div>
   );
 }
@@ -64,7 +64,7 @@ function FromBeond({ time, children }: { time: string; children: React.ReactNode
 function FromUser({ time, children }: { time: string; children: React.ReactNode }) {
   return (
     <div className={`flex items-end justify-end gap-2 ${SKIP_OFFSCREEN}`}>
-      <span className="mb-1 shrink-0 text-[10px] text-black/35">{time}</span>
+      <span className="mb-1 shrink-0 text-[10px] text-white/40">{time}</span>
       {children}
     </div>
   );
@@ -109,7 +109,7 @@ export default function LineChat({ progress }: { progress?: MotionValue<number> 
 
   return (
     <div
-      className="relative flex select-none flex-col overflow-hidden bg-[#8CABD9] font-sans"
+      className="relative flex select-none flex-col overflow-hidden bg-[#1B1C1D] font-sans"
       style={{ width: SCREEN_W, height: SCREEN_H }}
     >
       {/* Chat header. LINE keeps it dark over the wallpaper. */}
@@ -127,7 +127,7 @@ export default function LineChat({ progress }: { progress?: MotionValue<number> 
       {/* Conversation. */}
       <div ref={view} className="relative min-h-0 flex-1 overflow-hidden">
         <div ref={column} className="flex flex-col gap-3 px-2 py-4 will-change-transform">
-          <div className="self-center rounded-full bg-black/15 px-3 py-[3px] text-[10px] text-white">
+          <div className="self-center rounded-full bg-white/10 px-3 py-[3px] text-[10px] text-white/70">
             7 สิงหาคม 2569
           </div>
 
@@ -173,6 +173,8 @@ export default function LineChat({ progress }: { progress?: MotionValue<number> 
       </div>
 
       {/* Rich menu, pinned open the way it is when the chat is first opened. */}
+      {/* The rich menu keeps its brand blue in dark mode: it is an image the OA
+          uploads, not chrome LINE themes, so it looks the same either way. */}
       <div className="shrink-0 bg-[#7E9FD0]">
         {/* The real menu image is 2500 × 1686, so it stands this tall over a
             390px-wide chat — a shorter one reads as a toolbar, not a menu. */}
