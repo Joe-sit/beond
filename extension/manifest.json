@@ -39,6 +39,7 @@
       ],
       "js": [
         "content/autodetect.js",
+        "content/guide.js",
         "content/confetti.js",
         "content/efiling.js"
       ],

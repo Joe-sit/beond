@@ -14,6 +14,7 @@ import SlipCollectPOC from "./components/home2/SlipCollectPOC";
 import JarPOC from "./components/home2/JarPOC";
 import TaxIdSheetPOC from "./components/home2/TaxIdSheetPOC";
 import OnboardingPOC from "./components/home2/OnboardingPOC";
+import ExtensionGuide from "./components/ExtensionGuide";
 import LandingPage from "./components/landing/LandingPage";
 import PrivacyPolicy from "./components/PrivacyPolicy";
 import Learn from "./components/Learn";
@@ -175,6 +176,9 @@ function App() {
     if (q.has("sheet")) return <TaxIdSheetPOC />;
     // `?onboard` — step through the first-run walkthrough without an empty account.
     if (q.has("onboard")) return <OnboardingPOC />;
+    // `?extension` — the click-path from e-Filing's front page to the 40(4)
+    // income screen, animated. Tuned here before it moves into the panel.
+    if (q.has("extension")) return <ExtensionGuide />;
     // `?hero3d` — slider tuner for the landing hero's 3D window.
     if (q.has("hero3d")) return <HeroScreen3DPOC />;
     // `?line` — the LINE chat screen shown inside the landing hero's device.

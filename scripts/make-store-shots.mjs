@@ -48,6 +48,7 @@ const stub = (seed) => `
 
 const css = readFileSync(`${EXT}/content/efiling.css`, "utf8");
 const auto = readFileSync(`${EXT}/content/autodetect.js`, "utf8");
+const guide = readFileSync(`${EXT}/content/guide.js`, "utf8");
 const conf = readFileSync(`${EXT}/content/confetti.js`, "utf8");
 const js = readFileSync(`${EXT}/content/efiling.js`, "utf8");
 
@@ -62,6 +63,7 @@ async function panelShots() {
   await page.goto(`file://${EXT}/store/demo-form.html`);
   await page.addStyleTag({ content: css });
   await page.addScriptTag({ content: auto });
+  await page.addScriptTag({ content: guide });
   await page.addScriptTag({ content: conf });
   await page.addScriptTag({ content: js });
   await page.waitForSelector("#beond-efiling-panel .beond-primary:not([disabled])");

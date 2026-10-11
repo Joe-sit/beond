@@ -29,6 +29,7 @@ let picking = null; // index into FIELDS while in "จับคู่ช่อ�
 let toolsOpen = false; // the fallback tools are folded away until asked for
 let detailsOpen = false; // the payer list sits behind "รายละเอียด"
 let collapsed = false; // card shrunk to the avatar stack alone
+let guideOpen = false; // "วิธีเข้าหน้ากรอก" — the click-path to the 40(4) screen
 let blocks = []; // auto-detected payer blocks, refreshed as the app renders
 // Which payers this visit has written into the form. Kept per row index rather
 // than per row object so a re-render of the panel cannot lose it, and cleared
@@ -147,6 +148,7 @@ function render() {
   const canFill = blocks.length > 0 || Boolean(mappedUsable);
   const allDone = rows.length > 0 && filled.size >= rows.length;
 
+  stopGuide(); // the old guide's timer would outlive the DOM it draws into
   host.innerHTML = "";
   host.classList.toggle("beond-collapsed", collapsed);
   const panel = el("div", "beond-panel");
@@ -205,6 +207,15 @@ function render() {
     render();
   };
   actions.append(detail);
+
+  // How to reach the 40(4) screen. Offered on every page, but it is the whole
+  // answer on the pages where nothing can be filled — so there it leads.
+  const guideBtn = el("button", "beond-ghost", guideOpen ? "ซ่อนวิธี" : "วิธีเข้าหน้า");
+  guideBtn.onclick = () => {
+    guideOpen = !guideOpen;
+    render();
+  };
+  actions.append(guideBtn);
   main.append(actions);
   card.append(main);
 
@@ -218,6 +229,8 @@ function render() {
 
   panel.append(card);
   makeDraggable(card);
+
+  if (guideOpen) panel.append(buildGuide());
 
   // ── details ─────────────────────────────────────────────────────────────
   if (detailsOpen) {

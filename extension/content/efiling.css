@@ -153,8 +153,9 @@
 
 #beond-efiling-panel .beond-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 10px;
 }
 
 #beond-efiling-panel .beond-primary {
@@ -456,6 +457,217 @@
 
 @media (prefers-reduced-motion: reduce) {
   #beond-efiling-panel .beond-tick {
+    animation: none;
+  }
+}
+
+/* ── the guide ─────────────────────────────────────────────────────────────
+   The click-path to the 40(4) screen, drawn as a small browser window. It is a
+   drawing of the Revenue Department's site rendered ON the Revenue Department's
+   site, so the frame carries its own "ภาพจำลอง" label: nothing here may be
+   mistakable for the page behind it. */
+#beond-efiling-panel .beond-guide {
+  padding: 4px 20px 20px;
+}
+
+#beond-efiling-panel .beond-guide-frame {
+  overflow: hidden;
+  border: 1px solid var(--beond-line);
+  border-radius: 16px;
+  background: #fff;
+}
+
+#beond-efiling-panel .beond-guide-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--beond-line);
+  background: var(--beond-surface);
+}
+
+#beond-efiling-panel .beond-guide-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.05);
+  font-size: 10.5px;
+  color: var(--beond-ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#beond-efiling-panel .beond-guide-fake {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(232, 163, 61, 0.14);
+  font-size: 10px;
+  font-weight: 500;
+  color: #b97c1e;
+}
+
+#beond-efiling-panel .beond-guide-screen {
+  min-height: 168px;
+  padding: 12px 14px 14px;
+}
+
+/* Each step slides in, so the sequence reads as pages advancing rather than
+   text being swapped in place. */
+#beond-efiling-panel .beond-guide-in {
+  animation: beond-guide-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes beond-guide-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+
+#beond-efiling-panel .beond-guide-heading {
+  margin: 0 0 9px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+#beond-efiling-panel .beond-guide-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--beond-line);
+  border-radius: 12px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--beond-ink-faint);
+}
+
+#beond-efiling-panel .beond-guide-hit {
+  border-color: var(--beond-accent);
+  background: var(--beond-accent-soft);
+  color: var(--beond-ink);
+}
+
+#beond-efiling-panel .beond-guide-hit span:first-child {
+  flex: 1;
+}
+
+/* The pointer, pulsing on the row to click. */
+#beond-efiling-panel .beond-guide-cursor {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--beond-accent);
+  animation: beond-guide-tap 1.8s ease-in-out infinite;
+}
+
+#beond-efiling-panel .beond-guide-cursor::after {
+  content: "";
+  display: block;
+  margin: 5px 0 0 6px;
+  width: 0;
+  height: 0;
+  border-left: 6px solid #fff;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+
+@keyframes beond-guide-tap {
+  0%,
+  70%,
+  100% {
+    transform: scale(1);
+  }
+  80% {
+    transform: scale(0.82);
+  }
+}
+
+#beond-efiling-panel .beond-guide-caption {
+  margin: 11px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+#beond-efiling-panel .beond-guide-note {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: var(--beond-ink-faint);
+}
+
+#beond-efiling-panel .beond-guide-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+#beond-efiling-panel .beond-guide-btn {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--beond-ink-soft);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+#beond-efiling-panel .beond-guide-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+#beond-efiling-panel .beond-guide-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+#beond-efiling-panel .beond-guide-play {
+  background: var(--beond-accent);
+  font-size: 10px;
+  color: #fff;
+}
+
+#beond-efiling-panel .beond-guide-play:hover:not(:disabled) {
+  background: #2f76b8;
+}
+
+#beond-efiling-panel .beond-guide-dots {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 6px;
+}
+
+#beond-efiling-panel .beond-guide-dot {
+  width: 6px;
+  height: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition:
+    width 0.2s ease,
+    background 0.2s ease;
+}
+
+#beond-efiling-panel .beond-guide-dot-on {
+  width: 16px;
+  background: var(--beond-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #beond-efiling-panel .beond-guide-in,
+  #beond-efiling-panel .beond-guide-cursor {
     animation: none;
   }
 }
