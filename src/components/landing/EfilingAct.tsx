@@ -10,6 +10,7 @@
  * the order the extension writes them.
  */
 import { useRef } from "react";
+import { useIsDesktop } from "../../lib/useIsDesktop";
 import {
   motion,
   useMotionTemplate,
@@ -119,8 +120,18 @@ function PanelRow({ row, p, index }: { row: (typeof ROWS)[number]; p: MotionValu
 
 export default function EfilingAct() {
   const reduce = useReducedMotion();
+  // Pinned only where the act fits a screen. On a phone the form (three payers,
+  // four boxes each) and the panel under it run three screens tall, and
+  // centring that inside a one-screen sticky box pushed it up over the section
+  // above. There it simply flows, and the same scroll still drives the fill as
+  // the reader moves down through it.
+  const isDesktop = useIsDesktop();
+  const pinned = !reduce && isDesktop;
   const ref = useRef<HTMLDivElement>(null);
-  const { scrollYProgress: raw } = useScroll({ target: ref, offset: ["start start", "end end"] });
+  const { scrollYProgress: raw } = useScroll({
+    target: ref,
+    offset: pinned ? ["start start", "end end"] : ["start 0.7", "end end"],
+  });
   // With motion off the whole act is simply shown finished.
   const p = useTransform(raw, (v) => (reduce ? 1 : v));
 
@@ -144,9 +155,9 @@ export default function EfilingAct() {
       ref={ref}
       id="efiling"
       className="relative scroll-mt-24 bg-[#F0F2F5]"
-      style={{ height: reduce ? undefined : "320svh" }}
+      style={{ height: pinned ? "320svh" : undefined }}
     >
-      <div className={`${reduce ? "" : "sticky top-0"} flex h-svh flex-col justify-center px-5 py-10 lg:px-12`}>
+      <div className={`${pinned ? "sticky top-0 h-svh justify-center py-10" : "py-16"} flex flex-col px-5 lg:px-12`}>
         <div className="mx-auto w-full max-w-[1160px]">
           <h2 className="text-[clamp(1.75rem,3.4vw,3rem)] leading-tight font-medium text-[#2F3C6B]">
             ยื่นภาษีคืน โดยไม่ต้องพิมพ์เอง

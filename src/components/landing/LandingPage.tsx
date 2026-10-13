@@ -16,6 +16,7 @@ import clouds from "../../assets/landing/hero-clouds.svg";
 import dashboardWide from "../../assets/landing/story/dashboard-wide.png";
 import dashboardPhone from "../../assets/landing/story/dashboard-phone.png";
 import SlipsIntoFolder from "./SlipsIntoFolder";
+import { useIsDesktop } from "../../lib/useIsDesktop";
 import BentoFeatures from "./BentoFeatures";
 import EfilingAct from "./EfilingAct";
 
@@ -97,6 +98,25 @@ function sceneBounds(index: number): [number, number] {
 }
 
 /**
+ * The story's scroll progress re-expressed as if every scene had equal scroll:
+ * scene n spans [n/4, (n+1)/4]. The 3D device's poses (STORY_POSE) and the chat
+ * on its screen are keyed to scene boundaries at even quarters; feeding them
+ * the raw, weighted progress made the device linger into scene three and sit
+ * over the dashboard art.
+ */
+function evenSceneProgress(v: number): number {
+  const n = SCENE_SCROLL.length;
+  for (let i = 0; i < n; i++) {
+    const [start, end] = sceneBounds(i);
+    if (v <= end || i === n - 1) {
+      const local = Math.min(1, Math.max(0, (v - start) / (end - start)));
+      return (i + local) / n;
+    }
+  }
+  return 1;
+}
+
+/**
  * Public landing page (Figma 1446:5601 + storyboard 1652:4779).
  *
  * Three movements: a hero whose product screen lifts out of a 3D tilt as the
@@ -144,11 +164,14 @@ export default function LandingPage({ onLogin, notice }: Props) {
     setAtTop(y < window.innerHeight * 0.9);
   });
 
-  // Story: one full viewport of scroll per scene.
+  // Story: scenes get SCENE_SCROLL viewports each.
   const { scrollYProgress: storyP } = useScroll({
     target: storyRef,
     offset: ["start start", "end end"],
   });
+  // The same progress in even quarters, for everything keyed to scene
+  // boundaries rather than to raw scroll — see evenSceneProgress.
+  const storyEven = useTransform(storyP, evenSceneProgress);
   // The stage's last viewport of scroll, after the story's progress has
   // already saturated: the device rides this out of frame.
   const { scrollYProgress: stageExit } = useScroll({
@@ -170,7 +193,7 @@ export default function LandingPage({ onLogin, notice }: Props) {
   // scroll, one thread. The story half is stretched so each beat lands on the
   // card that proves it: "ตรวจสอบให้ทุกใบ" while the DBD refusal is on screen,
   // and the rest of the thread over the scenes the device has already left.
-  const chat = useTransform([heroP, storyP] as const, ([h, s]: number[]) => {
+  const chat = useTransform([heroP, storyEven] as const, ([h, s]: number[]) => {
     if (s <= 0) return h * 0.1;
     return s < 0.5 ? 0.1 + (s / 0.5) * 0.3 : 0.4 + ((s - 0.5) / 0.5) * 0.6;
   });
@@ -242,7 +265,7 @@ export default function LandingPage({ onLogin, notice }: Props) {
                 <HeroScreen3D
                   progress={heroEase}
                   collect={heroP}
-                  story={storyP}
+                  story={storyEven}
                   exit={stageExit}
                   chat={chat}
                   reduce={!!reduce}
@@ -269,7 +292,7 @@ export default function LandingPage({ onLogin, notice }: Props) {
                   ? undefined
                   : { y: heroTextY, opacity: strokeFade, filter: heroTextBlur }
               }
-              className="pointer-events-none absolute inset-x-0 top-[24svh] px-5 lg:px-12"
+              className="pointer-events-none absolute inset-x-0 top-[14svh] px-5 lg:top-[24svh] lg:px-12"
             >
               <motion.h1
                 initial={reduce ? false : { opacity: 0, y: 26 }}
@@ -279,7 +302,7 @@ export default function LandingPage({ onLogin, notice }: Props) {
                   delay: 0.15,
                   ease: [0.22, 1, 0.36, 1],
                 }}
-                className="mx-auto w-fit text-center text-[clamp(2.75rem,8.4vw,8rem)] leading-[1.05] font-medium text-transparent"
+                className="mx-auto w-fit text-center text-[clamp(1.9rem,8.4vw,8rem)] leading-[1.05] font-medium whitespace-nowrap text-transparent"
                 style={{ WebkitTextStroke: "1.5px rgba(255,255,255,0.9)" }}
               >
                 เพิ่มผลตอบแทนหุ้นกู้
@@ -311,7 +334,9 @@ export default function LandingPage({ onLogin, notice }: Props) {
                       filter: heroTextBlur,
                     }
               }
-              className="pointer-events-none absolute inset-x-0 top-[24svh] z-0 px-5 lg:px-12"
+              // Higher on a phone: the device rises from the middle of a narrow
+              // screen, and at desktop height the copy sat right under it.
+              className="pointer-events-none absolute inset-x-0 top-[14svh] z-0 px-5 lg:top-[24svh] lg:px-12"
             >
               {/* The scroll drives the wrapper above; the entrance animates this
                 inner block, so the two never write to the same transform. */}
@@ -328,24 +353,26 @@ export default function LandingPage({ onLogin, notice }: Props) {
               >
                 <motion.h1
                   variants={RISE}
-                  className="text-center text-[clamp(2.75rem,8.4vw,8rem)] leading-[1.05] font-medium text-white"
+                  className="text-center text-[clamp(1.9rem,8.4vw,8rem)] leading-[1.05] font-medium whitespace-nowrap text-white"
                 >
                   เพิ่มผลตอบแทนหุ้นกู้
                 </motion.h1>
                 <motion.div
                   variants={RISE}
-                  className="mt-6 flex items-start justify-between gap-6 lg:mt-8"
+                  className="mt-4 flex flex-col items-center gap-2 text-center lg:mt-8 lg:flex-row lg:items-start lg:justify-between lg:gap-6 lg:text-left"
                 >
-                  <p className="flex max-w-[15ch] flex-wrap items-center gap-x-3 gap-y-2 text-lg leading-snug font-medium text-white lg:text-2xl">
+                  <p className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-base leading-snug font-medium text-white lg:max-w-[15ch] lg:justify-start lg:gap-x-3 lg:gap-y-2 lg:text-2xl">
                     ส่งสลิปผ่าน LINE
                     <img
                       src={lineIcon}
                       alt=""
-                      className="size-8 rounded-xl lg:size-10"
+                      className="size-6 rounded-lg lg:size-10 lg:rounded-xl"
                     />
-                    <span className="w-full">และยื่นขอภาษีคืนปีหน้า</span>
+                    <span className="lg:w-full">และยื่นขอภาษีคืนปีหน้า</span>
                   </p>
-                  <p className="max-w-[22ch] text-right text-sm leading-relaxed font-light text-white/90 lg:text-lg">
+                  {/* Desktop only: on a phone the device rises into this line,
+                      and the headline plus the LINE line already say it. */}
+                  <p className="hidden max-w-[22ch] text-xs leading-relaxed font-light text-white/90 lg:block lg:text-right lg:text-lg">
                     แพลตฟอร์มสำหรับบริหารจัดการ
                     <br />
                     พอร์ตหุ้นกู้และเครดิตภาษี
@@ -382,7 +409,10 @@ export default function LandingPage({ onLogin, notice }: Props) {
             style={
               reduce ? undefined : { width: skyWidth, borderRadius: skyRadius }
             }
-            className="absolute inset-y-0 left-1/2 -translate-x-1/2 bg-[linear-gradient(180deg,#8FAED2_0%,#9CB6D6_62%,#F0F2F5_100%)] max-lg:w-full"
+            // Holds its blue until the last stretch: the closing scene now takes
+            // the final ~40% of the scroll, and with the fade starting at 62%
+            // its white headline ended up on near-white.
+            className="absolute inset-y-0 left-1/2 -translate-x-1/2 bg-[linear-gradient(180deg,#8FAED2_0%,#9CB6D6_86%,#F0F2F5_100%)] max-lg:w-full"
           />
           <div className="relative sticky top-0 h-svh overflow-hidden">
             {/* Art for the scenes the device has handed over to. */}
@@ -421,11 +451,15 @@ export default function LandingPage({ onLogin, notice }: Props) {
       <BentoFeatures />
 
       {/* ── CTA ──────────────────────────────────────────────────────────── */}
+      {/* Navy, not white: the section opens on the page grey and only reaches
+          the sky blue at its foot, so white copy sat on near-white where the
+          heading is. "งวดนี้" is held together so a narrow screen can't leave
+          "นี้" alone on the second line. */}
       <section className="bg-[linear-gradient(180deg,#F0F2F5_0%,#779BC6_100%)] px-5 py-24 text-center lg:py-32">
-        <h2 className="text-[clamp(2rem,4.6vw,3.75rem)] leading-tight font-medium text-white">
-          เริ่มเก็บภาษีคืนตั้งแต่งวดนี้
+        <h2 className="text-[clamp(2rem,4.6vw,3.75rem)] leading-tight font-medium text-balance text-[#43507F]">
+          เริ่มเก็บ<span className="whitespace-nowrap">ภาษีคืน</span>ตั้งแต่<span className="whitespace-nowrap">งวดนี้</span>
         </h2>
-        <p className="mx-auto mt-4 max-w-[52ch] text-base leading-relaxed text-white/85 lg:text-xl">
+        <p className="mx-auto mt-4 max-w-[52ch] text-base leading-relaxed text-[#43507F]/75 lg:text-xl">
           เข้าสู่ระบบด้วย LINE ใช้เวลาไม่ถึงหนึ่งนาที แล้วส่งสลิปใบแรกได้ทันที
         </p>
         <button
@@ -502,10 +536,7 @@ export default function LandingPage({ onLogin, notice }: Props) {
           </div>
 
           <div className="mt-10 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-[#2968A5]/60 lg:justify-end">
-            <span>Copyright © 2026 Paypers. All rights reserved.</span>
-            <a href="/terms" className="transition hover:text-[#2968A5]">
-              เงื่อนไขการใช้งาน
-            </a>
+            <span>Copyright © 2026 beond. All rights reserved.</span>
             <a href="/privacy" className="transition hover:text-[#2968A5]">
               นโยบายความเป็นส่วนตัว
             </a>
@@ -614,6 +645,7 @@ function SceneArt({
   // The closing scene plays in two beats, handed over on the scroll that holds
   // it: the folder fills, then the jar takes the stage.
   const beat = useTransform(p, [b, c], [0, 1]);
+  const isDesktop = useIsDesktop();
   const folderFade = useTransform(beat, [0, 0.42, 0.56], [1, 1, 0]);
   const jarFade = useTransform(beat, [0.46, 0.62], [0, 1]);
   // The jar holds a WebGL context and a physics world, and the landing already
@@ -651,7 +683,9 @@ function SceneArt({
         // Side by side they were one picture and read as neither.
         <div className="relative h-[46svh] w-full max-w-[560px] pb-[6svh] lg:h-[52svh]">
           <motion.div className="absolute inset-0" style={reduce ? { opacity: 0 } : { opacity: folderFade }}>
-            <SlipsIntoFolder scale={0.62} />
+            {/* Folder3D sizes in pixels; at the desktop scale it overran a
+                phone's width and the slips were cut off at both edges. */}
+            <SlipsIntoFolder scale={isDesktop ? 0.62 : 0.46} />
           </motion.div>
           <motion.div className="absolute inset-0" style={reduce ? undefined : { opacity: jarFade }}>
             {/* Nothing to fall back to: an empty box for a moment reads as the

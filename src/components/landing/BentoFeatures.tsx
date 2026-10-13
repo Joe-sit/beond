@@ -94,7 +94,10 @@ function BeyondDraw({ progress }: { progress: MotionValue<number> }) {
     const v = new Vara(
       "#beyond-vara",
       varaFont,
-      [{ text: "Beyond", y: 0 }],
+      // `width` is the line length Vara wraps at. Left to itself it uses the
+      // card's width, and at fontSize 150 a phone-width card broke "Beyond"
+      // into "Beyo / n / d". One line, always — the viewBox below scales it.
+      [{ text: "Beyond", y: 0, width: 2000 }],
       {
         fontSize: 150,
         strokeWidth: 1.4,
